@@ -1,4 +1,4 @@
-<!-- translated-from: README.md @ dbbd6498b424 -->
+<!-- translated-from: README.md @ bc456d6095ad -->
 <div align="center">
 
 <img src="../media/logo.png" alt="Mika" width="88" />
@@ -76,6 +76,8 @@
 | 🆓 **開源、免費** | Apache-2.0，程式碼全部公開 |
 
 ## 三步開始
+
+> **分支說明：** 如果你已經安裝了原版（上游）Mika APK，由於簽章金鑰不同，請先將其解除安裝，再安裝本分支建置的 APK。
 
 1. **下載安裝**：從 [Releases](https://github.com/wangzan101/Mika/releases/latest) 下載 APK。
 2. **連上模型**：設定 › 模型，選一家服務商填入 API Key，或直接用帳號登入（[模型與登入](../models.md)）。

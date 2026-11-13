@@ -1,4 +1,4 @@
-<!-- translated-from: README.md @ dbbd6498b424 -->
+<!-- translated-from: README.md @ bc456d6095ad -->
 <div align="center">
 
 <img src="../media/logo.png" alt="Mika" width="88" />
@@ -78,6 +78,8 @@
 | 🆓 **オープンソースで無料** | Apache-2.0、コードはすべて公開 |
 
 ## 3 ステップで始める
+
+> **フォークに関する注意：** 上流（本家）の Mika APK がすでにインストールされている場合、署名キーが異なるため、このフォークからビルドした APK をインストールする前にアンインストールしてください。
 
 1. **インストール**：[Releases](https://github.com/wangzan101/Mika/releases/latest) から APK をダウンロード。
 2. **モデルをつなぐ**：設定 › モデル でプロバイダーを選んで API キーを入力するか、アカウントでログイン（[モデルとログイン](../models.en.md)）。

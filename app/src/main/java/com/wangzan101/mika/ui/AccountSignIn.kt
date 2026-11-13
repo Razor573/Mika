@@ -44,15 +44,16 @@ import com.wangzan101.mika.ui.components.ValueTone
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.theme.MikaType
 
-/** 「添加模型」里「用账号登录」那一组的三家。ChatGPT 的登录另有一套,xAI、OpenRouter 对应 [AccountProvider]。 */
+/** 「添加模型」里「用账号登录」那一组。ChatGPT 的登录另有一套,xAI、OpenRouter、Antigravity 对应 [AccountProvider]。 */
 enum class SignInKind(val account: AccountProvider?, val label: String, val tag: String) {
     ChatGpt(null, "ChatGPT", "chatgpt"),
     Xai(AccountProvider.Xai, "xAI / Grok", "xai"),
-    OpenRouter(AccountProvider.OpenRouter, "OpenRouter", "openrouter");
+    OpenRouter(AccountProvider.OpenRouter, "OpenRouter", "openrouter"),
+    Antigravity(AccountProvider.Antigravity, "Antigravity", "antigravity");
 
-    /** 「改用 API Key」时选的预设;ChatGPT 没有这一项。 */
+    /** 「改用 API Key」时选的预设;ChatGPT 与 Antigravity 没有这一项。 */
     val keyPreset: String? get() = when (this) {
-        ChatGpt -> null
+        ChatGpt, Antigravity -> null
         Xai -> "xAI"
         OpenRouter -> "OpenRouter"
     }
@@ -69,11 +70,20 @@ internal fun ModelSetupUi.signInState(kind: SignInKind): Triple<String?, Boolean
         chatGptSignIn == ListState.Running,
         (chatGptSignIn as? ListState.Failed)?.message,
     )
-    else -> {
-        val signedIn = if (kind == SignInKind.Xai) xaiAccount?.signedIn == true else openRouterAccount?.signedIn == true
+    SignInKind.Xai, SignInKind.OpenRouter, SignInKind.Antigravity -> {
+        val signedIn = when (kind) {
+            SignInKind.Xai -> xaiAccount?.signedIn == true
+            SignInKind.OpenRouter -> openRouterAccount?.signedIn == true
+            SignInKind.Antigravity -> antigravityAccount?.signedIn == true
+            SignInKind.ChatGpt -> false
+        }
         val id = providers.firstOrNull {
-            if (kind == SignInKind.Xai) it.kind == ProviderConfig.Kind.Xai
-            else it.signIn == ProviderStore.OPENROUTER_SIGN_IN
+            when (kind) {
+                SignInKind.Xai -> it.kind == ProviderConfig.Kind.Xai
+                SignInKind.OpenRouter -> it.signIn == ProviderStore.OPENROUTER_SIGN_IN
+                SignInKind.Antigravity -> it.kind == ProviderConfig.Kind.Antigravity
+                SignInKind.ChatGpt -> false
+            }
         }?.id
         val mine = accountSignIn.provider == kind.account
         Triple(id?.takeIf { signedIn }, mine && accountSignIn.running, accountSignIn.failure?.takeIf { mine })

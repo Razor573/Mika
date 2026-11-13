@@ -16,6 +16,7 @@ import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.settings.AesGcmKeyCipher
 import com.wangzan101.mika.settings.ClientSetup
 import com.wangzan101.mika.settings.ProviderConfig
@@ -31,11 +32,15 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.security.KeyPairGenerator
+import java.util.Base64
 import javax.crypto.KeyGenerator
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1040,5 +1045,75 @@ class ModelSetupViewModelTest {
         assertEquals("列过的列表留着", listOf("deepseek-chat", "deepseek-reasoner", "deepseek-coder"), after.models!!.map { it.id })
         assertEquals(setOf("deepseek-chat"), after.verifiedModels)
         assertFalse("核实过的模型让这家不算没测过", after.savedUntested)
+    }
+
+    private fun testVertexSaJson(projectId: String, clientEmail: String): String {
+        val kp = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val b64 = Base64.getMimeEncoder(64, byteArrayOf('\n'.code.toByte())).encodeToString(kp.private.encoded)
+        val escapedPem = ("-----BEGIN PRIVATE KEY-----\n$b64\n-----END PRIVATE KEY-----\n").replace("\n", "\\n")
+        return """{"type":"service_account","project_id":"$projectId","client_email":"$clientEmail","private_key":"$escapedPem","token_uri":"https://oauth2.googleapis.com/token"}"""
+    }
+
+    @Test fun vertexFormParsesServiceAccountUpdatesSettingsAndValidatesKeyRotation() = runTest {
+        listing[VertexEndpoints.GLOBAL_HOST] = ModelListResult.Ok(
+            listOf(ListedModel("gemini-4-hydrogen"), ListedModel("gemini-4-argon"), ListedModel("gemini-3.8-flash")),
+        )
+        val store = store()
+        val vm = vm(store)
+        runCurrent()
+
+        vm.selectPreset("Vertex AI")
+        assertTrue(vm.state.value.form.isVertex)
+        assertEquals(VertexEndpoints.DEFAULT_LOCATION, vm.state.value.form.location)
+        assertFalse(vm.state.value.form.canTest)
+
+        // Malformed SA JSON sets saError without exposing raw input and blocks save/test.
+        vm.setServiceAccountJson("not-json-PRIVATE-SECRET")
+        assertNotNull(vm.state.value.form.saError)
+        assertFalse(vm.state.value.form.saError!!.contains("PRIVATE-SECRET"))
+        assertFalse(vm.state.value.form.canTest)
+        assertFalse(vm.state.value.form.canSaveUntested)
+
+        val sa1 = testVertexSaJson("proj-v1", "sa1@proj-v1.iam.gserviceaccount.com")
+        vm.setServiceAccountJson(sa1)
+        assertNull(vm.state.value.form.saError)
+        assertEquals("sa1@proj-v1.iam.gserviceaccount.com (proj-v1)", vm.state.value.form.saSummary)
+        assertEquals("proj-v1", vm.state.value.form.projectId)
+        assertTrue(vm.state.value.form.canTest)
+
+        // Explicit projectId edit is preserved when re-pasting SA JSON; switching away clears credentials.
+        vm.setProjectId("custom-proj")
+        vm.setServiceAccountJson(sa1)
+        assertEquals("custom-proj", vm.state.value.form.projectId)
+        vm.selectPreset("OpenAI")
+        assertEquals("", vm.state.value.form.apiKey)
+        assertEquals("", vm.state.value.form.projectId)
+        assertEquals("", vm.state.value.form.saSummary)
+        assertNull(vm.state.value.form.saError)
+
+        vm.selectPreset("Vertex AI")
+        vm.setServiceAccountJson(sa1)
+        vm.testAndSave(); runCurrent()
+
+        val p = store.providers.value.single()
+        assertEquals(ProviderConfig.Kind.Vertex, p.kind)
+        assertEquals("proj-v1", p.projectId)
+        assertEquals("global", p.location)
+        assertEquals("sa1@proj-v1.iam.gserviceaccount.com (proj-v1)", vm.state.value.vertexSummaries[p.id])
+        assertEquals("gemini-4-hydrogen", store.configFor(ModelRole.Main)!!.model)
+        tmp.root.walk().filter(File::isFile).forEach { f -> assertFalse(f.name, f.readText().contains("PRIVATE KEY")) }
+
+        assertTrue(vm.updateVertexSettings(p.id, "proj-renamed", "us-central1")); runCurrent()
+        assertEquals("proj-renamed", store.provider(p.id)!!.projectId)
+        assertEquals("us-central1", store.provider(p.id)!!.location)
+        assertEquals("sa1@proj-v1.iam.gserviceaccount.com (proj-renamed)", vm.state.value.vertexSummaries[p.id])
+
+        // Invalid key rotation must leave the encrypted SA JSON untouched; valid rotation updates summary.
+        vm.changeKey(p.id, "{invalid}"); runCurrent()
+        assertEquals(sa1, store.providerKey(p.id))
+        val sa2 = testVertexSaJson("proj-ignored", "sa2@proj-renamed.iam.gserviceaccount.com")
+        vm.changeKey(p.id, sa2); runCurrent()
+        assertEquals(sa2, store.providerKey(p.id))
+        assertEquals("sa2@proj-renamed.iam.gserviceaccount.com (proj-renamed)", vm.state.value.vertexSummaries[p.id])
     }
 }

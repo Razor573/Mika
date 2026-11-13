@@ -1,4 +1,4 @@
-<!-- translated-from: README.md @ dbbd6498b424 -->
+<!-- translated-from: README.md @ bc456d6095ad -->
 <div align="center">
 
 <img src="../media/logo.png" alt="Mika" width="88" />
@@ -78,6 +78,8 @@
 | 🆓 **오픈 소스, 무료** | Apache-2.0, 코드 전부 공개 |
 
 ## 3단계로 시작하기
+
+> **포크 안내:** 기존 업스트림(원본) Mika APK가 이미 설치되어 있다면 서명 키가 다르므로 이 포크에서 빌드한 APK를 설치하기 전에 먼저 삭제해 주세요.
 
 1. **설치**: [Releases](https://github.com/wangzan101/Mika/releases/latest)에서 APK를 내려받습니다.
 2. **모델 연결**: 설정 › 모델에서 제공업체를 골라 API 키를 입력하거나, 계정으로 바로 로그인합니다([모델과 로그인](../models.en.md)).

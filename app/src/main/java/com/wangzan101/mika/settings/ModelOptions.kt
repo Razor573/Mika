@@ -2,6 +2,8 @@ package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ListedModel
+import com.wangzan101.mika.core.model.ModelCatalog
+import com.wangzan101.mika.core.oauth.AntigravityAuth
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -67,9 +69,50 @@ object ModelOptions {
             )
             .map { it.first.id }
 
-    /** 默认选的主模型:[candidates] 的第一个;一个都没有就挑第一个可当主模型的。 */
+    fun merge(listed: List<ListedModel>, base: Capabilities, kind: ProviderConfig.Kind): List<ModelOption> =
+        if (kind == ProviderConfig.Kind.Antigravity) merge(collapseAntigravity(listed), base) else merge(listed, base)
+
+    private val ANTIGRAVITY_SUFFIX = Regex("-(low|medium|high|xhigh|tiered|agent)$", RegexOption.IGNORE_CASE)
+
+    /** 去掉 Antigravity 思考档位 / tier 后缀与 `models/` 前缀，折叠为裸家族名。 */
+    fun collapseAntigravityId(id: String): String =
+        AntigravityAuth.collapseModelId(id).replace(ANTIGRAVITY_SUFFIX, "")
+
+    /** Antigravity 仅允许支持且非 Carbon 的 Gemini 家族模型。 */
+    fun isSupportedAntigravityModel(id: String): Boolean {
+        val collapsed = collapseAntigravityId(id)
+        return AntigravityAuth.isSupportedGeminiModel(collapsed) &&
+            !collapsed.equals("gemini-4-carbon", ignoreCase = true) &&
+            !collapsed.startsWith("gemini-4-carbon-", ignoreCase = true)
+    }
+
+    /** 将带后缀的 Antigravity 模型条目折叠、过滤并去重为每家族一条。 */
+    fun collapseAntigravity(models: List<ListedModel>): List<ListedModel> {
+        val byId = linkedMapOf<String, ListedModel>()
+        for (m in models) {
+            val id = collapseAntigravityId(m.id)
+            if (!isSupportedAntigravityModel(id)) continue
+            val curatedName = ModelCatalog.CURATED_ANTIGRAVITY_MODELS.firstOrNull { it.id == id }?.displayName.orEmpty()
+            val normalized = m.copy(id = id, displayName = curatedName.ifEmpty { m.displayName })
+            val prev = byId[id]
+            byId[id] = if (prev == null) normalized else prev.copy(
+                displayName = prev.displayName.ifBlank { normalized.displayName },
+                toolCalls = prev.toolCalls ?: normalized.toolCalls,
+                vision = prev.vision ?: normalized.vision,
+                contextTokens = prev.contextTokens ?: normalized.contextTokens,
+                reasoning = prev.reasoning ?: normalized.reasoning,
+                chat = prev.chat ?: normalized.chat,
+            )
+        }
+        return byId.values.toList()
+    }
+
+    /** 默认选的主模型:[candidates] 的第一个;一个都没有就挑第一个可当主模型的（Curated Gemini 4 优先 Argon）。 */
     fun defaultMain(options: List<ModelOption>, familyTokens: List<String> = emptyList()): String? =
-        candidates(options, familyTokens).firstOrNull() ?: options.firstOrNull { it.canBeMain }?.id
+        preferredCuratedMain(options) ?: candidates(options, familyTokens).firstOrNull() ?: options.firstOrNull { it.canBeMain }?.id
+
+    private fun preferredCuratedMain(options: List<ModelOption>): String? =
+        options.firstOrNull { it.id == "gemini-4-argon" && it.canBeMain && !looksNonChat(it) }?.id
 
     /** 地址对得上的预设的自家模型词;认不出地址为空。 */
     fun familyOf(baseUrl: String): List<String> = ProviderPresets.forBaseUrl(baseUrl.trim())?.familyTokens.orEmpty()
@@ -102,8 +145,14 @@ object ModelOptions {
      */
     fun seesImages(stored: Boolean, userSaid: Boolean?, usedForVision: Boolean): Boolean = userSaid ?: (usedForVision || stored)
 
-    /** 服务商的能力初值:地址对得上预设的用预设的,否则用「自定义」的。 */
-    fun baseOf(p: Provider): Capabilities = (ProviderPresets.forBaseUrl(p.baseUrl) ?: ProviderPresets.custom).capabilities
+    private val ANTIGRAVITY_DEFAULT_CAPS = Capabilities(toolCalls = true, vision = true, contextTokens = 1_048_576, reasoning = true)
+
+    /** 服务商的能力初值:地址对得上预设的用预设的,Antigravity 给默认 Gemini 能力,否则用「自定义」的。 */
+    fun baseOf(p: Provider): Capabilities = if (p.kind == ProviderConfig.Kind.Antigravity) {
+        ANTIGRAVITY_DEFAULT_CAPS
+    } else {
+        (ProviderPresets.forBaseUrl(p.baseUrl) ?: ProviderPresets.custom).capabilities
+    }
 
     /**
      * 一个服务商可选的全部模型:记住的列表(合并能力初值;已有配置的用配置里的能力),
@@ -111,21 +160,29 @@ object ModelOptions {
      * 用户说过能不能看图的([Provider.visionOverrides])按用户说的。
      */
     fun ofProvider(p: Provider, configs: List<ProviderConfig>): List<ModelOption> = listedOf(p, configs).map { o ->
-        val said = p.visionOverrides[o.id] ?: return@map o
-        o.copy(capabilities = o.capabilities.copy(vision = said), visionByUser = said)
+        val said = p.visionOverrides[o.id] ?: if (p.kind == ProviderConfig.Kind.Antigravity) {
+            p.visionOverrides.entries.firstOrNull { collapseAntigravityId(it.key) == o.id }?.value
+        } else null
+        if (said == null) o else o.copy(capabilities = o.capabilities.copy(vision = said), visionByUser = said)
     }
 
     private fun listedOf(p: Provider, configs: List<ProviderConfig>): List<ModelOption> {
-        val saved = configs.filter { it.providerId == p.id }
+        val rawSaved = configs.filter { it.providerId == p.id }
+        val saved = if (p.kind == ProviderConfig.Kind.Antigravity) {
+            rawSaved.map { it.copy(model = collapseAntigravityId(it.model)) }.distinctBy { it.model }
+        } else rawSaved
         val byModel = saved.associateBy { it.model }
-        val listed = merge(p.models.orEmpty(), baseOf(p)).map { o -> byModel[o.id]?.let { o.copy(capabilities = it.capabilities) } ?: o }
+        val listed = merge(p.models.orEmpty(), baseOf(p), p.kind).map { o -> byModel[o.id]?.let { o.copy(capabilities = it.capabilities) } ?: o }
+        val rawTyped = if (p.kind == ProviderConfig.Kind.Antigravity) {
+            p.typedModels.map(::collapseAntigravityId).filter(::isSupportedAntigravityModel).toSet()
+        } else p.typedModels
         val rest = saved.filter { c -> listed.none { it.id == c.model } }.map {
             // 列不出模型的那家,模型都是手填的;有列表的,列表后来没了的那个不算手填
-            val typed = it.model in p.typedModels || p.models?.isEmpty() == true
+            val typed = it.model in rawTyped || p.models?.isEmpty() == true
             ModelOption(it.model, it.capabilities, toolCallsKnown = false, visionKnown = false, contextKnown = false, typed = typed)
         }
         // 手填过、还没用在哪个用途上的(没有配置):照样列出来,能力按这家的初值
-        val typed = p.typedModels.filter { m -> listed.none { it.id == m } && rest.none { it.id == m } }.sorted().map {
+        val typed = rawTyped.filter { m -> listed.none { it.id == m } && rest.none { it.id == m } }.sorted().map {
             ModelOption(it, baseOf(p), toolCallsKnown = false, visionKnown = false, contextKnown = false, typed = true)
         }
         return listed + rest + typed

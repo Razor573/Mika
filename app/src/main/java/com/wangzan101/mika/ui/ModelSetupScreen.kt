@@ -8,12 +8,21 @@ import android.widget.Toast
 import com.wangzan101.mika.R
 import com.wangzan101.mika.core.chatgpt.ChatGptAuth
 import com.wangzan101.mika.core.oauth.OpenRouterAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.voice.SystemSpeech
 import com.wangzan101.mika.settings.ChatGptSignIns
 import com.wangzan101.mika.i18n.tr
 import androidx.compose.ui.res.stringResource
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+import com.wangzan101.mika.ui.components.KeyboardDismissArea
+import com.wangzan101.mika.ui.components.RowValue
+import com.wangzan101.mika.ui.components.ValueTone
+import com.wangzan101.mika.ui.components.keepsKeyboard
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -144,6 +153,7 @@ fun ModelSetupScreen(
             LaunchedEffect(provider.id) { vm.ensureListed() }
             val accountKind = when {
                 provider.kind == ProviderConfig.Kind.Xai -> SignInKind.Xai
+                provider.kind == ProviderConfig.Kind.Antigravity -> SignInKind.Antigravity
                 provider.signIn == ProviderStore.OPENROUTER_SIGN_IN -> SignInKind.OpenRouter
                 else -> null
             }
@@ -154,7 +164,7 @@ fun ModelSetupScreen(
                 setVision = { model, sees -> vm.setModelVision(provider.id, model, sees) },
                 showAll = { allModels = true },
                 retest = { vm.retest(provider.id) },
-                // ChatGPT 照旧直接去浏览器登录;xAI、OpenRouter 先打开说明面板
+                // ChatGPT 照旧直接去浏览器登录;xAI、OpenRouter、Antigravity 先打开说明面板
                 signIn = { if (accountKind != null) signInSheet = accountKind else vm.signInWithChatGpt() },
                 signOut = { if (accountKind != null) vm.signOutAccount(provider.id) else vm.signOutChatGpt(provider.id) },
                 manageUsage = {
@@ -166,6 +176,7 @@ fun ModelSetupScreen(
                 },
                 useAsMain = { vm.useAsMain(provider.id) },
                 setDailyBudget = { vm.setDailyTokenBudget(provider.id, it) },
+                updateVertexSettings = { proj, loc -> vm.updateVertexSettings(provider.id, proj, loc) },
             )
             if (allModels) {
                 BackHandler { allModels = false }
@@ -200,6 +211,7 @@ fun ModelSetupScreen(
                 ui, onboarding,
                 ModelSetupActions(
                     selectPreset = vm::selectPreset, setKind = vm::setKind, setBaseUrl = vm::setBaseUrl, setApiKey = vm::setApiKey,
+                    setServiceAccountJson = vm::setServiceAccountJson, setProjectId = vm::setProjectId, setLocation = vm::setLocation,
                     setModel = vm::setModel, setManual = vm::setManual, setName = vm::setName,
                     testAndSave = vm::testAndSave, saveUntested = vm::saveWithoutTest,
                     openForm = vm::openForm, closeForm = vm::closeForm,
@@ -243,6 +255,9 @@ class ModelSetupActions(
     val setKind: (ProviderConfig.Kind) -> Unit = {},
     val setBaseUrl: (String) -> Unit = {},
     val setApiKey: (String) -> Unit = {},
+    val setServiceAccountJson: (String) -> Unit = {},
+    val setProjectId: (String) -> Unit = {},
+    val setLocation: (String) -> Unit = {},
     val setModel: (String) -> Unit = {},
     /** 「手动填写模型名」的开和收。 */
     val setManual: (Boolean) -> Unit = {},
@@ -354,9 +369,22 @@ private fun ProvidersSection(ui: ModelSetupUi, actions: ModelSetupActions) {
 @Composable
 private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
     val c = MikaTheme.colors
+    val context = LocalContext.current
     val f = ui.form
     var showKey by remember { mutableStateOf(false) }
     var confirmUntested by remember { mutableStateOf(false) }
+    var jsonReadError by remember { mutableStateOf(false) }
+    val saJsonPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val raw = readVertexJsonUri(context, uri)
+        if (raw == null) {
+            jsonReadError = true
+        } else {
+            jsonReadError = false
+            actions.setServiceAccountJson(raw)
+        }
+    }
+    LaunchedEffect(f.preset, f.kind) { jsonReadError = false }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         GroupLabel(ModelsCopy.ADD_PROVIDER, Modifier.weight(1f))
         if (ui.providers.isNotEmpty()) {
@@ -384,7 +412,7 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(ModelSetupCopy.KIND, Modifier.padding(end = 12.dp), style = MikaType.Body, color = c.ink)
-                // 四种接口一行放不下时折到下一行
+                // 接口类型一行放不下时折到下一行
                 FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     ProviderConfig.Kind.withApiKey.forEach { k -> SelectChip(ModelsCopy.kindLabel(k), f.kind == k, { actions.setKind(k) }, small = true) }
                 }
@@ -404,12 +432,58 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
                 modifier = Modifier.testTag("setup-name"),
             )
         }
-        InputRow(
-            ModelSetupCopy.API_KEY, f.apiKey, actions.setApiKey,
-            if (f.keyRequired) ModelSetupCopy.KEY_HINT else ModelSetupCopy.KEY_OPTIONAL, first = !f.urlEditable,
-            keyboard = KeyboardType.Password, secret = !showKey, modifier = Modifier.testTag("setup-api-key"),
-        ) {
-            Text(if (showKey) stringResource(R.string.hide) else stringResource(R.string.show), Modifier.clickable { showKey = !showKey }, fontSize = 13.sp, color = c.accent)
+        if (f.isVertex) {
+            val firstCredentialRow = !f.isCustom && !f.urlEditable
+            Box(Modifier.testTag("setup-vertex-import-json")) {
+                ListRow(
+                    null,
+                    stringResource(R.string.vertex_sa_file),
+                    first = firstCredentialRow,
+                    onClick = { saJsonPicker.launch(arrayOf("application/json", "*/*")) },
+                ) {
+                    RowValue(
+                        if (f.saSummary.isNotBlank()) stringResource(R.string.vertex_sa_loaded) else stringResource(R.string.vertex_import_json),
+                        ValueTone.Link,
+                    )
+                }
+            }
+            Hairline(start = 16.dp)
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(stringResource(R.string.vertex_sa_label), style = MikaType.Body, color = c.ink)
+                KeyboardDismissArea {
+                    Box(Modifier.fillMaxWidth().keepsKeyboard().padding(top = 6.dp).background(c.fill, androidx.compose.foundation.shape.RoundedCornerShape(10.dp)).padding(10.dp)) {
+                        if (f.apiKey.isEmpty()) Text(stringResource(R.string.vertex_sa_hint), style = MikaType.Caption, color = c.ink3)
+                        BasicTextField(
+                            value = f.apiKey,
+                            onValueChange = {
+                                jsonReadError = false
+                                actions.setServiceAccountJson(it)
+                            },
+                            modifier = Modifier.fillMaxWidth().testTag("setup-vertex-sa-json"),
+                            textStyle = MikaType.Caption.copy(color = c.ink, fontFamily = FontFamily.Monospace),
+                            cursorBrush = SolidColor(c.accent),
+                            minLines = 3,
+                            maxLines = 5,
+                        )
+                    }
+                }
+            }
+            InputRow(
+                stringResource(R.string.vertex_project_id), f.projectId, actions.setProjectId,
+                stringResource(R.string.vertex_project_hint), modifier = Modifier.testTag("setup-vertex-project-id"),
+            )
+            InputRow(
+                stringResource(R.string.vertex_location), f.location, actions.setLocation,
+                VertexEndpoints.DEFAULT_LOCATION, modifier = Modifier.testTag("setup-vertex-location"),
+            )
+        } else {
+            InputRow(
+                ModelSetupCopy.API_KEY, f.apiKey, actions.setApiKey,
+                if (f.keyRequired) ModelSetupCopy.KEY_HINT else ModelSetupCopy.KEY_OPTIONAL, first = !f.urlEditable,
+                keyboard = KeyboardType.Password, secret = !showKey, modifier = Modifier.testTag("setup-api-key"),
+            ) {
+                Text(if (showKey) stringResource(R.string.hide) else stringResource(R.string.show), Modifier.clickable { showKey = !showKey }, fontSize = 13.sp, color = c.accent)
+            }
         }
         if (f.showModel) {
             InputRow(
@@ -417,6 +491,17 @@ private fun AddProviderForm(ui: ModelSetupUi, actions: ModelSetupActions) {
                 keyboard = KeyboardType.Uri, modifier = Modifier.testTag("setup-model"),
             )
         }
+    }
+    if (f.isVertex) {
+        when {
+            jsonReadError -> FooterNote(stringResource(R.string.vertex_sa_read_failed), Modifier.testTag("setup-vertex-sa-error"), color = c.bad)
+            f.saError != null -> FooterNote(f.saError, Modifier.testTag("setup-vertex-sa-error"), color = c.bad)
+            f.saSummary.isNotBlank() -> FooterNote(stringResource(R.string.vertex_sa_summary, f.saSummary), Modifier.testTag("setup-vertex-sa-summary"))
+        }
+        f.projectProblem?.takeIf { f.apiKey.isNotBlank() || f.projectId.isNotBlank() }?.let {
+            FooterNote(it, Modifier.testTag("setup-vertex-project-error"), color = c.bad)
+        }
+        f.locationProblem?.let { FooterNote(it, Modifier.testTag("setup-vertex-location-error"), color = c.bad) }
     }
     // 列表里没有要的模型、或这家不提供列表时,随时可以自己填(没列出模型时那一栏已经在了)
     if (!f.noList) {
@@ -679,6 +764,7 @@ object ModelSetupCopy {
     fun modelExample(kind: ProviderConfig.Kind): String = tr(
         when (kind) {
             ProviderConfig.Kind.Gemini -> R.string.model_example_gemini
+            ProviderConfig.Kind.Vertex, ProviderConfig.Kind.Antigravity -> R.string.model_example_vertex
             ProviderConfig.Kind.Anthropic -> R.string.model_example_anthropic
             ProviderConfig.Kind.OpenAiResponses, ProviderConfig.Kind.ChatGpt -> R.string.model_example_openai
             ProviderConfig.Kind.Xai -> R.string.model_example_grok
@@ -718,3 +804,19 @@ object ModelSetupCopy {
         if (o.contextKnown) add(ModelOptions.contextLabel(caps.contextTokens) to false)
     }
 }
+
+internal fun readVertexJsonUri(context: Context, uri: Uri): String? = runCatching {
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val out = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val n = input.read(buf)
+            if (n <= 0) break
+            total += n
+            if (total > 1_000_000) return null
+            out.write(buf, 0, n)
+        }
+        String(out.toByteArray(), Charsets.UTF_8)
+    }
+}.getOrNull()

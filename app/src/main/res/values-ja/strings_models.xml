@@ -192,4 +192,32 @@
     <string name="models_daily_token_budget">プロバイダーの1日の Token 予算</string>
     <string name="models_daily_token_budget_sub">ローカル暦日で、このプロバイダーの全モデル・全用途について報告された入力・出力 Token を集計します。予算に達すると次のリクエストを止めます。実行中のリクエストで超過する場合があり、未報告の使用量は 0 です。ローカル日付が変わると再開します。</string>
     <string name="models_daily_token_budget_save_failed">予算を保存できませんでした。以前の設定が引き続き使われます。</string>
+
+    <!-- Vertex AI & Antigravity -->
+    <string name="model_example_vertex">例: gemini-4-argon</string>
+    <string name="vertex_sa_label">サービス アカウント JSON</string>
+    <string name="vertex_sa_file">サービス アカウント ファイル</string>
+    <string name="vertex_import_json">.json ファイルを選択</string>
+    <string name="vertex_sa_loaded">読み込み済み · 変更</string>
+    <string name="vertex_sa_hint">サービス アカウント JSON を貼り付けるか .json 鍵ファイルを選択</string>
+    <string name="vertex_sa_read_failed">JSON ファイルを読み込めませんでした。</string>
+    <string name="vertex_sa_invalid">無効なサービス アカウント JSON です。type=&quot;service_account&quot;、client_email、PKCS#8 の private_key を含めてください。</string>
+    <string name="vertex_sa_summary">サービス アカウント: %1$s</string>
+    <string name="vertex_project_id">プロジェクト ID</string>
+    <string name="vertex_project_hint">例: my-gcp-project</string>
+    <string name="vertex_project_required">GCP プロジェクト ID を入力してください。</string>
+    <string name="vertex_project_invalid">GCP プロジェクト ID の形式が無効です。</string>
+    <string name="vertex_location">ロケーション</string>
+    <string name="vertex_location_invalid">ロケーションは global または小文字のリージョン名（例: us-central1）を指定してください。</string>
+    <string name="vertex_project_location">プロジェクトとロケーション</string>
+    <string name="vertex_replace_sa">サービス アカウント JSON を変更</string>
+    <string name="vertex_edit_settings">プロジェクトとロケーションを編集</string>
+    <string name="signin_row_antigravity">Google でログインして Antigravity Gemini モデルを使用</string>
+    <string name="signin_antigravity_title">Google でログイン (Antigravity)</string>
+    <string name="signin_antigravity_body">ブラウザで Google ログインを開き、Antigravity Gemini モデルの使用を承認して Cloud Code Assist プロジェクト ID を取得します。リクエストは Google に直接送信されます。</string>
+    <string name="signin_antigravity_note">トークンとプロジェクト ID はこの端末のみに暗号化して保存され、ログには記録されません。</string>
+    <string name="signin_antigravity_start">Google で続行</string>
+    <string name="signin_antigravity_waiting">ブラウザで Google ログインを完了してから Mika に戻ってください。</string>
+    <string name="account_signed_in_note_antigravity">Google (Antigravity) アカウントを使用しています。更新トークンとプロジェクト ID はこの端末のみに暗号化保存されます。</string>
+    <string name="account_signed_out_note_antigravity">この端末からログアウトしました。モデルの選択は保持されており、再ログインで再開できます。</string>
 </resources>

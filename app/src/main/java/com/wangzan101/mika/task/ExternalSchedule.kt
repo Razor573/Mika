@@ -90,6 +90,7 @@ object ExternalSchedule {
 class ExternalScheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ExternalSchedule.ACTION) return
+        if (!FeatureFlags.get(context.applicationContext).externalSchedule()) return
         val pending = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {

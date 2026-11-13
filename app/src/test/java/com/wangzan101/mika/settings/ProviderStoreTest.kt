@@ -13,6 +13,9 @@ import com.wangzan101.mika.core.model.ModelSession
 import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
+import com.wangzan101.mika.core.oauth.AccountSession
+import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.core.usage.UsagePurpose
 import com.wangzan101.mika.core.usage.UsageSource
 import kotlinx.coroutines.test.runTest
@@ -20,6 +23,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -27,6 +31,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.security.KeyPairGenerator
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import javax.crypto.KeyGenerator
 
@@ -1042,6 +1048,140 @@ class ProviderStoreTest {
         assertTrue("拒绝时不记一笔不存在的调用", seen.isEmpty())
         s.modelFor(ModelRole.Light)!!.complete("s", emptyList(), emptyList())
         assertEquals(listOf(available.id), seen.map { it.providerId })
+    }
+
+    private fun testServiceAccountJson(projectId: String, clientEmail: String): String {
+        val kp = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+        val b64 = Base64.getMimeEncoder(64, byteArrayOf('\n'.code.toByte())).encodeToString(kp.private.encoded)
+        val escapedPem = ("-----BEGIN PRIVATE KEY-----\n$b64\n-----END PRIVATE KEY-----\n").replace("\n", "\\n")
+        return """{"type":"service_account","project_id":"$projectId","client_email":"$clientEmail","private_key":"$escapedPem","token_uri":"https://oauth2.googleapis.com/token"}"""
+    }
+
+    @Test fun vertexServiceAccountStaysEncryptedProjectLocationPersistAndRotateInvalidates() {
+        val dir = tmp.newFolder("vertex-real")
+        val s = ProviderStore(dir, AesGcmKeyCipher { key })
+        val sa1 = testServiceAccountJson("proj-v1", "sa1@proj-v1.iam.gserviceaccount.com")
+        val p = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST, sa1,
+            listOf(ListedModel("gemini-4-hydrogen"), ListedModel("gemini-4-argon")), location = "",
+        )
+        assertEquals("proj-v1", p.projectId)
+        assertEquals(VertexEndpoints.DEFAULT_LOCATION, p.location)
+        assertEquals("sa1@proj-v1.iam.gserviceaccount.com" to "proj-v1", s.vertexAccountSummary(p.id))
+        dir.walk().filter(File::isFile).forEach { f ->
+            val content = f.readText()
+            assertFalse(f.name, content.contains("PRIVATE KEY"))
+            assertFalse(f.name, content.contains("sa1@"))
+        }
+
+        val vertexCaps = Capabilities(toolCalls = true, vision = true, contextTokens = 1_000_000, reasoning = true)
+        assertTrue(s.use(ModelRole.Main, p.id, "gemini-4-hydrogen", vertexCaps))
+        assertNotNull(s.modelFor(ModelRole.Main))
+
+        assertTrue(s.updateVertexSettings(p.id, "proj-updated", "us-central1"))
+        val reloaded = ProviderStore(dir, AesGcmKeyCipher { key })
+        val rp = reloaded.provider(p.id)!!
+        assertEquals("proj-updated", rp.projectId)
+        assertEquals("us-central1", rp.location)
+        assertEquals("proj-updated", reloaded.configFor(ModelRole.Main)!!.projectId)
+        assertEquals("us-central1", reloaded.configFor(ModelRole.Main)!!.location)
+        assertEquals("sa1@proj-v1.iam.gserviceaccount.com" to "proj-updated", reloaded.vertexAccountSummary(p.id))
+
+        val sa2 = testServiceAccountJson("proj-other", "sa2@proj-updated.iam.gserviceaccount.com")
+        reloaded.updateProviderKey(p.id, sa2)
+        assertEquals(sa2, reloaded.providerKey(p.id))
+        assertEquals("sa2@proj-updated.iam.gserviceaccount.com" to "proj-updated", reloaded.vertexAccountSummary(p.id))
+        assertNotNull(reloaded.modelFor(ModelRole.Main))
+
+        reloaded.removeProvider(p.id)
+        assertNull(reloaded.providerKey(p.id))
+        assertNull(reloaded.vertexAccountSummary(p.id))
+    }
+
+    @Test fun legacyProvidersJsonWithoutProjectIdAndLocationDeserializesCleanly() {
+        val dir = tmp.newFolder("legacy-json")
+        File(dir, "providers.json").writeText(
+            """
+            {
+              "services": [
+                {"id": "p1", "name": "OpenAI", "kind": "OpenAiResponses", "baseUrl": "https://api.openai.com/v1", "models": [{"id": "gpt-5"}]}
+              ],
+              "providers": [
+                {"id": "c1", "providerId": "p1", "name": "OpenAI", "kind": "OpenAiResponses", "baseUrl": "https://api.openai.com/v1", "model": "gpt-5", "toolCalls": true, "vision": true, "contextTokens": 400000, "reasoning": true, "groundingVerified": false, "promptCaching": "implicit"}
+              ],
+              "uses": {
+                "Main": {"use": "model", "config": "c1"}
+              }
+            }
+            """.trimIndent(),
+        )
+        val s = ProviderStore(dir, AesGcmKeyCipher { key })
+        val p = s.provider("p1")!!
+        assertEquals("", p.projectId)
+        assertEquals("", p.location)
+        val cfg = s.configFor(ModelRole.Main)!!
+        assertEquals("", cfg.projectId)
+        assertEquals("", cfg.location)
+    }
+
+    @Test fun antigravityCollapsesSuffixedModelsOnLoadAndConnectWithoutLosingReasoningEffort() {
+        val dir = tmp.newFolder("ag-collapse")
+        val s1 = ProviderStore(dir, AesGcmKeyCipher { key })
+        val session = AccountSession(
+            provider = AntigravityAuth.PROVIDER,
+            accountId = "user-ag",
+            label = "ag@example.com",
+            accessToken = "ag-access-SECRET",
+            refreshToken = "ag-refresh-SECRET",
+            expiresAtMs = System.currentTimeMillis() + 3_600_000L,
+            apiBase = AntigravityAuth.API_BASE,
+            clientId = "cid",
+            issuer = AntigravityAuth.ISSUER,
+            projectId = "proj-ag",
+        )
+        val agCaps = Capabilities(toolCalls = true, vision = true, contextTokens = 1_048_576, reasoning = true)
+        val p = s1.connectAccount(
+            session,
+            listOf(
+                ListedModel("gemini-4-hydrogen"),
+                ListedModel("gemini-4-argon"),
+                ListedModel("gemini-3.8-flash"),
+                ListedModel("claude-sonnet-4-6"),
+                ListedModel("gpt-oss-120b"),
+                ListedModel("gemini-4-carbon"),
+            ),
+        )
+        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"), p.models!!.map { it.id })
+        assertTrue(s1.use(ModelRole.Main, p.id, "gemini-4-hydrogen", agCaps))
+        assertTrue(s1.setReasoningEffort(ModelRole.Main, "xhigh"))
+        dir.walk().filter(File::isFile).forEach { f -> assertFalse(f.name, f.readText().contains("SECRET")) }
+
+        // Simulate legacy suffixed IDs persisted on disk before collapse.
+        val cfgFile = File(dir, "providers.json")
+        cfgFile.writeText(cfgFile.readText().replace("\"gemini-4-hydrogen\"", "\"gemini-4-hydrogen-medium\""))
+
+        val reloaded = ProviderStore(dir, AesGcmKeyCipher { key })
+        val rp = reloaded.antigravityProvider()!!
+        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"), rp.models!!.map { it.id })
+        assertEquals("gemini-4-hydrogen", reloaded.configFor(ModelRole.Main)!!.model)
+        assertEquals("xhigh", reloaded.roles.value.reasoningEffort(ModelRole.Main))
+        assertEquals("proj-ag", reloaded.accountSession(rp.id)!!.projectId)
+    }
+
+    @Test fun probeCatchesModelConstructorValidationFailureAsProbeResultFailed() = runTest {
+        val s = ProviderStore(tmp.newFolder("probe-invalid"), AesGcmKeyCipher { key })
+        val vertexCaps = Capabilities(toolCalls = true, vision = true, contextTokens = 1_000_000, reasoning = true)
+        val result = s.probe(
+            ProviderConfig.Kind.Vertex,
+            VertexEndpoints.GLOBAL_HOST,
+            "{}",
+            null,
+            "../bad",
+            null,
+            vertexCaps,
+            projectId = "proj-v1",
+        )
+        assertTrue(result is ProbeResult.Failed)
     }
 
     private class FakeModel(override val capabilities: Capabilities) : ChatModel {

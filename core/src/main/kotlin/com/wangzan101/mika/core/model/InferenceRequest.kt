@@ -18,7 +18,7 @@ internal enum class InferenceProtocol(val provider: String, val instruction: Str
         val envelope = when (this) {
             Responses -> (packet["response"] as? JsonObject)?.get("usage") ?: packet["usage"]
             Anthropic -> (packet["message"] as? JsonObject)?.get("usage") ?: packet["usage"]
-            Gemini -> packet["usageMetadata"]
+            Gemini -> packet["usageMetadata"] ?: (packet["response"] as? JsonObject)?.get("usageMetadata")
             Chat -> packet["usage"]
         }
         val u = envelope as? JsonObject ?: return null
@@ -54,12 +54,15 @@ internal data class ReportedTokens(val input: Int?, val output: Int?, val cached
 internal data class InferenceRequest(val protocol: InferenceProtocol, val payload: JsonObject, val provider: String)
 
 internal suspend inline fun Request.Builder.postInference(
-    protocol: InferenceProtocol, payload: JsonObject, provider: () -> String = { protocol.provider },
+    protocol: InferenceProtocol,
+    payload: JsonObject,
+    wirePayload: JsonObject = payload,
+    provider: () -> String = { protocol.provider },
 ): Request.Builder {
     val context = currentCoroutineContext()
     // 追踪和请求计数都靠这个标记辨认推理流量；同协程里的令牌刷新、目录请求不能算成模型调用。
     if (context[TraceCall] != null || context[ModelHttpAttempts] != null) {
         tag(InferenceRequest::class.java, InferenceRequest(protocol, payload, provider()))
     }
-    return post(payload.toString().toRequestBody("application/json".toMediaType()))
+    return post(wirePayload.toString().toRequestBody("application/json".toMediaType()))
 }

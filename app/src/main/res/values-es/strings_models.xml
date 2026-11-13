@@ -200,4 +200,32 @@
     <string name="models_daily_token_budget">Presupuesto diario de tokens</string>
     <string name="models_daily_token_budget_sub">Cuenta los tokens de entrada y salida informados para todos los modelos y usos de este proveedor durante el día local. Al llegar al límite se bloquea la siguiente solicitud; las solicitudes en curso pueden superarlo. El uso no informado cuenta como 0 y se restablece al cambiar la fecha local.</string>
     <string name="models_daily_token_budget_save_failed">No se pudo guardar el presupuesto. La configuración anterior sigue activa.</string>
+
+    <!-- Vertex AI y Antigravity -->
+    <string name="model_example_vertex">p. ej., gemini-4-argon</string>
+    <string name="vertex_sa_label">JSON de cuenta de servicio</string>
+    <string name="vertex_sa_file">Archivo de cuenta de servicio</string>
+    <string name="vertex_import_json">Elegir archivo .json</string>
+    <string name="vertex_sa_loaded">Cargado · cambiar archivo</string>
+    <string name="vertex_sa_hint">Pega el JSON de cuenta de servicio o importa un archivo de clave .json</string>
+    <string name="vertex_sa_read_failed">No se pudo leer ese archivo JSON.</string>
+    <string name="vertex_sa_invalid">JSON de cuenta de servicio no válido. Incluye type &quot;service_account&quot;, client_email y una private_key PKCS#8.</string>
+    <string name="vertex_sa_summary">Cuenta de servicio: %1$s</string>
+    <string name="vertex_project_id">ID del proyecto</string>
+    <string name="vertex_project_hint">p. ej., my-gcp-project</string>
+    <string name="vertex_project_required">Introduce un ID de proyecto de GCP.</string>
+    <string name="vertex_project_invalid">El ID de proyecto de GCP contiene caracteres no compatibles.</string>
+    <string name="vertex_location">Ubicación</string>
+    <string name="vertex_location_invalid">La ubicación de Vertex AI debe ser global o una región en minúsculas como us-central1.</string>
+    <string name="vertex_project_location">Proyecto y ubicación</string>
+    <string name="vertex_replace_sa">Reemplazar JSON de cuenta de servicio</string>
+    <string name="vertex_edit_settings">Editar proyecto y ubicación</string>
+    <string name="signin_row_antigravity">Inicia sesión con Google para usar modelos Antigravity Gemini</string>
+    <string name="signin_antigravity_title">Iniciar sesión con Google (Antigravity)</string>
+    <string name="signin_antigravity_body">Abre el inicio de sesión de Google en tu navegador para autorizar modelos Antigravity Gemini y resolver tu proyecto de Cloud Code Assist. Las solicitudes van directamente a Google.</string>
+    <string name="signin_antigravity_note">Los tokens y el ID del proyecto se guardan cifrados solo en este teléfono y nunca se escriben en los registros.</string>
+    <string name="signin_antigravity_start">Continuar con Google</string>
+    <string name="signin_antigravity_waiting">Completa el inicio de sesión con Google en el navegador y vuelve a Mika.</string>
+    <string name="account_signed_in_note_antigravity">Usando tu cuenta de Google (Antigravity). Los tokens de actualización y el ID del proyecto se guardan cifrados solo en este teléfono.</string>
+    <string name="account_signed_out_note_antigravity">Sesión cerrada en este teléfono. Tus modelos elegidos se conservan; vuelve a iniciar sesión para continuar.</string>
 </resources>

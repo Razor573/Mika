@@ -25,6 +25,10 @@ data class ReasoningOptions(val levels: List<String>, val fromProvider: Boolean)
             return when (ProviderStore.adapterFor(config, listed?.endpoint).first) {
                 ProviderConfig.Kind.OpenAiResponses, ProviderConfig.Kind.ChatGpt, ProviderConfig.Kind.Xai ->
                     ReasoningOptions(manualLevels, fromProvider = false)
+                ProviderConfig.Kind.Antigravity ->
+                    ReasoningOptions(listOf("minimal", "low", "medium", "high", "xhigh"), fromProvider = false)
+                ProviderConfig.Kind.Vertex ->
+                    ReasoningOptions(listOf("minimal", "low", "medium", "high"), fromProvider = false)
                 // 预设里这家官方文档写明了几档就给几档;自定义地址对不上预设,照旧不猜
                 ProviderConfig.Kind.OpenAiCompat ->
                     ProviderPresets.forBaseUrl(config.baseUrl)?.reasoningLevels

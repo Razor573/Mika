@@ -6,17 +6,25 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.Closeable
 import java.io.IOException
+import java.net.BindException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.URLDecoder
+
+class PortBusyException(val port: Int, cause: Throwable? = null) :
+    IOException("Loopback port $port is already in use", cause)
 
 /**
  * 登录回调用的本机小服务(用 ChatGPT、OpenRouter 登录共用):只绑 127.0.0.1(别的设备连不进来),端口由系统挑一个空闲的。浏览器登录完跳回
  * `http://127.0.0.1:<端口>/auth/callback?…`(或写成 localhost),这里读出参数,把这次登录做完(换令牌、核对)再回一页结果;做的期间浏览器那边
  * 一直等着这个连接。别的路径(如浏览器顺手要的图标)回 404。只收一次回调;用完或放弃都要 [close]。
  */
-class LoopbackCallback private constructor(private val server: ServerSocket) : Closeable {
+class LoopbackCallback private constructor(
+    private val server: ServerSocket,
+    val path: String = PATH,
+) : Closeable {
     val port: Int get() = server.localPort
 
     // 找无线调试端口时扫本机,别扫到自己这个监听
@@ -24,7 +32,7 @@ class LoopbackCallback private constructor(private val server: ServerSocket) : C
     val redirectUri: String get() = redirectUri(HOST)
 
     /** 回调地址写成 [host](`127.0.0.1` 或 `localhost`,都指本机):有的服务只认其中一种写法。 */
-    fun redirectUri(host: String): String = "http://$host:$port$PATH"
+    fun redirectUri(host: String): String = "http://$host:$port$path"
 
     /**
      * 等回调,最多 [timeoutMs];超时为 null。收到回调后先调 [page](可以挂起:在里面把登录做完),
@@ -52,8 +60,8 @@ class LoopbackCallback private constructor(private val server: ServerSocket) : C
                 }
                 val parts = requestLine.split(' ')
                 val target = parts.getOrNull(1).orEmpty()
-                val path = target.substringBefore('?')
-                if (parts.firstOrNull() != "GET" || path != PATH) {
+                val requestPath = target.substringBefore('?')
+                if (parts.firstOrNull() != "GET" || requestPath != path) {
                     respond(s.getOutputStream(), 404, "Not Found", "text/plain", "Not Found")
                     return@use
                 }
@@ -93,7 +101,27 @@ class LoopbackCallback private constructor(private val server: ServerSocket) : C
         private const val READ_TIMEOUT_MS = 5_000
 
         /** 开一个监听;[port] 为 0 时由系统挑。 */
-        fun open(port: Int = 0): LoopbackCallback = LoopbackCallback(ServerSocket(port, 4, InetAddress.getByName(HOST)))
+        fun open(port: Int = 0, path: String = PATH): LoopbackCallback {
+            val normalizedPath = normalizePath(path)
+            val server = ServerSocket()
+            try {
+                server.reuseAddress = true
+                server.bind(InetSocketAddress(InetAddress.getByName(HOST), port), 4)
+                return LoopbackCallback(server, normalizedPath)
+            } catch (e: BindException) {
+                runCatching { server.close() }
+                if (port != 0) throw PortBusyException(port, e)
+                throw e
+            } catch (e: Throwable) {
+                runCatching { server.close() }
+                throw e
+            }
+        }
+
+        private fun normalizePath(raw: String): String {
+            val trimmed = raw.trim().trimStart('/')
+            return if (trimmed.isEmpty()) "/" else "/$trimmed"
+        }
 
         fun parseQuery(query: String): Map<String, String> = query.split('&').filter { it.isNotEmpty() }.associate { kv ->
             val k = kv.substringBefore('=')

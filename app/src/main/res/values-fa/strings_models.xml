@@ -196,4 +196,32 @@
     <string name="models_daily_token_budget">سقف توکن روزانه</string>
     <string name="models_daily_token_budget_save_failed">سقف ذخیره نشد. تنظیم قبلی همچنان فعال است.</string>
     <string name="models_daily_token_budget_sub">تمام مدل‌ها و کاربردهای این ارائه‌دهنده را در روز تقویمی محلی می‌شمارد. فقط توکن‌های ورودی و خروجی گزارش‌شده حساب می‌شوند. با رسیدن به سقف، درخواست بعدی مسدود می‌شود؛ درخواست‌های در حال اجرا ممکن است از آن عبور کنند. با تغییر تاریخ محلی بازنشانی می‌شود.</string>
+
+    <!-- Vertex AI و Antigravity -->
+    <string name="model_example_vertex">مثلاً gemini-4-argon</string>
+    <string name="vertex_sa_label">JSON حساب سرویس</string>
+    <string name="vertex_sa_file">فایل حساب سرویس</string>
+    <string name="vertex_import_json">انتخاب فایل .json</string>
+    <string name="vertex_sa_loaded">بارگذاری شد · تغییر فایل</string>
+    <string name="vertex_sa_hint">JSON حساب سرویس را جای‌گذاری کنید یا فایل کلید .json را وارد کنید</string>
+    <string name="vertex_sa_read_failed">خواندن این فایل JSON ممکن نشد.</string>
+    <string name="vertex_sa_invalid">JSON حساب سرویس نامعتبر است. باید شامل type=&quot;service_account&quot;، client_email و private_key با فرمت PKCS#8 باشد.</string>
+    <string name="vertex_sa_summary">حساب سرویس: %1$s</string>
+    <string name="vertex_project_id">شناسه پروژه</string>
+    <string name="vertex_project_hint">مثلاً my-gcp-project</string>
+    <string name="vertex_project_required">شناسه پروژه GCP را وارد کنید.</string>
+    <string name="vertex_project_invalid">شناسه پروژه GCP شامل نویسه‌های پشتیبانی‌نشده است.</string>
+    <string name="vertex_location">موقعیت</string>
+    <string name="vertex_location_invalid">موقعیت Vertex AI باید global یا نام منطقه‌ای با حروف کوچک مانند us-central1 باشد.</string>
+    <string name="vertex_project_location">پروژه و موقعیت</string>
+    <string name="vertex_replace_sa">جایگزینی JSON حساب سرویس</string>
+    <string name="vertex_edit_settings">ویرایش پروژه و موقعیت</string>
+    <string name="signin_row_antigravity">ورود با Google برای استفاده از مدل‌های Antigravity Gemini</string>
+    <string name="signin_antigravity_title">ورود با Google (Antigravity)</string>
+    <string name="signin_antigravity_body">صفحه ورود Google را در مرورگر باز می‌کند تا مدل‌های Antigravity Gemini را مجاز کرده و پروژه Cloud Code Assist شما را دریافت کند. درخواست‌ها مستقیماً به Google ارسال می‌شوند.</string>
+    <string name="signin_antigravity_note">توکن‌ها و شناسه پروژه فقط به‌صورت رمزنگاری‌شده در همین گوشی ذخیره می‌شوند و هرگز در گزارش‌ها ثبت نمی‌شوند.</string>
+    <string name="signin_antigravity_start">ادامه با Google</string>
+    <string name="signin_antigravity_waiting">ورود به Google را در مرورگر تکمیل کنید و سپس به Mika برگردید.</string>
+    <string name="account_signed_in_note_antigravity">از حساب Google (Antigravity) استفاده می‌شود. توکن‌های تازه‌سازی و شناسه پروژه فقط به‌صورت رمزنگاری‌شده روی این گوشی ذخیره می‌شوند.</string>
+    <string name="account_signed_out_note_antigravity">از این گوشی خارج شدید. انتخاب مدل‌های شما حفظ شده است؛ برای ادامه دوباره وارد شوید.</string>
 </resources>

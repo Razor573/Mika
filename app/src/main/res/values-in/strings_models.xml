@@ -190,4 +190,32 @@
     <string name="models_daily_token_budget">Anggaran token harian penyedia</string>
     <string name="models_daily_token_budget_sub">Menghitung token input dan output yang dilaporkan untuk semua model dan penggunaan penyedia ini dalam hari kalender lokal. Saat batas tercapai, permintaan berikutnya diblokir; permintaan yang sedang berjalan dapat melampauinya. Penggunaan yang tidak dilaporkan dihitung 0 dan direset saat tanggal lokal berubah.</string>
     <string name="models_daily_token_budget_save_failed">Anggaran tidak dapat disimpan. Pengaturan sebelumnya tetap berlaku.</string>
+
+    <!-- Vertex AI & Antigravity -->
+    <string name="model_example_vertex">mis. gemini-4-argon</string>
+    <string name="vertex_sa_label">JSON akun layanan</string>
+    <string name="vertex_sa_file">File akun layanan</string>
+    <string name="vertex_import_json">Pilih file .json</string>
+    <string name="vertex_sa_loaded">Dimuat · ganti file</string>
+    <string name="vertex_sa_hint">Tempel JSON akun layanan atau impor file kunci .json</string>
+    <string name="vertex_sa_read_failed">Tidak dapat membaca file JSON tersebut.</string>
+    <string name="vertex_sa_invalid">JSON akun layanan tidak valid. Sertakan type &quot;service_account&quot;, client_email, dan private_key PKCS#8.</string>
+    <string name="vertex_sa_summary">Akun layanan: %1$s</string>
+    <string name="vertex_project_id">ID proyek</string>
+    <string name="vertex_project_hint">mis. my-gcp-project</string>
+    <string name="vertex_project_required">Masukkan ID proyek GCP.</string>
+    <string name="vertex_project_invalid">ID proyek GCP mengandung karakter yang tidak didukung.</string>
+    <string name="vertex_location">Lokasi</string>
+    <string name="vertex_location_invalid">Lokasi Vertex AI harus global atau nama wilayah huruf kecil seperti us-central1.</string>
+    <string name="vertex_project_location">Proyek &amp; lokasi</string>
+    <string name="vertex_replace_sa">Ganti JSON akun layanan</string>
+    <string name="vertex_edit_settings">Edit proyek &amp; lokasi</string>
+    <string name="signin_row_antigravity">Masuk dengan Google untuk model Antigravity Gemini</string>
+    <string name="signin_antigravity_title">Masuk dengan Google (Antigravity)</string>
+    <string name="signin_antigravity_body">Membuka halaman masuk Google di browser untuk mengotorisasi model Antigravity Gemini dan memperoleh proyek Cloud Code Assist Anda. Permintaan dikirim langsung ke Google.</string>
+    <string name="signin_antigravity_note">Token dan ID proyek disimpan terenkripsi hanya di ponsel ini dan tidak pernah ditulis ke log.</string>
+    <string name="signin_antigravity_start">Lanjutkan dengan Google</string>
+    <string name="signin_antigravity_waiting">Selesaikan masuk dengan Google di browser, lalu kembali ke Mika.</string>
+    <string name="account_signed_in_note_antigravity">Menggunakan akun Google (Antigravity) Anda. Token refresh dan ID proyek disimpan terenkripsi hanya di ponsel ini.</string>
+    <string name="account_signed_out_note_antigravity">Keluar di ponsel ini. Pilihan model Anda tetap disimpan; masuk lagi untuk melanjutkan.</string>
 </resources>

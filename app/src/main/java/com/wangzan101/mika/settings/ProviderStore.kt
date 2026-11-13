@@ -7,10 +7,15 @@ import com.wangzan101.mika.core.chatgpt.ChatGptSession
 import com.wangzan101.mika.core.chatgpt.ChatGptTokens
 import com.wangzan101.mika.core.oauth.AccountSession
 import com.wangzan101.mika.core.oauth.AccountTokens
+import com.wangzan101.mika.core.oauth.AntigravityAuth
 import com.wangzan101.mika.core.oauth.OauthTokenResult
 import com.wangzan101.mika.core.oauth.OpenRouterAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.oauth.VertexServiceAccount
+import com.wangzan101.mika.core.oauth.VertexTokenProvider
 import com.wangzan101.mika.core.oauth.XaiAuth
 import com.wangzan101.mika.core.model.AnthropicModel
+import com.wangzan101.mika.core.model.AntigravityModel
 import com.wangzan101.mika.core.model.BearerToken
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.Author
@@ -33,6 +38,7 @@ import com.wangzan101.mika.core.model.PromptCaching
 import com.wangzan101.mika.core.model.ResponsesModel
 import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.ToolSpec
+import com.wangzan101.mika.core.model.VertexModel
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
 import com.wangzan101.mika.core.usage.UsagePurpose
 import com.wangzan101.mika.core.usage.UsageSink
@@ -80,14 +86,20 @@ data class ProviderConfig(
     val name: String = "",
     /** 所属 [Provider] 的 id;为空时由 [ProviderStore.save] 按接口类型、地址和名字归到对应服务商。 */
     val providerId: String = "",
+    /** Vertex AI 所属 GCP project id（非密钥元数据）。 */
+    val projectId: String = "",
+    /** Vertex AI 区域（空值回退为 `global`）。 */
+    val location: String = "",
 ) {
     /**
      * 接口类型。[OpenAiResponses] 用在模型列表给某个模型写明 Responses 协议时、预设「OpenAI」,以及添加自定义服务商时选了它;
      * [ChatGpt] 是用 ChatGPT 账号登录、用套餐额度调用的那一家:凭据是登录(见 [ChatGptSession]),不是 API Key。
      * [Xai] 同样是账号登录(设备码),凭据是登录不是 API Key,调用 xAI 自己的 Responses 接口。
+     * [Vertex] 使用 GCP Service Account JSON 签发 JWT 换取短时效 Bearer Token 调用 Vertex AI generateContent。
+     * [Antigravity] 使用 Google Antigravity OAuth 登录凭据调用 Antigravity generateContent。
      */
     enum class Kind {
-        OpenAiCompat, Anthropic, Gemini, OpenAiResponses, ChatGpt, Xai;
+        OpenAiCompat, Anthropic, Gemini, OpenAiResponses, ChatGpt, Xai, Vertex, Antigravity;
 
         /**
          * 这个接口类型发请求走哪种协议。用它筛掉接口写明了不支持的模型,见 [com.wangzan101.mika.ui.ModelSetupViewModel]
@@ -98,7 +110,7 @@ data class ProviderConfig(
             get() = when (this) {
                 OpenAiCompat -> ModelProtocol.ChatCompletions
                 Anthropic -> ModelProtocol.Messages
-                Gemini -> ModelProtocol.GenerateContent
+                Gemini, Vertex, Antigravity -> ModelProtocol.GenerateContent
                 OpenAiResponses, ChatGpt, Xai -> ModelProtocol.Responses
             }
 
@@ -150,6 +162,10 @@ data class Provider(
     val visionOverrides: Map<String, Boolean> = emptyMap(),
     /** 这家每天所有模型、用途合计的已报告 Token 预算；null 不限制。 */
     val dailyTokenBudget: Long? = null,
+    /** Vertex AI 所属 GCP project id（非密钥元数据）。 */
+    val projectId: String = "",
+    /** Vertex AI 区域（空值回退为 `global`）。 */
+    val location: String = "",
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
 
@@ -158,7 +174,11 @@ data class Provider(
      * [verifiedModels] 里。账号登录的那几家模型名是固定的,不算。服务商页对这样在用的模型给「重新测试」。
      */
     fun untested(model: String): Boolean =
-        kind != ProviderConfig.Kind.ChatGpt && kind != ProviderConfig.Kind.Xai && models?.isEmpty() == true && model !in verifiedModels
+        kind != ProviderConfig.Kind.ChatGpt &&
+            kind != ProviderConfig.Kind.Xai &&
+            kind != ProviderConfig.Kind.Antigravity &&
+            models?.isEmpty() == true &&
+            model !in verifiedModels
 }
 
 /** OkHttp 把超时换算为 Int 毫秒，秒数必须在换算后仍能存下。 */
@@ -290,13 +310,15 @@ class ProviderStore(
     /** 发给模型服务的 User-Agent;App 给 `Mika/<版本>`。 */
     private val userAgent: String = "Mika",
     /** 列模型:接口类型、地址、Key、每个请求都带的头。 */
-    private val modelLister: suspend (ProviderConfig.Kind, String, String?, Map<String, String>) -> ModelListResult = ::listAvailable,
+    private val modelLister: suspend (ProviderConfig.Kind, String, String?, Map<String, String>) -> ModelListResult = defaultModelLister,
     /** 「用 ChatGPT 登录」的授权服务(换令牌、刷新、注销)。 */
     val chatGptAuth: ChatGptAuth = defaultChatGptAuth,
     /** xAI 订阅登录(设备码、刷新)。 */
     val xaiAuth: XaiAuth = defaultXaiAuth,
     /** OpenRouter 账号授权(换 Key)。 */
     val openRouterAuth: OpenRouterAuth = defaultOpenRouterAuth,
+    /** Antigravity Google OAuth 授权(换令牌、刷新)。 */
+    val antigravityAuth: AntigravityAuth = defaultAntigravityAuth,
     /**
      * 建可调用的模型:配置、Key、服务商列表里给这个模型单独指定的接口(没有为 null,按配置的接口类型和地址)、请求头等。
      * 为 null 时用内置的适配器(测试里换成假的)。
@@ -308,6 +330,9 @@ class ProviderStore(
     private val chatGptTokens = mutableMapOf<String, ChatGptTokens>()
     /** 每个订阅账号一份,和 ChatGPT 一样同一时刻只有一个在换令牌。 */
     private val accountTokens = mutableMapOf<String, AccountTokens>()
+    private data class CachedVertexTokenProvider(val fingerprint: String, val provider: VertexTokenProvider)
+    /** 每个 Vertex 服务商按 SA JSON SHA-256 指纹缓存 TokenProvider;换 Key/删除时立即失效重建。 */
+    private val vertexTokens = mutableMapOf<String, CachedVertexTokenProvider>()
     private val configFile = File(dir, CONFIG_FILE)
     private val keyFile = File(dir, KEY_FILE)
     private val chatGptHostFile = File(dir, CHATGPT_HOST_FILE)
@@ -348,8 +373,23 @@ class ProviderStore(
      */
     @Synchronized
     fun save(cfg: ProviderConfig, apiKey: String?) {
-        val p = provider(cfg.providerId) ?: findOrAddProvider(ProviderConnection.displayName(cfg), cfg.kind, cfg.baseUrl)
-        val attached = cfg.copy(providerId = p.id, kind = p.kind, baseUrl = p.baseUrl, name = p.name)
+        val parsedProject = if (cfg.kind == ProviderConfig.Kind.Vertex && cfg.projectId.isBlank() && apiKey != null) {
+            vertexServiceAccountFromJson(apiKey)?.projectId.orEmpty()
+        } else ""
+        val projectId = cfg.projectId.trim().ifBlank { parsedProject }
+        val location = if (cfg.kind == ProviderConfig.Kind.Vertex) VertexEndpoints.normalizeLocation(cfg.location) else cfg.location.trim()
+        val p = provider(cfg.providerId) ?: findOrAddProvider(
+            ProviderConnection.displayName(cfg), cfg.kind, cfg.baseUrl,
+            projectId = projectId, location = location,
+        )
+        val cleanModel = if (p.kind == ProviderConfig.Kind.Antigravity) AntigravityAuth.collapseModelId(cfg.model) else cfg.model
+        val resolvedProject = projectId.ifBlank { p.projectId }
+        val resolvedLocation = if (p.kind == ProviderConfig.Kind.Vertex) VertexEndpoints.normalizeLocation(cfg.location.ifBlank { p.location })
+            else cfg.location.trim().ifBlank { p.location }
+        val attached = cfg.copy(
+            providerId = p.id, kind = p.kind, baseUrl = p.baseUrl, name = p.name, model = cleanModel,
+            projectId = resolvedProject, location = resolvedLocation,
+        )
         val list = _configs.value
         val i = list.indexOfFirst { it.id == cfg.id }
         _configs.value = if (i >= 0) list.toMutableList().also { it[i] = attached } else list + attached
@@ -399,17 +439,33 @@ class ProviderStore(
         signIn: String? = null,
         typed: Set<String> = emptySet(),
         untested: Boolean = false,
+        projectId: String = "",
+        location: String = "",
     ): Provider {
-        val found = findOrAddProvider(name, kind, baseUrl, signIn)
+        val resolvedProject = projectId.trim().ifBlank {
+            if (kind == ProviderConfig.Kind.Vertex && apiKey != null) vertexServiceAccountFromJson(apiKey)?.projectId.orEmpty() else ""
+        }
+        val resolvedLocation = if (kind == ProviderConfig.Kind.Vertex) VertexEndpoints.normalizeLocation(location) else location.trim()
+        val found = findOrAddProvider(name, kind, baseUrl, signIn, resolvedProject, resolvedLocation)
+        val normalizedModels = if (kind == ProviderConfig.Kind.Antigravity) collapseAntigravityListedModels(models) else models
         // 跳过测试时没有列表可存:这家之前列过的留着,不要用空表把已有的列表盖掉
-        val listed = if (untested && models.isEmpty()) found.models ?: models else models
+        val listed = if (untested && normalizedModels.isEmpty()) found.models ?: normalizedModels else normalizedModels
+        val finalProject = resolvedProject.ifBlank { found.projectId }
+        val finalLocation = if (kind == ProviderConfig.Kind.Vertex) {
+            if (location.isNotBlank() || found.location.isBlank()) resolvedLocation else found.location
+        } else resolvedLocation.ifBlank { found.location }
         val p = found.copy(
             models = listed, sessionHeader = sessionHeader,
             verifiedModels = found.verifiedModels + verified, typedModels = found.typedModels + typed,
             // 这次没测、这家也没有核实过的模型、也没列过列表,才是「没测过」;别的情况一律按测过
             savedUntested = untested && verified.isEmpty() && found.verifiedModels.isEmpty() && listed.isEmpty(),
+            projectId = finalProject,
+            location = finalLocation,
         )
         _providers.value = _providers.value.map { if (it.id == p.id) p else it }
+        _configs.value = _configs.value.map {
+            if (it.providerId == p.id) it.copy(projectId = p.projectId, location = p.location) else it
+        }
         repairUnavailableReasoningEfforts()
         if (apiKey != null) setKey(p.id, apiKey)
         writeConfig()
@@ -419,9 +475,10 @@ class ProviderStore(
     /** 记下服务商最近一次列出的模型。列出来了,就说明「没测过」不再成立(跳过测试存下的那家在这里清掉标记)。 */
     @Synchronized
     fun rememberModels(providerId: String, models: List<ListedModel>) {
-        if (provider(providerId) == null) return
+        val p = provider(providerId) ?: return
+        val normalized = if (p.kind == ProviderConfig.Kind.Antigravity) collapseAntigravityListedModels(models) else models
         _providers.value = _providers.value.map {
-            if (it.id == providerId) it.copy(models = models, savedUntested = false) else it
+            if (it.id == providerId) it.copy(models = normalized, savedUntested = false) else it
         }
         repairUnavailableReasoningEfforts()
         writeConfig()
@@ -454,7 +511,33 @@ class ProviderStore(
     /** 换掉一个服务商的 Key(它下面的模型都用这一个)。 */
     @Synchronized
     fun updateProviderKey(providerId: String, apiKey: String) {
-        if (provider(providerId) != null) setKey(providerId, apiKey)
+        val p = provider(providerId) ?: return
+        setKey(providerId, apiKey)
+        if (p.kind == ProviderConfig.Kind.Vertex && p.projectId.isBlank()) {
+            val parsedProject = vertexServiceAccountFromJson(apiKey)?.projectId.orEmpty()
+            if (parsedProject.isNotBlank()) {
+                _providers.value = _providers.value.map { if (it.id == providerId) it.copy(projectId = parsedProject) else it }
+                _configs.value = _configs.value.map { if (it.providerId == providerId) it.copy(projectId = parsedProject) else it }
+                writeConfig()
+            }
+        }
+    }
+
+    /** 更新 Vertex 服务商的非密钥项目与区域配置（同步到该服务商下全部配置）。 */
+    @Synchronized
+    fun updateVertexSettings(providerId: String, projectId: String, location: String): Boolean {
+        val p = provider(providerId) ?: return false
+        if (p.kind != ProviderConfig.Kind.Vertex) return false
+        val cleanProject = projectId.trim()
+        val cleanLocation = VertexEndpoints.normalizeLocation(location)
+        _providers.value = _providers.value.map {
+            if (it.id == providerId) it.copy(projectId = cleanProject, location = cleanLocation) else it
+        }
+        _configs.value = _configs.value.map {
+            if (it.providerId == providerId) it.copy(projectId = cleanProject, location = cleanLocation) else it
+        }
+        writeConfig()
+        return true
     }
 
     /**
@@ -471,6 +554,9 @@ class ProviderStore(
         _configs.value = _configs.value.filterNot { it.providerId == providerId }
         _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet())
         prune()
+        invalidateVertexTokens(providerId)
+        synchronized(accountTokens) { accountTokens.remove(providerId) }
+        synchronized(chatGptTokens) { chatGptTokens.remove(providerId) }
         if (providerId in keys) setKey(providerId, "")
         _providerKeyRevisions.value -= providerId
         writeConfig()
@@ -483,8 +569,17 @@ class ProviderStore(
     @Synchronized
     fun use(role: ModelRole, providerId: String, model: String, caps: Capabilities): Boolean {
         val p = provider(providerId) ?: return false
-        val id = _configs.value.firstOrNull { it.providerId == p.id && it.model == model }?.id
-            ?: newId().also { save(ProviderConfig(it, p.kind, p.baseUrl, model, caps, p.name, p.id), null) }
+        val cleanModel = if (p.kind == ProviderConfig.Kind.Antigravity) AntigravityAuth.collapseModelId(model) else model
+        val id = _configs.value.firstOrNull { it.providerId == p.id && it.model == cleanModel }?.id
+            ?: newId().also {
+                save(
+                    ProviderConfig(
+                        it, p.kind, p.baseUrl, cleanModel, caps, p.name, p.id,
+                        projectId = p.projectId, location = p.location,
+                    ),
+                    null,
+                )
+            }
         return choose(role, RoleChoice.Model(id))
     }
 
@@ -631,10 +726,11 @@ class ProviderStore(
     suspend fun probe(
         kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, sessionHeader: String?,
         model: String, endpoint: ModelEndpoint?, caps: Capabilities,
+        projectId: String = "", location: String = "",
     ): ProbeResult {
-        val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true))
-        val m = modelFactory(cfg, apiKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
+        val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true), projectId = projectId, location = location)
         return try {
+            val m = modelFactory(cfg, apiKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
             val reply = m.complete(PROBE_SYSTEM, listOf(Message(Role.User, listOf(Part.Text(PROBE_TEXT)), Author.Mika)), listOf(PROBE_TOOL))
             if (reply.parts.any { it is Part.ToolCall }) ProbeResult.ToolCalled else ProbeResult.NoToolCall
         } catch (e: ModelError) {
@@ -656,25 +752,79 @@ class ProviderStore(
         provider(cfg.providerId)?.models?.firstOrNull { it.id == cfg.model }
 
     /** 列出这个服务商的可用模型(见 [ModelCatalog]);不属于任何对话,声明了会话头的用新的会话号。 */
-    suspend fun listModels(kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, sessionHeader: String? = null): ModelListResult =
-        modelLister(kind, baseUrl, apiKey, headers(sessionHeader, ModelSession.fresh()))
+    suspend fun listModels(
+        kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, sessionHeader: String? = null,
+        projectId: String = "", location: String = "",
+    ): ModelListResult {
+        val hdrs = headers(sessionHeader, ModelSession.fresh())
+        return if (modelLister === defaultModelLister && (kind == ProviderConfig.Kind.Vertex || kind == ProviderConfig.Kind.Antigravity)) {
+            listAvailable(kind, baseUrl, apiKey, hdrs, projectId, location)
+        } else {
+            modelLister(kind, baseUrl, apiKey, hdrs)
+        }
+    }
 
-    /** 重新列一个已连接服务商的模型:用存着的 Key;订阅登录用访问令牌(快过期先换新的)。 */
+    /** 重新列一个已连接服务商的模型:用存着的 Key;订阅登录与 Vertex SA 用访问令牌(快过期先换新的)。 */
     suspend fun listModels(p: Provider): ModelListResult {
-        if (p.kind != ProviderConfig.Kind.ChatGpt && p.kind != ProviderConfig.Kind.Xai) {
+        if (p.kind != ProviderConfig.Kind.ChatGpt &&
+            p.kind != ProviderConfig.Kind.Xai &&
+            p.kind != ProviderConfig.Kind.Antigravity &&
+            p.kind != ProviderConfig.Kind.Vertex
+        ) {
             return listModels(p.kind, p.baseUrl, providerKey(p.id), p.sessionHeader)
         }
-        val token = try {
-            if (p.kind == ProviderConfig.Kind.ChatGpt) tokensFor(p.id).get(fresh = false) else accountTokensFor(p.id).get(fresh = false)
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        return try {
+            val base = provider(p.id)?.baseUrl?.takeIf { it.isNotBlank() } ?: p.baseUrl
+            when (p.kind) {
+                ProviderConfig.Kind.Vertex -> {
+                    val tp = vertexTokenProviderFor(p.id)
+                    if (modelLister === defaultModelLister) {
+                        val project = p.projectId.ifBlank { vertexServiceAccountFromJson(providerKey(p.id))?.projectId.orEmpty() }
+                        catalog.vertex(
+                            token = tp,
+                            location = VertexEndpoints.normalizeLocation(p.location),
+                            projectId = project.ifBlank { null },
+                            headers = headers(p.sessionHeader, ModelSession.fresh()),
+                            baseUrl = vertexBaseOverride(base),
+                        )
+                    } else {
+                        val token = tp.get(fresh = false)
+                        modelLister(p.kind, base, token, headers(p.sessionHeader, ModelSession.fresh()))
+                    }
+                }
+                ProviderConfig.Kind.Antigravity -> {
+                    val tokens = accountTokensFor(p.id)
+                    if (modelLister === defaultModelLister) {
+                        tokens.get(fresh = false)
+                        catalog.antigravity(
+                            token = tokens,
+                            projectId = { accountSession(p.id)?.projectId.orEmpty() },
+                            headers = headers(p.sessionHeader, ModelSession.fresh()),
+                            baseUrl = antigravityBaseOverride(base),
+                        )
+                    } else {
+                        val token = tokens.get(fresh = false)
+                        modelLister(p.kind, base, token, headers(p.sessionHeader, ModelSession.fresh()))
+                    }
+                }
+                ProviderConfig.Kind.ChatGpt -> {
+                    val token = tokensFor(p.id).get(fresh = false)
+                    listModels(p.kind, base, token, p.sessionHeader)
+                }
+                else -> {
+                    val token = accountTokensFor(p.id).get(fresh = false)
+                    listModels(p.kind, base, token, p.sessionHeader)
+                }
+            }
+        } catch (e: CancellationException) {
             throw e
-        } catch (e: ModelError.SignInExpired) {
-            return ModelListResult.Failed(ListFailure.Auth)
         } catch (e: ModelError) {
-            return ModelListResult.Failed(if (e is ModelError.Network || e is ModelError.Proxy) ListFailure.of(e) else ListFailure.Server)
+            ModelListResult.Failed(mapListFailure(e))
+        } catch (_: IllegalStateException) {
+            ModelListResult.Failed(ListFailure.Auth)
+        } catch (_: IllegalArgumentException) {
+            ModelListResult.Failed(ListFailure.Auth)
         }
-        val base = provider(p.id)?.baseUrl ?: p.baseUrl
-        return listModels(p.kind, base, token, p.sessionHeader)
     }
 
     // ---------- ChatGPT 登录 ----------
@@ -734,27 +884,45 @@ class ProviderStore(
         }
     }
 
-    // ---------- xAI 账号登录 ----------
+    // ---------- xAI / Antigravity 账号登录 ----------
 
     /** 订阅账号的登录(和 API Key 存在同一处、同样加密);没有或解不开为 null。 */
     fun accountSession(providerId: String): AccountSession? = AccountSession.fromJson(providerKey(providerId))
 
     fun xaiProvider(): Provider? = _providers.value.firstOrNull { it.kind == ProviderConfig.Kind.Xai }
 
+    fun antigravityProvider(): Provider? = _providers.value.firstOrNull { it.kind == ProviderConfig.Kind.Antigravity }
+
+    /**
+     * Vertex AI 非密钥摘要（仅返回 client_email 与 project_id；绝不返回私钥或原始 JSON）。
+     */
+    fun vertexAccountSummary(providerId: String): Pair<String, String>? {
+        val p = provider(providerId) ?: return null
+        val sa = providerKey(providerId)?.let(::vertexServiceAccountFromJson)
+        val email = sa?.clientEmail.orEmpty()
+        val project = p.projectId.ifBlank { sa?.projectId.orEmpty() }
+        if (email.isBlank() && project.isBlank()) return null
+        return email to project
+    }
+
     /**
      * 登录成功:存下登录和列出的模型。同一家账号登录只有一个服务商,再登录就更新它。
      */
     @Synchronized
     fun connectAccount(session: AccountSession, models: List<ListedModel>): Provider {
-        val (name, kind, base) = when (session.provider) {
+        val (name, kind, defaultBase) = when (session.provider) {
             XaiAuth.PROVIDER -> Triple(XAI_NAME, ProviderConfig.Kind.Xai, XaiAuth.API_BASE)
+            AntigravityAuth.PROVIDER -> Triple(ANTIGRAVITY_NAME, ProviderConfig.Kind.Antigravity, AntigravityAuth.API_BASE)
             else -> throw IllegalArgumentException("unknown account provider")
         }
+        val base = session.apiBase.ifBlank { defaultBase }
+        val normalizedModels = if (kind == ProviderConfig.Kind.Antigravity) collapseAntigravityListedModels(models) else models
         val existing = _providers.value.firstOrNull { it.kind == kind }
-        if (existing == null) return connect(name, kind, base, session.toJson(), models)
-        val p = existing.copy(name = name, baseUrl = base, models = models)
+        if (existing == null) return connect(name, kind, base, session.toJson(), normalizedModels)
+        val p = existing.copy(name = name, baseUrl = base, models = normalizedModels)
         _providers.value = _providers.value.map { if (it.id == p.id) p else it }
         _configs.value = _configs.value.map { if (it.providerId == p.id) it.copy(baseUrl = base, name = name) else it }
+        repairUnavailableReasoningEfforts()
         setKey(p.id, session.toJson())
         writeConfig()
         return p
@@ -811,17 +979,41 @@ class ProviderStore(
 
     private fun accountTokensFor(providerId: String): AccountTokens = synchronized(accountTokens) {
         accountTokens.getOrPut(providerId) {
+            val label = when (provider(providerId)?.kind) {
+                ProviderConfig.Kind.Antigravity -> ANTIGRAVITY_ACCOUNT
+                else -> XAI_ACCOUNT
+            }
             AccountTokens(
-                account = XAI_ACCOUNT,
+                account = label,
                 refresh = { session ->
                     when (session.provider) {
                         XaiAuth.PROVIDER -> xaiAuth.refresh(session)
+                        AntigravityAuth.PROVIDER -> antigravityAuth.refresh(session)
                         else -> OauthTokenResult.Rejected("unknown", terminal = true)
                     }
                 },
                 load = { accountSession(providerId) },
                 save = { before, after -> saveRefreshed(providerId, before, after) },
             )
+        }
+    }
+
+    private fun invalidateVertexTokens(providerId: String) {
+        synchronized(vertexTokens) { vertexTokens.remove(providerId) }
+    }
+
+    private fun vertexTokenProviderFor(providerId: String): VertexTokenProvider {
+        val raw = providerKey(providerId).orEmpty()
+        val fingerprint = if (raw.isBlank()) "" else VertexServiceAccount.fingerprintSha256(raw)
+        return synchronized(vertexTokens) {
+            val existing = vertexTokens[providerId]
+            if (existing != null && existing.fingerprint == fingerprint) {
+                existing.provider
+            } else {
+                val created = VertexTokenProvider(shortHttp, loadServiceAccountJson = { providerKey(providerId) })
+                vertexTokens[providerId] = CachedVertexTokenProvider(fingerprint, created)
+                created
+            }
         }
     }
 
@@ -835,8 +1027,11 @@ class ProviderStore(
      */
     private fun buildModel(cfg: ProviderConfig, apiKey: String?, endpoint: ModelEndpoint?, setup: ClientSetup): ChatModel {
         val (kind, adapterBase) = adapterFor(cfg, endpoint)
-        // 订阅登录用服务商当前的地址(登录时可能换过),配置里存的是添加时的
-        val baseUrl = if (cfg.kind == ProviderConfig.Kind.Xai) {
+        // 订阅登录/Vertex 用服务商当前的地址(登录或修改配置时可能换过),配置里存的是添加时的
+        val baseUrl = if (cfg.kind == ProviderConfig.Kind.Xai ||
+            cfg.kind == ProviderConfig.Kind.Antigravity ||
+            cfg.kind == ProviderConfig.Kind.Vertex
+        ) {
             provider(cfg.providerId)?.baseUrl?.takeIf { it.isNotBlank() } ?: adapterBase
         } else adapterBase
         val defaultHttp = http
@@ -865,18 +1060,56 @@ class ProviderStore(
             ProviderConfig.Kind.Xai ->
                 ResponsesModel(baseUrl, accountTokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, headers = setup.headers,
                     reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT)
+            ProviderConfig.Kind.Vertex -> {
+                val p = provider(cfg.providerId)
+                val project = cfg.projectId.ifBlank { p?.projectId.orEmpty() }
+                    .ifBlank { vertexServiceAccountFromJson(apiKey ?: providerKey(cfg.providerId))?.projectId.orEmpty() }
+                val loc = VertexEndpoints.normalizeLocation(cfg.location.ifBlank { p?.location.orEmpty() })
+                val token = if (p != null) vertexTokenProviderFor(cfg.providerId) else VertexTokenProvider(shortHttp, { apiKey })
+                VertexModel(
+                    projectId = project,
+                    location = loc,
+                    token = token,
+                    model = cfg.model,
+                    capabilities = cfg.capabilities,
+                    http = http,
+                    headers = setup.headers,
+                    maxOutputTokens = setup.maxOutputTokens,
+                    reasoningEffort = setup.reasoningEffort,
+                    baseUrl = vertexBaseOverride(baseUrl),
+                )
+            }
+            ProviderConfig.Kind.Antigravity ->
+                AntigravityModel(
+                    token = accountTokensFor(cfg.providerId),
+                    projectId = { accountSession(cfg.providerId)?.projectId.orEmpty() },
+                    model = AntigravityAuth.collapseModelId(cfg.model),
+                    capabilities = cfg.capabilities,
+                    http = http,
+                    headers = setup.headers,
+                    maxOutputTokens = setup.maxOutputTokens,
+                    reasoningEffort = setup.reasoningEffort,
+                    baseUrl = antigravityBaseOverride(baseUrl),
+                )
         }
     }
 
-    private fun findOrAddProvider(name: String, kind: ProviderConfig.Kind, baseUrl: String, signIn: String? = null): Provider {
+    private fun findOrAddProvider(
+        name: String, kind: ProviderConfig.Kind, baseUrl: String, signIn: String? = null,
+        projectId: String = "", location: String = "",
+    ): Provider {
         val key = ProviderConnection.keyOf(kind, baseUrl, name)
         _providers.value.firstOrNull { it.key == key && it.signIn == signIn }?.let { return it }
-        val p = Provider(newId(), name.trim(), kind, baseUrl.trim(), signIn = signIn)
+        val p = Provider(
+            newId(), name.trim(), kind, baseUrl.trim(), signIn = signIn,
+            projectId = projectId.trim(), location = location.trim(),
+        )
         _providers.value = _providers.value + p
         return p
     }
 
     private fun setKey(providerId: String, apiKey: String) {
+        invalidateVertexTokens(providerId)
         keys = if (apiKey.isEmpty()) keys - providerId else keys + (providerId to encode(cipher.encrypt(apiKey.toByteArray())))
         writeAtomically(keyFile, keysJson())
         val revisions = _providerKeyRevisions.value
@@ -901,6 +1134,7 @@ class ProviderStore(
             keys = json.parseToJsonElement(keyFile.readText()).jsonObject.mapValues { it.value.jsonPrimitive.content }
         }
         migrate()
+        collapseAntigravitySavedModels()
         repairStaleContextDefaults()
         // 指向不存在的配置的选择退回默认,没人用的配置删掉;和文件里的不一样(含刚迁移的用途)才写回
         _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet())
@@ -910,6 +1144,69 @@ class ProviderStore(
             val text = configJson()
             if (runCatching { configFile.readText() }.getOrNull() != text) writeAtomically(configFile, text)
         }
+    }
+
+    /**
+     * 旧配置若把 Antigravity 存成带档位/tier 后缀的模型 ID（如 `gemini-4-hydrogen-medium`），
+     * 加载时折叠回裸家族 ID，并完整保留各用途已选的 [RoleChoices.reasoningEfforts]。
+     */
+    private fun collapseAntigravitySavedModels() {
+        val antigravityIds = _providers.value.filter { it.kind == ProviderConfig.Kind.Antigravity }.map { it.id }.toSet()
+        if (antigravityIds.isEmpty() && _configs.value.none { it.kind == ProviderConfig.Kind.Antigravity }) return
+        _providers.value = _providers.value.map { p ->
+            if (p.kind != ProviderConfig.Kind.Antigravity) p else {
+                val collapsedContext = linkedMapOf<String, ModelContextSettings>()
+                for ((k, v) in p.contextSettings) {
+                    val c = ModelOptions.collapseAntigravityId(k)
+                    if (c !in collapsedContext || k == c) collapsedContext[c] = v
+                }
+                val collapsedVision = linkedMapOf<String, Boolean>()
+                for ((k, v) in p.visionOverrides) {
+                    val c = ModelOptions.collapseAntigravityId(k)
+                    if (c !in collapsedVision || k == c) collapsedVision[c] = v
+                }
+                p.copy(
+                    models = p.models?.let(::collapseAntigravityListedModels),
+                    verifiedModels = p.verifiedModels.mapNotNull(::supportedCollapsedAntigravityIdOrNull).toSet(),
+                    typedModels = p.typedModels.mapNotNull(::supportedCollapsedAntigravityIdOrNull).toSet(),
+                    contextSettings = collapsedContext,
+                    visionOverrides = collapsedVision,
+                )
+            }
+        }
+        val byKey = linkedMapOf<Pair<String, String>, ProviderConfig>()
+        val remap = mutableMapOf<String, String>()
+        val updatedConfigs = mutableListOf<ProviderConfig>()
+        for (c in _configs.value) {
+            if (c.kind != ProviderConfig.Kind.Antigravity && c.providerId !in antigravityIds) {
+                updatedConfigs += c
+                continue
+            }
+            val collapsedId = ModelOptions.collapseAntigravityId(c.model)
+            val key = c.providerId to collapsedId
+            val existing = byKey[key]
+            if (existing == null) {
+                val canonical = c.copy(model = collapsedId)
+                byKey[key] = canonical
+                updatedConfigs += canonical
+                remap[c.id] = canonical.id
+            } else {
+                remap[c.id] = existing.id
+            }
+        }
+        _configs.value = updatedConfigs
+        val savedEfforts = _roles.value.reasoningEfforts
+        var nextRoles = _roles.value
+        ModelRole.entries.forEach { role ->
+            val choice = nextRoles[role]
+            if (choice is RoleChoice.Model) {
+                val target = remap[choice.configId]
+                if (target != null && target != choice.configId) {
+                    nextRoles = nextRoles.with(role, RoleChoice.Model(target)) ?: nextRoles
+                }
+            }
+        }
+        _roles.value = nextRoles.copy(reasoningEfforts = savedEfforts)
     }
 
     /**
@@ -1012,6 +1309,8 @@ class ProviderStore(
         typedModels = o["typedModels"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(),
         // 旧版本存下的没有这一项:那时每一家都走过「测试并保存」,按测过算
         savedUntested = o["untested"]?.jsonPrimitive?.booleanOrNull ?: false,
+        projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
+        location = o["location"]?.jsonPrimitive?.content.orEmpty(),
         models = o["models"]?.jsonArray?.map { e ->
             val m = e.jsonObject
             ListedModel(
@@ -1050,6 +1349,8 @@ class ProviderStore(
         ),
         name = o["name"]?.jsonPrimitive?.content.orEmpty(),
         providerId = o["providerId"]?.jsonPrimitive?.content.orEmpty(),
+        projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
+        location = o["location"]?.jsonPrimitive?.content.orEmpty(),
     )
 
     /** `uses` 里的一个用途:`{"use":"model","config":id}`、`{"use":"main"}` 或 `{"use":"none"}`;认不出的按默认。 */
@@ -1086,6 +1387,8 @@ class ProviderStore(
                         p.sessionHeader?.let { put("sessionHeader", it) }
                         p.signIn?.let { put("signIn", it) }
                         p.dailyTokenBudget?.let { put("dailyTokenBudget", it) }
+                        if (p.projectId.isNotEmpty()) put("projectId", p.projectId)
+                        if (p.location.isNotEmpty()) put("location", p.location)
                         if (p.savedUntested) put("untested", true)
                         if (p.verifiedModels.isNotEmpty()) putJsonArray("verifiedModels") { p.verifiedModels.forEach { add(it) } }
                         if (p.contextSettings.isNotEmpty()) putJsonObject("contextSettings") {
@@ -1132,6 +1435,8 @@ class ProviderStore(
                     addJsonObject {
                         put("id", c.id); put("providerId", c.providerId); put("name", c.name); put("kind", c.kind.name)
                         put("baseUrl", c.baseUrl); put("model", c.model)
+                        if (c.projectId.isNotEmpty()) put("projectId", c.projectId)
+                        if (c.location.isNotEmpty()) put("location", c.location)
                         put("toolCalls", c.capabilities.toolCalls); put("vision", c.capabilities.vision)
                         put("contextTokens", c.capabilities.contextTokens); put("reasoning", c.capabilities.reasoning)
                         put("groundingVerified", c.capabilities.groundingVerified)
@@ -1202,16 +1507,44 @@ class ProviderStore(
         private val defaultChatGptAuth by lazy { ChatGptAuth(shortHttp) }
         private val defaultOpenRouterAuth by lazy { OpenRouterAuth(shortHttp) }
         private val defaultXaiAuth by lazy { XaiAuth(shortHttp) }
+        private val defaultAntigravityAuth by lazy { AntigravityAuth(shortHttp) }
 
         /** ChatGPT 服务商的名字(品牌名,不随界面语言变)。 */
         const val CHATGPT_NAME = "ChatGPT"
         /** 用 xAI 账号登录的服务商的名字(品牌名,不随界面语言变)。和填 Key 的「xAI」预设不是同一家。 */
         const val XAI_NAME = "xAI / Grok"
+        /** 用 Antigravity Google 登录的服务商的名字。 */
+        const val ANTIGRAVITY_NAME = AntigravityAuth.ACCOUNT_NAME
         /** 用 OpenRouter 账号授权的服务商:名字和预设一样,[Provider.signIn] 标成这个。 */
         const val OPENROUTER_NAME = "OpenRouter"
         const val OPENROUTER_SIGN_IN = "openrouter"
         /** 出错说明里怎么称呼这家的登录。 */
         private const val XAI_ACCOUNT = "xAI"
+        private const val ANTIGRAVITY_ACCOUNT = "Antigravity"
+
+        private val defaultModelLister: suspend (ProviderConfig.Kind, String, String?, Map<String, String>) -> ModelListResult =
+            ::listAvailable
+
+        private fun mapListFailure(e: ModelError): ListFailure = when (e) {
+            is ModelError.SignInExpired, is ModelError.Auth -> ListFailure.Auth
+            is ModelError.Network, is ModelError.Proxy, is ModelError.RateLimited -> ListFailure.of(e)
+            else -> ListFailure.Server
+        }
+
+        internal fun vertexServiceAccountFromJson(raw: String?): VertexServiceAccount? =
+            raw?.takeIf { it.isNotBlank() }?.let { runCatching { VertexServiceAccount.parse(it) }.getOrNull() }
+
+        private fun vertexBaseOverride(baseUrl: String): String? =
+            baseUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() && it != VertexEndpoints.GLOBAL_HOST }
+
+        private fun antigravityBaseOverride(baseUrl: String): String? =
+            baseUrl.trim().trimEnd('/').takeIf { it.isNotEmpty() && it != AntigravityAuth.DAILY_ENDPOINT }
+
+        private fun supportedCollapsedAntigravityIdOrNull(id: String): String? =
+            ModelOptions.collapseAntigravityId(id).takeIf { ModelOptions.isSupportedAntigravityModel(it) }
+
+        private fun collapseAntigravityListedModels(models: List<ListedModel>): List<ListedModel> =
+            ModelOptions.collapseAntigravity(models)
 
         /**
          * 试调用:临时配置的 id、系统提示、那句话、试用的工具、回复上限。
@@ -1228,19 +1561,70 @@ class ProviderStore(
          * [headers] 每个请求都带(见 [ClientHeaders])。
          */
         suspend fun listAvailable(kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, headers: Map<String, String>): ModelListResult =
+            listAvailable(kind, baseUrl, apiKey, headers, projectId = "", location = "")
+
+        suspend fun listAvailable(
+            kind: ProviderConfig.Kind,
+            baseUrl: String,
+            apiKey: String?,
+            headers: Map<String, String>,
+            projectId: String,
+            location: String,
+        ): ModelListResult =
             when (kind) {
                 ProviderConfig.Kind.OpenAiCompat, ProviderConfig.Kind.OpenAiResponses, ProviderConfig.Kind.ChatGpt, ProviderConfig.Kind.Xai ->
                     catalog.openAiCompat(baseUrl, apiKey, headers)
                 ProviderConfig.Kind.Anthropic -> catalog.anthropic(baseUrl, apiKey.orEmpty(), headers)
                 ProviderConfig.Kind.Gemini -> catalog.gemini(baseUrl, apiKey.orEmpty(), headers)
+                ProviderConfig.Kind.Vertex -> {
+                    val raw = apiKey.orEmpty()
+                    val parsed = if (raw.trimStart().startsWith("{")) vertexServiceAccountFromJson(raw) else null
+                    val token = when {
+                        raw.trimStart().startsWith("{") -> {
+                            if (parsed == null) return ModelListResult.Failed(ListFailure.Auth)
+                            VertexTokenProvider(shortHttp, { raw })
+                        }
+                        raw.isNotBlank() -> BearerToken.fixed(raw)
+                        else -> return ModelListResult.Failed(ListFailure.Auth)
+                    }
+                    val resolvedProject = projectId.trim().ifBlank { parsed?.projectId.orEmpty() }
+                    try {
+                        catalog.vertex(
+                            token = token,
+                            location = VertexEndpoints.normalizeLocation(location),
+                            projectId = resolvedProject.ifBlank { null },
+                            headers = headers,
+                            baseUrl = vertexBaseOverride(baseUrl),
+                        )
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: ModelError) {
+                        ModelListResult.Failed(mapListFailure(e))
+                    } catch (_: IllegalStateException) {
+                        ModelListResult.Failed(ListFailure.Auth)
+                    } catch (_: IllegalArgumentException) {
+                        ModelListResult.Failed(ListFailure.Auth)
+                    }
+                }
+                ProviderConfig.Kind.Antigravity ->
+                    catalog.antigravity(
+                        token = BearerToken.fixed(apiKey.orEmpty()),
+                        projectId = { projectId },
+                        headers = headers,
+                        baseUrl = antigravityBaseOverride(baseUrl),
+                    )
             }
 
         /**
          * 调用这个模型用哪种适配器、交给它什么 Base URL。建模型([buildModel])和给思考档位([ReasoningOptions])都按它。
-         * 订阅登录(xAI)固定走这一家的接口,不跟模型列表里写的别的协议走,免得把订阅转去另一个接口。
+         * 订阅登录(xAI / Antigravity)和 Vertex 固定走各自专属适配器,不跟模型列表里写的别的协议走。
          */
         internal fun adapterFor(cfg: ProviderConfig, endpoint: ModelEndpoint?): Pair<ProviderConfig.Kind, String> =
-            if (endpoint == null || cfg.kind == ProviderConfig.Kind.Xai) cfg.kind to cfg.baseUrl
+            if (endpoint == null ||
+                cfg.kind == ProviderConfig.Kind.Xai ||
+                cfg.kind == ProviderConfig.Kind.Vertex ||
+                cfg.kind == ProviderConfig.Kind.Antigravity
+            ) cfg.kind to cfg.baseUrl
             else ProviderConfig.Kind.of(endpoint.protocol) to endpoint.adapterBaseUrl
 
         /** 产品里的那份(App 建):配置在 files/settings 下,Key 用 Android 密钥库加密,用量记到 [usage]。 */

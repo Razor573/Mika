@@ -1,5 +1,7 @@
 package com.wangzan101.mika.settings
 
+import com.wangzan101.mika.core.model.PromptCaching
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.ui.AddForm
 import org.junit.Assert.assertEquals
@@ -91,5 +93,24 @@ class ProviderPresetsTest {
         assertEquals(ProviderConfig.Kind.OpenAiCompat, requesty.kind)
         assertEquals(emptyList<String>(), requesty.familyTokens)
         assertEquals("Requesty", ProviderPresets.forHost("https://router.requesty.ai/v1/")?.label)
+    }
+
+    @Test fun vertexPresetUsesVertexKindHttpsAndRequiresCredentials() {
+        val vertex = preset("Vertex AI")
+        assertEquals(ProviderConfig.Kind.Vertex, vertex.kind)
+        assertEquals(VertexEndpoints.GLOBAL_HOST, vertex.baseUrl)
+        assertTrue(vertex.capabilities.vision)
+        assertEquals(1_000_000, vertex.capabilities.contextTokens)
+        assertEquals(PromptCaching.Implicit, vertex.capabilities.promptCaching)
+        assertEquals(listOf("gemini"), vertex.familyTokens)
+        assertEquals(emptyList<String>(), vertex.reasoningLevels)
+        assertEquals("Vertex AI", ProviderPresets.forHost("https://aiplatform.googleapis.com/v1")?.label)
+
+        val form = AddForm.of(vertex)
+        assertTrue(form.isVertex)
+        assertFalse(form.urlEditable)
+        assertEquals(VertexEndpoints.DEFAULT_LOCATION, form.location)
+        assertFalse(form.canTest)
+        assertFalse(form.canSaveUntested)
     }
 }

@@ -227,4 +227,51 @@ class ModelOptionsTest {
         assertTrue("已有配置的用配置里的能力", options.first { it.id == "b" }.capabilities.vision)
         assertEquals(emptyList<String>(), ModelOptions.ofProvider(p.copy(models = null), emptyList()).map { it.id })
     }
+
+    @Test fun antigravityCollapsesSuffixedVariantsAndDropsUnsupportedModels() {
+        assertEquals("gemini-4-hydrogen", ModelOptions.collapseAntigravityId("models/gemini-4-hydrogen-medium"))
+        assertEquals("gemini-4-argon", ModelOptions.collapseAntigravityId("gemini-4-argon-xhigh"))
+        assertEquals("gemini-3.8-flash", ModelOptions.collapseAntigravityId("gemini-3.8-flash-tiered"))
+        assertEquals("gemini-pro", ModelOptions.collapseAntigravityId("gemini-pro-agent"))
+
+        val raw = listOf(
+            ListedModel("gemini-4-hydrogen-low", displayName = "Gemini 4 Hydrogen (Low)"),
+            ListedModel("gemini-4-hydrogen-high", displayName = "Gemini 4 Hydrogen (High)", vision = true, toolCalls = true),
+            ListedModel("gemini-4-argon-medium", displayName = "Gemini 4 Argon (Medium)", toolCalls = true),
+            ListedModel("gemini-3.8-flash-tiered", toolCalls = true),
+            ListedModel("claude-sonnet-4-6", toolCalls = true),
+            ListedModel("gpt-oss-120b", toolCalls = true),
+            ListedModel("gemini-4-carbon", toolCalls = true),
+            ListedModel("imagen-4", toolCalls = false),
+        )
+        val collapsed = ModelOptions.collapseAntigravity(raw)
+        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"), collapsed.map { it.id })
+        assertEquals(listOf("Gemini 4 Hydrogen", "Gemini 4 Argon", "Gemini 3.8 Flash"), collapsed.map { it.displayName })
+        assertEquals(true, collapsed.first().vision)
+
+        val options = ModelOptions.merge(raw, base, ProviderConfig.Kind.Antigravity)
+        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-3.8-flash"), options.map { it.id })
+        assertEquals("gemini-4-argon", ModelOptions.defaultMain(options))
+    }
+
+    @Test fun antigravityProviderOptionsDeduplicateLegacySuffixedConfigsAndVisionOverrides() {
+        val p = Provider(
+            id = "ag",
+            name = "Antigravity",
+            kind = ProviderConfig.Kind.Antigravity,
+            baseUrl = "https://daily-cloudcode-pa.googleapis.com",
+            models = listOf(
+                ListedModel("gemini-4-hydrogen-medium", displayName = "Gemini 4 Hydrogen (Medium)"),
+                ListedModel("gemini-4-argon-high", displayName = "Gemini 4 Argon (High)"),
+            ),
+            visionOverrides = mapOf("gemini-4-hydrogen-medium" to true),
+        )
+        val configs = listOf(
+            ProviderConfig("c1", p.kind, p.baseUrl, "gemini-4-hydrogen-medium", base, p.name, p.id),
+        )
+        val options = ModelOptions.ofProvider(p, configs)
+        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon"), options.map { it.id })
+        assertTrue(options.first().canSee)
+        assertEquals(true, options.first().visionByUser)
+    }
 }

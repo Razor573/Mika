@@ -212,4 +212,32 @@
     <string name="models_daily_token_budget">ميزانية Token اليومية للمزود</string>
     <string name="models_daily_token_budget_sub">تُحسب رموز الإدخال والإخراج المُبلغ عنها لجميع نماذج هذا المزود وأغراضه خلال اليوم المحلي. عند بلوغ الحد يُحظر الطلب التالي، وقد تتجاوزه الطلبات الجارية. الاستخدام غير المُبلغ عنه يساوي صفرًا، وتُستأنف الطلبات عند تغير التاريخ المحلي.</string>
     <string name="models_daily_token_budget_save_failed">تعذر حفظ الميزانية. ما زال الإعداد السابق ساريًا.</string>
+
+    <!-- Vertex AI و Antigravity -->
+    <string name="model_example_vertex">مثل gemini-4-argon</string>
+    <string name="vertex_sa_label">JSON حساب الخدمة</string>
+    <string name="vertex_sa_file">ملف حساب الخدمة</string>
+    <string name="vertex_import_json">اختر ملف .json</string>
+    <string name="vertex_sa_loaded">تم التحميل · تغيير الملف</string>
+    <string name="vertex_sa_hint">الصق JSON حساب الخدمة أو استورد ملف مفتاح .json</string>
+    <string name="vertex_sa_read_failed">تعذر قراءة ملف JSON هذا.</string>
+    <string name="vertex_sa_invalid">JSON حساب الخدمة غير صالح. يجب أن يتضمن type=&quot;service_account&quot; و client_email و private_key بصيغة PKCS#8.</string>
+    <string name="vertex_sa_summary">حساب الخدمة: %1$s</string>
+    <string name="vertex_project_id">معرّف المشروع</string>
+    <string name="vertex_project_hint">مثل my-gcp-project</string>
+    <string name="vertex_project_required">أدخل معرّف مشروع GCP.</string>
+    <string name="vertex_project_invalid">يحتوي معرّف مشروع GCP على أحرف غير مدعومة.</string>
+    <string name="vertex_location">الموقع</string>
+    <string name="vertex_location_invalid">يجب أن يكون موقع Vertex AI هو global أو منطقة بأحرف صغيرة مثل us-central1.</string>
+    <string name="vertex_project_location">المشروع والموقع</string>
+    <string name="vertex_replace_sa">استبدال JSON حساب الخدمة</string>
+    <string name="vertex_edit_settings">تعديل المشروع والموقع</string>
+    <string name="signin_row_antigravity">سجّل الدخول بحساب Google لاستخدام نماذج Antigravity Gemini</string>
+    <string name="signin_antigravity_title">تسجيل الدخول بحساب Google‏ (Antigravity)</string>
+    <string name="signin_antigravity_body">يفتح تسجيل دخول Google في متصفحك لتفويض نماذج Antigravity Gemini وتحديد مشروع Cloud Code Assist الخاص بك. تُرسل الطلبات مباشرة إلى Google.</string>
+    <string name="signin_antigravity_note">تُحفظ الرموز ومعرّف المشروع مشفّرةً على هذا الهاتف فقط ولا تُكتب في السجلات أبدًا.</string>
+    <string name="signin_antigravity_start">المتابعة مع Google</string>
+    <string name="signin_antigravity_waiting">أكمل تسجيل الدخول في Google داخل المتصفح، ثم ارجع إلى Mika.</string>
+    <string name="account_signed_in_note_antigravity">تستخدم حساب Google‏ (Antigravity). تُحفظ رموز التحديث ومعرّف المشروع مشفّرةً على هذا الهاتف فقط.</string>
+    <string name="account_signed_out_note_antigravity">تم تسجيل الخروج من هذا الهاتف. خيارات النماذج محفوظة؛ سجّل الدخول مجددًا للمتابعة.</string>
 </resources>

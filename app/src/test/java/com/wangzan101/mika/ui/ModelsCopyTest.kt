@@ -5,6 +5,7 @@ import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelRole
+import com.wangzan101.mika.core.oauth.AntigravityAuth
 import com.wangzan101.mika.settings.Provider
 import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderPresets
@@ -42,5 +43,22 @@ class ModelsCopyTest {
         assertEquals(emptyList<RoleChoice>(), fixedChoices(ModelRole.Main))
         assertEquals(listOf(RoleChoice.SameAsMain, RoleChoice.Off), fixedChoices(ModelRole.Vision))
         assertEquals(listOf(RoleChoice.SameAsMain), fixedChoices(ModelRole.Light))
+    }
+
+    @Test fun antigravityShowsBareFamilyNamesAndKindLabelsMatch() {
+        val ag = Provider(
+            id = "ag",
+            name = "Antigravity",
+            kind = ProviderConfig.Kind.Antigravity,
+            baseUrl = AntigravityAuth.API_BASE,
+            models = listOf(ListedModel("gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen")),
+        )
+        val agMain = ProviderConfig("c-ag", ag.kind, ag.baseUrl, "gemini-4-hydrogen", caps, ag.name, ag.id)
+        val u = ui(RoleChoices(main = agMain.id), providers = listOf(ag), configs = listOf(agMain))
+        assertEquals("Gemini 4 Hydrogen", ModelsCopy.roleLine(u, ModelRole.Main).title)
+        assertEquals("Vertex AI", ModelsCopy.kindLabel(ProviderConfig.Kind.Vertex))
+        assertEquals("Antigravity", ModelsCopy.kindLabel(ProviderConfig.Kind.Antigravity))
+        assertTrue(ModelsCopy.signInRowLine(SignInKind.Antigravity).isNotBlank())
+        assertEquals(null, ModelsCopy.accountManage(SignInKind.Antigravity))
     }
 }

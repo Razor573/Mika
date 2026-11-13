@@ -204,4 +204,32 @@
     <string name="models_daily_token_budget">Дневной бюджет токенов провайдера</string>
     <string name="models_daily_token_budget_sub">Учитываются сообщённые входные и выходные токены всех моделей и назначений провайдера за локальный календарный день. При достижении лимита следующий запрос блокируется; выполняемые запросы могут превысить его. Несообщённое использование считается равным 0. Учёт начинается заново при смене локальной даты.</string>
     <string name="models_daily_token_budget_save_failed">Не удалось сохранить бюджет. Прежняя настройка остаётся в силе.</string>
+
+    <!-- Vertex AI и Antigravity -->
+    <string name="model_example_vertex">напр., gemini-4-argon</string>
+    <string name="vertex_sa_label">JSON сервисного аккаунта</string>
+    <string name="vertex_sa_file">Файл сервисного аккаунта</string>
+    <string name="vertex_import_json">Выбрать файл .json</string>
+    <string name="vertex_sa_loaded">Загружен · сменить файл</string>
+    <string name="vertex_sa_hint">Вставьте JSON сервисного аккаунта или импортируйте файл ключа .json</string>
+    <string name="vertex_sa_read_failed">Не удалось прочитать этот файл JSON.</string>
+    <string name="vertex_sa_invalid">Некорректный JSON сервисного аккаунта. Требуются type &quot;service_account&quot;, client_email и private_key PKCS#8.</string>
+    <string name="vertex_sa_summary">Сервисный аккаунт: %1$s</string>
+    <string name="vertex_project_id">ID проекта</string>
+    <string name="vertex_project_hint">напр., my-gcp-project</string>
+    <string name="vertex_project_required">Укажите ID проекта GCP.</string>
+    <string name="vertex_project_invalid">ID проекта GCP содержит неподдерживаемые символы.</string>
+    <string name="vertex_location">Регион</string>
+    <string name="vertex_location_invalid">Регион Vertex AI должен быть global или строчным именем региона, например us-central1.</string>
+    <string name="vertex_project_location">Проект и регион</string>
+    <string name="vertex_replace_sa">Заменить JSON сервисного аккаунта</string>
+    <string name="vertex_edit_settings">Изменить проект и регион</string>
+    <string name="signin_row_antigravity">Войдите через Google для моделей Antigravity Gemini</string>
+    <string name="signin_antigravity_title">Вход через Google (Antigravity)</string>
+    <string name="signin_antigravity_body">Откроет вход Google в браузере, чтобы авторизовать модели Antigravity Gemini и определить проект Cloud Code Assist. Запросы отправляются напрямую в Google.</string>
+    <string name="signin_antigravity_note">Токены и ID проекта хранятся зашифрованными только на этом телефоне и никогда не попадают в журналы.</string>
+    <string name="signin_antigravity_start">Продолжить с Google</string>
+    <string name="signin_antigravity_waiting">Завершите вход через Google в браузере, затем вернитесь в Mika.</string>
+    <string name="account_signed_in_note_antigravity">Используется ваш аккаунт Google (Antigravity). Токены обновления и ID проекта хранятся зашифрованными только на этом телефоне.</string>
+    <string name="account_signed_out_note_antigravity">Выход выполнен на этом телефоне. Выбранные модели сохранены; войдите снова, чтобы продолжить.</string>
 </resources>

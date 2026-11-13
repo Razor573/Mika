@@ -1,6 +1,9 @@
 package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.core.model.*
+import com.wangzan101.mika.core.oauth.AccountSession
+import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -272,5 +275,73 @@ class ReasoningSettingsTest {
                 assertEquals("high", sent!!.jsonPrimitive.content.lowercase())
             }
         }
+    }
+
+    @Test fun vertexAndAntigravityExposeCuratedLevelsWhileGeminiDoesNot() {
+        val vertex = ProviderConfig("v", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST, "gemini-4-hydrogen", caps, "Vertex AI", "pv")
+        val ag = ProviderConfig("a", ProviderConfig.Kind.Antigravity, AntigravityAuth.API_BASE, "gemini-4-hydrogen", caps, "Antigravity", "pa")
+        val gem = ProviderConfig("g", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com", "gemini-2.5-flash", caps, "Gemini", "pg")
+        assertEquals(ReasoningOptions(listOf("minimal", "low", "medium", "high"), fromProvider = false), ReasoningOptions.of(vertex, ListedModel("gemini-4-hydrogen")))
+        assertEquals(ReasoningOptions(listOf("minimal", "low", "medium", "high", "xhigh"), fromProvider = false), ReasoningOptions.of(ag, ListedModel("gemini-4-hydrogen")))
+        assertNull(ReasoningOptions.of(gem, ListedModel("gemini-2.5-flash")))
+    }
+
+    @Test fun antigravityReasoningToggleUpdatesNextWireRequestWithoutRepickingModel() = runTest {
+        MockWebServer().use { server ->
+            server.start()
+            val base = server.url("/").toString().trimEnd('/')
+            val s = ProviderStore(tmp.newFolder("ag-wire"), AesGcmKeyCipher { key })
+            val session = AccountSession(
+                provider = AntigravityAuth.PROVIDER,
+                accountId = "user-1",
+                label = "ag@example.com",
+                accessToken = "ag-access-tok",
+                refreshToken = "ag-refresh-tok",
+                expiresAtMs = System.currentTimeMillis() + 3_600_000L,
+                apiBase = base,
+                clientId = "cid",
+                issuer = AntigravityAuth.ISSUER,
+                projectId = "proj-ag-1",
+            )
+            val p = s.connectAccount(session, listOf(ListedModel("gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen")))
+            assertTrue(s.use(ModelRole.Main, p.id, "gemini-4-hydrogen", caps))
+            assertTrue(s.setReasoningEffort(ModelRole.Main, "medium"))
+
+            val sseOk = "data: {\"response\":{\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\ndata: [DONE]\n\n"
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(sseOk))
+            val userMsg = listOf(Message(Role.User, listOf(Part.Text("hi")), Author.User))
+            s.modelFor(ModelRole.Main)!!.complete("", userMsg, emptyList())
+            val body1 = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+            assertEquals("proj-ag-1", body1["project"]!!.jsonPrimitive.content)
+            assertEquals("gemini-4-hydrogen-medium", body1["model"]!!.jsonPrimitive.content)
+            val level1 = body1["request"]!!.jsonObject["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
+            assertEquals("medium", level1.jsonPrimitive.content.lowercase())
+
+            // Mid-session switch without re-picking the model must immediately update the next request.
+            assertTrue(s.setReasoningEffort(ModelRole.Main, "high"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(sseOk))
+            s.modelFor(ModelRole.Main)!!.complete("", userMsg, emptyList())
+            val body2 = Json.parseToJsonElement(server.takeRequest().body.readUtf8()).jsonObject
+            assertEquals("gemini-4-hydrogen-high", body2["model"]!!.jsonPrimitive.content)
+            val level2 = body2["request"]!!.jsonObject["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!
+            assertEquals("high", level2.jsonPrimitive.content.lowercase())
+            assertEquals("gemini-4-hydrogen", s.configFor(ModelRole.Main)!!.model)
+        }
+    }
+
+    @Test fun vertexReasoningToggleUpdatesNextModelBuildWithoutRepickingModel() {
+        val s = store()
+        val p = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST, "{}",
+            listOf(ListedModel("gemini-4-hydrogen")), projectId = "proj-vertex", location = VertexEndpoints.DEFAULT_LOCATION,
+        )
+        assertTrue(s.use(ModelRole.Main, p.id, "gemini-4-hydrogen", caps))
+        assertTrue(s.setReasoningEffort(ModelRole.Main, "medium"))
+        s.modelFor(ModelRole.Main)
+        assertEquals("medium", setups.last().reasoningEffort)
+
+        assertTrue(s.setReasoningEffort(ModelRole.Main, "high"))
+        s.modelFor(ModelRole.Main)
+        assertEquals("high", setups.last().reasoningEffort)
     }
 }

@@ -196,4 +196,32 @@
     <string name="models_daily_token_budget">Daily token budget</string>
     <string name="models_daily_token_budget_sub">Counts all models and purposes for this provider in the local calendar day. Only reported input and output tokens count. At the limit, the next request is blocked; in-flight requests may exceed it. Resets when the local date changes.</string>
     <string name="models_daily_token_budget_save_failed">The budget could not be saved. The previous setting is still active.</string>
+
+    <!-- Vertex AI & Antigravity -->
+    <string name="model_example_vertex">e.g. gemini-4-argon</string>
+    <string name="vertex_sa_label">Service account JSON</string>
+    <string name="vertex_sa_file">Service account file</string>
+    <string name="vertex_import_json">Choose .json file</string>
+    <string name="vertex_sa_loaded">Loaded · change file</string>
+    <string name="vertex_sa_hint">Paste service account JSON or import a .json key file</string>
+    <string name="vertex_sa_read_failed">Couldn’t read that JSON file.</string>
+    <string name="vertex_sa_invalid">Invalid service account JSON. Include type &quot;service_account&quot;, client_email, and a PKCS#8 private_key.</string>
+    <string name="vertex_sa_summary">Service account: %1$s</string>
+    <string name="vertex_project_id">Project ID</string>
+    <string name="vertex_project_hint">e.g. my-gcp-project</string>
+    <string name="vertex_project_required">Enter a GCP project ID.</string>
+    <string name="vertex_project_invalid">GCP project ID contains unsupported characters.</string>
+    <string name="vertex_location">Location</string>
+    <string name="vertex_location_invalid">Vertex AI location must be global or a lowercase region such as us-central1.</string>
+    <string name="vertex_project_location">Project &amp; location</string>
+    <string name="vertex_replace_sa">Replace service account JSON</string>
+    <string name="vertex_edit_settings">Edit project &amp; location</string>
+    <string name="signin_row_antigravity">Sign in with Google for Antigravity Gemini models</string>
+    <string name="signin_antigravity_title">Sign in with Google (Antigravity)</string>
+    <string name="signin_antigravity_body">Opens Google sign-in in your browser to authorise Antigravity Gemini models and resolve your Cloud Code Assist project. Requests go directly to Google.</string>
+    <string name="signin_antigravity_note">Tokens and project ID are stored encrypted on this phone only and are never written to logs.</string>
+    <string name="signin_antigravity_start">Continue with Google</string>
+    <string name="signin_antigravity_waiting">Finish signing in with Google in your browser, then come back to Mika.</string>
+    <string name="account_signed_in_note_antigravity">Using your Google (Antigravity) account. Refresh tokens and project ID are stored encrypted on this phone only.</string>
+    <string name="account_signed_out_note_antigravity">Signed out on this phone. Your model choices are kept; sign in again to continue.</string>
 </resources>

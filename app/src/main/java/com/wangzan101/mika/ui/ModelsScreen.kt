@@ -1,8 +1,14 @@
 package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.R
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import com.wangzan101.mika.core.model.ModelCatalog
 import com.wangzan101.mika.core.oauth.AccountSignInException
 import com.wangzan101.mika.core.oauth.AccountSignInFailure
+import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.oauth.VertexServiceAccount
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.i18n.trPlural
@@ -222,7 +228,7 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
         }
         var anyShown = false
         groups.forEach { (p, options) ->
-            val shown = options.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) }
+            val shown = options.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) || it.displayName.contains(q, ignoreCase = true) }
             // 这家列不出模型:手填是唯一的选法
             val noList = p.models?.isEmpty() == true
             if (q.isNotEmpty() && shown.isEmpty()) return@forEach
@@ -232,11 +238,13 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
             GroupCard {
                 shown.take(PICK_AT_MOST).forEachIndexed { i, o ->
                     RadioRow(
-                        o.id, selected = ui.picked(role, p.id, o.id), onClick = { actions.pick(p.id, o.id) }, first = i == 0,
+                        displayModelName(p, o), selected = ui.picked(role, p.id, o.id), onClick = { actions.pick(p.id, o.id) }, first = i == 0,
                         titleStyle = ModelIdStyle, below = { Tags(o, forVision = role == ModelRole.Vision) },
                     )
                 }
-                ManualModel(p, ui.manualPick[p.id], first = shown.isEmpty()) { actions.pickManual(p.id, it) }
+                if (p.kind != ProviderConfig.Kind.Antigravity) {
+                    ManualModel(p, ui.manualPick[p.id], first = shown.isEmpty()) { actions.pickManual(p.id, it) }
+                }
             }
             val manualState = ui.manualPick[p.id]
             when {
@@ -299,6 +307,8 @@ class ProviderDetailActions(
     val setDailyBudget: (Long?) -> Boolean = { false },
     /** 把这家默认的模型设为主模型(账号登录的详情里那一行)。 */
     val useAsMain: () -> Unit = {},
+    /** 更新 Vertex AI 的 GCP project ID 与 location（非密钥配置）。 */
+    val updateVertexSettings: (String, String) -> Boolean = { _, _ -> false },
 )
 
 /**
@@ -308,7 +318,9 @@ class ProviderDetailActions(
 @Composable
 fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActions, onBack: () -> Unit) {
     val c = MikaTheme.colors
+    val context = LocalContext.current
     var changingKey by remember { mutableStateOf(false) }
+    var editingVertex by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var editingBudget by remember { mutableStateOf(false) }
     var customBudget by remember { mutableStateOf("") }
@@ -320,7 +332,7 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
         GroupLabel(ModelsCopy.CONNECTION)
         if (p.kind == ProviderConfig.Kind.ChatGpt) {
             ChatGptConnection(ui, state, actions)
-        } else if (p.kind == ProviderConfig.Kind.Xai || p.signIn == ProviderStore.OPENROUTER_SIGN_IN) {
+        } else if (p.kind == ProviderConfig.Kind.Xai || p.kind == ProviderConfig.Kind.Antigravity || p.signIn == ProviderStore.OPENROUTER_SIGN_IN) {
             AccountConnection(ui, p, state, actions)
         } else {
             GroupCard {
@@ -333,9 +345,20 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
                 }
                 ListRow(null, ModelsCopy.KIND) { RowValue(ModelsCopy.kindLabel(p.kind)) }
                 ListRow(null, ModelsCopy.BASE_URL) { RowValue(ModelsCopy.shortUrl(p.baseUrl)) }
-                ListRow(null, ModelsCopy.API_KEY, onClick = { changingKey = true }) {
-                    RowValue(if (p.id in ui.keyed) ModelsCopy.KEY_SAVED else ModelsCopy.KEY_NONE)
-                    RowValue(ModelsCopy.CHANGE, ValueTone.Link)
+                if (p.kind == ProviderConfig.Kind.Vertex) {
+                    ListRow(null, stringResource(R.string.vertex_project_location), onClick = { editingVertex = true }) {
+                        RowValue("${p.projectId.ifBlank { "-" }} · ${p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION }}")
+                        RowValue(ModelsCopy.CHANGE, ValueTone.Link)
+                    }
+                    ListRow(null, stringResource(R.string.vertex_sa_label), onClick = { changingKey = true }) {
+                        RowValue(ui.vertexSummaries[p.id] ?: if (p.id in ui.keyed) ModelsCopy.KEY_SAVED else ModelsCopy.KEY_NONE)
+                        RowValue(ModelsCopy.CHANGE, ValueTone.Link)
+                    }
+                } else {
+                    ListRow(null, ModelsCopy.API_KEY, onClick = { changingKey = true }) {
+                        RowValue(if (p.id in ui.keyed) ModelsCopy.KEY_SAVED else ModelsCopy.KEY_NONE)
+                        RowValue(ModelsCopy.CHANGE, ValueTone.Link)
+                    }
                 }
             }
         }
@@ -360,7 +383,9 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
         }
         if (list.isNotEmpty()) {
             GroupCard {
-                list.take(MODEL_PREVIEW).forEachIndexed { i, o -> ModelRow(o, ui.rolesOf(p.id, o.id), first = i == 0) { using = o } }
+                list.take(MODEL_PREVIEW).forEachIndexed { i, o ->
+                    ModelRow(displayModelName(p, o), o, ui.rolesOf(p.id, o.id), first = i == 0) { using = o }
+                }
                 if (list.size > MODEL_PREVIEW) {
                     ListRow(null, ModelsCopy.viewAll(list.size), titleColor = c.accent, onClick = actions.showAll) { RowChevron() }
                 }
@@ -409,7 +434,62 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
         saveError = if (budgetSaveFailed) stringResource(R.string.models_daily_token_budget_save_failed) else null,
     )
     using?.let { o -> UseAsSheet(ui, p, o.id, onUse = { role -> actions.use(role, o.id) }, onVision = { actions.setVision(o.id, it) }, onDismiss = { using = null }) }
-    if (changingKey) {
+    if (changingKey && p.kind == ProviderConfig.Kind.Vertex) {
+        var saJson by remember { mutableStateOf("") }
+        var readFailed by remember { mutableStateOf(false) }
+        val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            val raw = readVertexJsonUri(context, uri)
+            if (raw == null) {
+                readFailed = true
+            } else {
+                readFailed = false
+                saJson = raw
+            }
+        }
+        val parsed = saJson.takeIf { it.isNotBlank() }?.let { runCatching { VertexServiceAccount.parse(it) }.getOrNull() }
+        val saInvalid = saJson.isNotBlank() && parsed == null
+        MikaDialog(
+            onDismissRequest = { changingKey = false },
+            title = { Text(stringResource(R.string.vertex_replace_sa)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton({ picker.launch(arrayOf("application/json", "*/*")) }) {
+                        Text(stringResource(R.string.vertex_import_json))
+                    }
+                    KeyboardDismissArea {
+                        Box(Modifier.fillMaxWidth().keepsKeyboard().background(c.fill, MikaShapes.Button).padding(12.dp)) {
+                            if (saJson.isEmpty()) Text(stringResource(R.string.vertex_sa_hint), style = MikaType.Caption, color = c.ink3)
+                            BasicTextField(
+                                saJson, { saJson = it; readFailed = false },
+                                Modifier.fillMaxWidth().testTag("new-vertex-sa"),
+                                textStyle = MikaType.Caption.copy(color = c.ink, fontFamily = FontFamily.Monospace),
+                                cursorBrush = SolidColor(c.accent),
+                                minLines = 3, maxLines = 5,
+                            )
+                        }
+                    }
+                    when {
+                        readFailed -> Text(stringResource(R.string.vertex_sa_read_failed), style = MikaType.Caption, color = c.bad)
+                        saInvalid -> Text(stringResource(R.string.vertex_sa_invalid), style = MikaType.Caption, color = c.bad)
+                        parsed != null -> Text(stringResource(R.string.vertex_sa_summary, parsed.displaySummary), style = MikaType.Caption, color = c.ink2)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (parsed != null) {
+                            changingKey = false
+                            actions.changeKey(saJson)
+                        }
+                    },
+                    enabled = parsed != null,
+                ) { Text(ModelsCopy.SAVE) }
+            },
+            dismissButton = { TextButton({ changingKey = false }) { Text(ModelSetupCopy.CANCEL) } },
+        )
+    } else if (changingKey) {
         var key by remember { mutableStateOf("") }
         MikaDialog(
             onDismissRequest = { changingKey = false },
@@ -433,6 +513,38 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
                 }) { Text(ModelsCopy.SAVE) }
             },
             dismissButton = { TextButton({ changingKey = false }) { Text(ModelSetupCopy.CANCEL) } },
+        )
+    }
+    if (editingVertex && p.kind == ProviderConfig.Kind.Vertex) {
+        var projectId by remember(p.id, editingVertex) { mutableStateOf(p.projectId) }
+        var location by remember(p.id, editingVertex) { mutableStateOf(p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION }) }
+        val badProject = projectId.isBlank() || runCatching { VertexEndpoints.validateProjectId(projectId) }.isFailure
+        val badLocation = location.isNotBlank() && runCatching { VertexEndpoints.normalizeLocation(location) }.isFailure
+        MikaDialog(
+            onDismissRequest = { editingVertex = false },
+            title = { Text(stringResource(R.string.vertex_edit_settings)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    InputRow(stringResource(R.string.vertex_project_id), projectId, { projectId = it }, stringResource(R.string.vertex_project_hint), first = true)
+                    InputRow(stringResource(R.string.vertex_location), location, { location = it }, VertexEndpoints.DEFAULT_LOCATION)
+                    if (badProject) {
+                        Text(
+                            stringResource(if (projectId.isBlank()) R.string.vertex_project_required else R.string.vertex_project_invalid),
+                            style = MikaType.Caption, color = c.bad,
+                        )
+                    }
+                    if (badLocation) Text(stringResource(R.string.vertex_location_invalid), style = MikaType.Caption, color = c.bad)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (actions.updateVertexSettings(projectId.trim(), location.trim())) editingVertex = false
+                    },
+                    enabled = !badProject && !badLocation,
+                ) { Text(ModelsCopy.SAVE) }
+            },
+            dismissButton = { TextButton({ editingVertex = false }) { Text(ModelSetupCopy.CANCEL) } },
         )
     }
     if (confirmDelete) {
@@ -492,8 +604,16 @@ private fun ChatGptConnection(ui: ModelSetupUi, state: ListState?, actions: Prov
 @Composable
 private fun AccountConnection(ui: ModelSetupUi, p: Provider, state: ListState?, actions: ProviderDetailActions) {
     val c = MikaTheme.colors
-    val kind = if (p.kind == ProviderConfig.Kind.Xai) SignInKind.Xai else SignInKind.OpenRouter
-    val account = if (kind == SignInKind.Xai) ui.xaiAccount else ui.openRouterAccount
+    val kind = when {
+        p.kind == ProviderConfig.Kind.Xai -> SignInKind.Xai
+        p.kind == ProviderConfig.Kind.Antigravity -> SignInKind.Antigravity
+        else -> SignInKind.OpenRouter
+    }
+    val account = when (kind) {
+        SignInKind.Xai -> ui.xaiAccount
+        SignInKind.Antigravity -> ui.antigravityAccount
+        else -> ui.openRouterAccount
+    }
     val signedIn = account?.signedIn == true
     val (_, waiting, failure) = ui.signInState(kind)
     GroupCard {
@@ -510,14 +630,19 @@ private fun AccountConnection(ui: ModelSetupUi, p: Provider, state: ListState?, 
     GroupCard {
         // 主模型已经在这家就不放这一行
         val isMain = ui.configFor(ModelRole.Main)?.providerId == p.id
-        if (signedIn && !isMain && ui.options(p).isNotEmpty()) {
+        val showSetMain = signedIn && !isMain && ui.options(p).isNotEmpty()
+        val manageLabel = ModelsCopy.accountManage(kind)
+        if (showSetMain) {
             ListRow(null, ModelsCopy.SET_MAIN, ModelsCopy.SET_MAIN_NOTE, first = true, onClick = actions.useAsMain) { RowChevron() }
         }
-        ListRow(null, ModelsCopy.accountManage(kind), titleColor = c.accent, first = !(signedIn && !isMain && ui.options(p).isNotEmpty()), onClick = actions.manageUsage) { RowChevron() }
+        if (manageLabel != null) {
+            ListRow(null, manageLabel, titleColor = c.accent, first = !showSetMain, onClick = actions.manageUsage) { RowChevron() }
+        }
+        val actionFirst = !showSetMain && manageLabel == null
         if (signedIn) {
-            ListRow(null, ModelsCopy.CHATGPT_SIGN_OUT, ModelsCopy.SIGN_OUT_NOTE, titleColor = c.bad, onClick = actions.signOut)
+            ListRow(null, ModelsCopy.CHATGPT_SIGN_OUT, ModelsCopy.SIGN_OUT_NOTE, titleColor = c.bad, first = actionFirst, onClick = actions.signOut)
         } else {
-            ListRow(null, if (waiting) ModelsCopy.SIGN_IN_RUNNING else ModelsCopy.signInStart(kind), titleColor = c.accent, onClick = actions.signIn)
+            ListRow(null, if (waiting) ModelsCopy.SIGN_IN_RUNNING else ModelsCopy.signInStart(kind), titleColor = c.accent, first = actionFirst, onClick = actions.signIn)
         }
     }
     FooterNote(ModelsCopy.accountNote(kind, signedIn))
@@ -537,7 +662,7 @@ fun AllModelsContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActio
     val state = ui.listing[p.id]
     val all = ui.sortedOptions(p)
     val q = filter.trim()
-    val shown = all.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) }
+    val shown = all.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) || it.displayName.contains(q, ignoreCase = true) }
     PageBackground {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBars).windowInsetsPadding(WindowInsets.ime)) {
             TopBar(ModelsCopy.allModelsTitle(ModelsCopy.providerName(p)), MikaIcons.Back, onBack, stringResource(R.string.back), right = {
@@ -554,7 +679,7 @@ fun AllModelsContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActio
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
                 itemsIndexed(shown, key = { _, o -> o.id }) { i, o ->
                     Box(Modifier.fillMaxWidth().clip(rowShape(i, shown.size)).background(c.surface)) {
-                        ModelRow(o, ui.rolesOf(p.id, o.id), first = i == 0) { using = o }
+                        ModelRow(displayModelName(p, o), o, ui.rolesOf(p.id, o.id), first = i == 0) { using = o }
                     }
                 }
                 item {
@@ -576,9 +701,9 @@ private fun rowShape(i: Int, n: Int): RoundedCornerShape {
         bottomStart = if (i == n - 1) r else 0.dp, bottomEnd = if (i == n - 1) r else 0.dp)
 }
 
-/** 模型一行:模型名(等宽)和标签,右边标着它在给哪些用途干活。 */
+/** 模型一行:模型名或显示名和标签,右边标着它在给哪些用途干活。 */
 @Composable
-private fun ModelRow(o: ModelOption, roles: List<ModelRole>, first: Boolean, onClick: () -> Unit) {
+private fun ModelRow(label: String, o: ModelOption, roles: List<ModelRole>, first: Boolean, onClick: () -> Unit) {
     Column {
         if (!first) Hairline(start = 16.dp)
         Row(
@@ -586,7 +711,7 @@ private fun ModelRow(o: ModelOption, roles: List<ModelRole>, first: Boolean, onC
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Column(Modifier.weight(1f)) {
-                Text(o.id, style = ModelIdStyle, color = MikaTheme.colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(label, style = ModelIdStyle, color = MikaTheme.colors.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Box(Modifier.padding(top = 4.dp)) { Tags(o, accent = false) }
             }
             roles.forEach { StatusPill(ModelsCopy.roleName(it), PillTone.Accent) }
@@ -603,9 +728,10 @@ private fun ModelRow(o: ModelOption, roles: List<ModelRole>, first: Boolean, onC
 @Composable
 private fun UseAsSheet(ui: ModelSetupUi, p: Provider, model: String, onUse: (ModelRole) -> Unit, onVision: (Boolean) -> Unit, onDismiss: () -> Unit) {
     val c = MikaTheme.colors
+    val displayLabel = ui.options(p).firstOrNull { it.id == model }?.let { displayModelName(p, it) } ?: model
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = c.surface, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp).testTag("use-as")) {
-            Text(model, Modifier.padding(horizontal = 16.dp), style = ModelIdStyle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(displayLabel, Modifier.padding(horizontal = 16.dp), style = ModelIdStyle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(ModelsCopy.useAsSubtitle(ModelsCopy.providerName(p)), Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp), style = MikaType.Caption, color = c.ink3)
             ModelRole.entries.forEachIndexed { i, role ->
                 val on = ui.picked(role, p.id, model)
@@ -750,18 +876,21 @@ object ModelsCopy {
         SignInKind.ChatGpt -> tr(R.string.signin_row_chatgpt)
         SignInKind.Xai -> tr(R.string.signin_row_xai)
         SignInKind.OpenRouter -> tr(R.string.signin_row_openrouter)
+        SignInKind.Antigravity -> tr(R.string.signin_row_antigravity)
     }
 
     fun signInTitle(kind: SignInKind) = when (kind) {
         SignInKind.ChatGpt -> CHATGPT_TITLE
         SignInKind.Xai -> tr(R.string.signin_xai_title)
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_title)
+        SignInKind.Antigravity -> tr(R.string.signin_antigravity_title)
     }
 
     fun signInBody(kind: SignInKind) = when (kind) {
         SignInKind.ChatGpt -> CHATGPT_BODY
         SignInKind.Xai -> tr(R.string.signin_xai_body)
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_body)
+        SignInKind.Antigravity -> tr(R.string.signin_antigravity_body)
     }
 
     /** 登录前要先说清的风险(黄底);没有为 null。 */
@@ -772,28 +901,33 @@ object ModelsCopy {
         SignInKind.ChatGpt -> null
         SignInKind.Xai -> tr(R.string.signin_stored_note)
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_note)
+        SignInKind.Antigravity -> tr(R.string.signin_antigravity_note)
     }
 
     fun signInStart(kind: SignInKind) = when (kind) {
         SignInKind.ChatGpt -> CHATGPT_CONTINUE
         SignInKind.Xai -> tr(R.string.signin_continue)
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_authorize)
+        SignInKind.Antigravity -> tr(R.string.signin_antigravity_start)
     }
 
     fun signInWaiting(kind: SignInKind) = when (kind) {
         SignInKind.ChatGpt -> CHATGPT_WAITING
         SignInKind.Xai -> tr(R.string.signin_xai_starting)
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_waiting)
+        SignInKind.Antigravity -> tr(R.string.signin_antigravity_waiting)
     }
 
-    fun accountManage(kind: SignInKind) = when (kind) {
+    fun accountManage(kind: SignInKind): String? = when (kind) {
         SignInKind.OpenRouter -> tr(R.string.signin_openrouter_manage)
+        SignInKind.Antigravity -> null
         else -> tr(R.string.account_manage_xai)
     }
 
     /** 账号登录详情下面的说明:在用什么、退出后怎样。 */
     fun accountNote(kind: SignInKind, signedIn: Boolean) = when (kind) {
         SignInKind.OpenRouter -> tr(if (signedIn) R.string.signin_openrouter_signed_in_note else R.string.signin_openrouter_signed_out_note)
+        SignInKind.Antigravity -> tr(if (signedIn) R.string.account_signed_in_note_antigravity else R.string.account_signed_out_note_antigravity)
         else -> tr(if (signedIn) R.string.account_signed_in_note_xai else R.string.account_signed_out_note)
     }
 
@@ -854,11 +988,11 @@ object ModelsCopy {
 
     /** 用途卡上写什么:选了模型写模型名和服务商;「用主模型」写主模型是谁;「不用」写只靠文字读屏。 */
     fun roleLine(ui: ModelSetupUi, role: ModelRole): RoleLine {
-        fun modelLine(cfg: ProviderConfig) = RoleLine(cfg.model, ui.providerOf(cfg)?.let(::providerName) ?: cfg.name, isModel = true)
+        fun modelLine(cfg: ProviderConfig) = RoleLine(displayModelName(ui, cfg), ui.providerOf(cfg)?.let(::providerName) ?: cfg.name, isModel = true)
         val main = ui.configFor(ModelRole.Main)
         return when (val choice = ui.roles[role]) {
             null -> RoleLine(UNSET, if (ui.providers.isEmpty()) MAIN_ADD_FIRST else MAIN_PICK, unset = true)
-            RoleChoice.SameAsMain -> RoleLine(SAME_AS_MAIN, main?.model ?: MAIN_NOT_PICKED)
+            RoleChoice.SameAsMain -> RoleLine(SAME_AS_MAIN, main?.let { displayModelName(ui, it) } ?: MAIN_NOT_PICKED)
             RoleChoice.Off -> RoleLine(OFF, OFF_NOTE)
             is RoleChoice.Model -> ui.configs.firstOrNull { it.id == choice.configId }?.let(::modelLine)
                 ?: RoleLine(UNSET, MAIN_PICK, unset = true)
@@ -895,9 +1029,11 @@ object ModelsCopy {
         ProviderConfig.Kind.OpenAiCompat -> tr(R.string.models_openai_compat)
         ProviderConfig.Kind.Anthropic -> "Anthropic"
         ProviderConfig.Kind.Gemini -> "Gemini"
+        ProviderConfig.Kind.Vertex -> "Vertex AI"
         ProviderConfig.Kind.OpenAiResponses -> "OpenAI Responses"
         ProviderConfig.Kind.ChatGpt -> "ChatGPT"
         ProviderConfig.Kind.Xai -> "xAI Responses"
+        ProviderConfig.Kind.Antigravity -> "Antigravity"
     }
 
     fun shortUrl(url: String) = url.removePrefix("https://").removePrefix("http://")
@@ -913,4 +1049,20 @@ object ModelsCopy {
     fun providerLine(p: Provider, state: ListState?, roles: List<ModelRole>): String =
         if (state is ListState.Failed) LIST_FAILED
         else listOfNotNull(CONNECTED, modelCount(p), roles.takeIf { it.isNotEmpty() }?.let { tr(R.string.models_used_by, roleNames(it)) }).joinToString(" · ")
+}
+
+internal fun displayModelName(p: Provider, o: ModelOption): String =
+    if (p.kind == ProviderConfig.Kind.Antigravity) {
+        o.displayName.ifBlank { ModelCatalog.CURATED_ANTIGRAVITY_MODELS.firstOrNull { it.id == o.id }?.displayName.orEmpty() }
+            .ifBlank { o.id }
+    } else {
+        o.id
+    }
+
+internal fun displayModelName(ui: ModelSetupUi, cfg: ProviderConfig): String {
+    if (cfg.kind != ProviderConfig.Kind.Antigravity) return cfg.model
+    val p = ui.providerOf(cfg)
+    val fromProvider = p?.let { ui.options(it).firstOrNull { o -> o.id == cfg.model }?.displayName }.orEmpty()
+    val curated = ModelCatalog.CURATED_ANTIGRAVITY_MODELS.firstOrNull { it.id == cfg.model }?.displayName.orEmpty()
+    return fromProvider.ifBlank { curated }.ifBlank { cfg.model }
 }

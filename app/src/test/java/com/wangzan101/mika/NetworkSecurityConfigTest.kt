@@ -8,8 +8,7 @@ import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
- * 网络安全配置的守护:企业内网自建服务靠这两条声明直连(明文 http + 用户安装的 CA),
- * 删掉任何一条都会退化成「只信系统证书的加密端点」,#361 的场景重新连不上。
+ * 网络安全配置的守护:允许明文 http 供本机与局域网模型服务使用,同时仅信任系统根证书。
  */
 class NetworkSecurityConfigTest {
 
@@ -28,14 +27,11 @@ class NetworkSecurityConfigTest {
         assertEquals("true", baseConfig().getAttribute("cleartextTrafficPermitted"))
     }
 
-    /**
-     * 公司内部 CA 签发的自建端点(GPUStack/vLLM 一类)全靠用户 CA 这条:显式声明锚点后系统默认
-     * 不再接受用户证书,普通用户没有 root 装不进系统信任区。装 CA 需用户在系统设置里主动操作。
-     */
+    /** 仅信任系统根证书,不信任用户安装的 CA。 */
     @Test
-    fun trustAnchorsIncludeUserInstalledCertificates() {
+    fun trustAnchorsOnlyIncludeSystemCertificates() {
         val anchors = baseConfig().getElementsByTagName("certificates")
         val sources = (0 until anchors.length).map { (anchors.item(it) as Element).getAttribute("src") }
-        assertEquals(setOf("system", "user"), sources.toSet())
+        assertEquals(setOf("system"), sources.toSet())
     }
 }

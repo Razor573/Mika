@@ -193,4 +193,32 @@
     <string name="models_daily_token_budget">服务商每日 Token 预算</string>
     <string name="models_daily_token_budget_sub">按本地日历日统计这家所有模型和用途的已报告输入与输出 Token。达到预算后不再发起下一次请求；在途请求可能超量，未报告用量按 0 计。本地日期变更后自动恢复。</string>
     <string name="models_daily_token_budget_save_failed">预算保存失败，原设置未变。</string>
+
+    <!-- Vertex AI 与 Antigravity -->
+    <string name="model_example_vertex">如 gemini-4-argon</string>
+    <string name="vertex_sa_label">服务账号 JSON</string>
+    <string name="vertex_sa_file">服务账号文件</string>
+    <string name="vertex_import_json">选择 .json 文件</string>
+    <string name="vertex_sa_loaded">已导入 · 更换文件</string>
+    <string name="vertex_sa_hint">粘贴服务账号 JSON 或导入 .json 密钥文件</string>
+    <string name="vertex_sa_read_failed">无法读取该 JSON 文件。</string>
+    <string name="vertex_sa_invalid">服务账号 JSON 无效。请包含 type=&quot;service_account&quot;、client_email 与 PKCS#8 private_key。</string>
+    <string name="vertex_sa_summary">服务账号：%1$s</string>
+    <string name="vertex_project_id">项目 ID</string>
+    <string name="vertex_project_hint">如 my-gcp-project</string>
+    <string name="vertex_project_required">请填写 GCP 项目 ID。</string>
+    <string name="vertex_project_invalid">GCP 项目 ID 格式无效。</string>
+    <string name="vertex_location">区域</string>
+    <string name="vertex_location_invalid">区域需为 global 或小写地区名（如 us-central1）。</string>
+    <string name="vertex_project_location">项目与区域</string>
+    <string name="vertex_replace_sa">更换服务账号 JSON</string>
+    <string name="vertex_edit_settings">修改项目与区域</string>
+    <string name="signin_row_antigravity">登录 Google 账号使用 Antigravity Gemini 模型</string>
+    <string name="signin_antigravity_title">使用 Google 账号登录 (Antigravity)</string>
+    <string name="signin_antigravity_body">将在浏览器打开 Google 登录以授权 Antigravity Gemini 模型，并获取 Cloud Code Assist 项目 ID。请求直接发往 Google。</string>
+    <string name="signin_antigravity_note">令牌与项目 ID 仅加密保存在本机，绝不写入日志。</string>
+    <string name="signin_antigravity_start">使用 Google 账号继续</string>
+    <string name="signin_antigravity_waiting">请在浏览器中完成 Google 登录，然后回到 Mika。</string>
+    <string name="account_signed_in_note_antigravity">正在使用 Google (Antigravity) 账号。刷新令牌与项目 ID 仅加密保存在本机。</string>
+    <string name="account_signed_out_note_antigravity">已退出本机登录。模型选择已保留，重新登录即可继续使用。</string>
 </resources>

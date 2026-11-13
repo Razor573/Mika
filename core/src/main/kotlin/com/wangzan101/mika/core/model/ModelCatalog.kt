@@ -1,18 +1,25 @@
 package com.wangzan101.mika.core.model
 
 import com.wangzan101.mika.core.net.ProxyFailure
+import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * 服务商列出的一个模型。能力字段为 null 表示接口没给,由调用方沿用自己的初值,这里不猜。
@@ -196,6 +203,194 @@ class ModelCatalog(private val http: OkHttpClient) {
         ModelListResult.Ok(all.distinctBy { it.id })
     }
 
+    suspend fun vertex(
+        token: BearerToken,
+        location: String = VertexEndpoints.DEFAULT_LOCATION,
+        projectId: String? = null,
+        headers: Map<String, String> = emptyMap(),
+        baseUrl: String? = null,
+    ): ModelListResult = run {
+        val cleanLocation = try {
+            VertexEndpoints.normalizeLocation(location)
+        } catch (_: IllegalArgumentException) {
+            return@run badUrl()
+        }
+        val cleanProject = try {
+            projectId?.trim()?.takeIf { it.isNotEmpty() }?.let(VertexEndpoints::validateProjectId)
+        } catch (_: IllegalArgumentException) {
+            return@run badUrl()
+        }
+        val overrideBase = if (baseUrl != null) {
+            try {
+                VertexEndpoints.requireHttpsOrLoopbackUrl(baseUrl, "Vertex baseUrl").toString().trimEnd('/')
+            } catch (_: IllegalArgumentException) {
+                return@run badUrl()
+            }
+        } else {
+            null
+        }
+
+        var fresh = false
+        var bearer = try {
+            token.get(false)?.takeIf { it.isNotBlank() } ?: return@run ModelListResult.Failed(ListFailure.Auth)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ModelError) {
+            return@run failureFor(e)
+        }
+
+        val byId = linkedMapOf<String, ListedModel>().apply {
+            CURATED_VERTEX_MODELS.forEach { put(it.id, it) }
+        }
+        var pageToken: String? = null
+        repeat(MAX_PAGES) {
+            val url = if (overrideBase == null) {
+                VertexEndpoints.publisherModelsUrl(cleanLocation, pageSize = 100, pageToken = pageToken)
+            } else {
+                "$overrideBase/v1/publishers/google/models".toHttpUrlOrNull()!!.newBuilder()
+                    .addQueryParameter("pageSize", "100")
+                    .apply { if (pageToken != null) addQueryParameter("pageToken", pageToken) }
+                    .build()
+                    .toString()
+            }
+            val (root, updatedAuth) = fetchVertexPage(url, token, bearer, fresh, cleanProject, headers).getOrElse { err ->
+                val failed = err.asFailure()
+                if (failed.reason == ListFailure.NotSupported) {
+                    return@run ModelListResult.Ok(byId.values.toList())
+                }
+                return@run failed
+            }
+            bearer = updatedAuth.first
+            fresh = updatedAuth.second
+
+            val data = (root["publisherModels"] ?: root["models"]) as? JsonArray ?: JsonArray(emptyList())
+            data.mapNotNull(::vertexModel).forEach { model ->
+                val existing = byId[model.id]
+                byId[model.id] = if (existing == null) {
+                    model
+                } else {
+                    existing.copy(
+                        displayName = model.displayName.ifBlank { existing.displayName },
+                        contextTokens = model.contextTokens ?: existing.contextTokens,
+                        reasoning = model.reasoning ?: existing.reasoning,
+                    )
+                }
+            }
+            pageToken = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
+            if (pageToken == null) return@run ModelListResult.Ok(byId.values.toList())
+        }
+        ModelListResult.Ok(byId.values.toList())
+    }
+
+    suspend fun antigravity(
+        token: BearerToken,
+        projectId: String,
+        headers: Map<String, String> = emptyMap(),
+        baseUrl: String? = null,
+    ): ModelListResult = antigravity(token, { projectId }, headers, baseUrl)
+
+    suspend fun antigravity(
+        token: BearerToken,
+        projectId: () -> String = { "" },
+        headers: Map<String, String> = emptyMap(),
+        baseUrl: String? = null,
+    ): ModelListResult = run {
+        val endpointBase = if (baseUrl != null) {
+            try {
+                VertexEndpoints.requireHttpsOrLoopbackUrl(baseUrl, "Antigravity baseUrl").toString().trimEnd('/')
+            } catch (_: IllegalArgumentException) {
+                return@run badUrl()
+            }
+        } else {
+            AntigravityAuth.DAILY_ENDPOINT
+        }
+
+        var bearer = try {
+            token.get(false)?.takeIf { it.isNotBlank() } ?: return@run ModelListResult.Failed(ListFailure.Auth)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ModelError) {
+            return@run failureFor(e)
+        }
+
+        val byId = linkedMapOf<String, ListedModel>().apply {
+            CURATED_ANTIGRAVITY_MODELS.forEach { put(it.id, it) }
+        }
+        val cleanProject = projectId().trim()
+        val bodyJson = buildJsonObject {
+            if (cleanProject.isNotEmpty()) put("project", cleanProject)
+        }.toString()
+        val url = "$endpointBase/v1internal:fetchAvailableModels"
+
+        val root = fetchAntigravityModels(url, bodyJson, token, bearer, headers).getOrElse { err ->
+            val failed = err.asFailure()
+            if (failed.reason == ListFailure.NotSupported) {
+                return@run ModelListResult.Ok(byId.values.toList())
+            }
+            return@run failed
+        }
+
+        AntigravityAuth.parseAvailableModels(root).forEach { model ->
+            val existing = byId[model.id]
+            byId[model.id] = if (existing == null) {
+                model
+            } else {
+                existing.copy(
+                    displayName = model.displayName.ifBlank { existing.displayName },
+                    contextTokens = model.contextTokens ?: existing.contextTokens,
+                    reasoning = model.reasoning ?: existing.reasoning,
+                )
+            }
+        }
+        ModelListResult.Ok(byId.values.toList())
+    }
+
+    private suspend fun fetchAntigravityModels(
+        url: String,
+        bodyJson: String,
+        token: BearerToken,
+        initialBearer: String,
+        headers: Map<String, String>,
+    ): Result<JsonObject> {
+        var bearer = initialBearer
+        var fresh = false
+        while (true) {
+            val req = AntigravityAuth.applyHeaders(
+                Request.Builder()
+                    .url(url)
+                    .withHeaders(headers)
+                    .removeHeader("x-goog-api-key"),
+                bearer,
+            )
+                .header("Accept", "application/json")
+                .post(bodyJson.toRequestBody(JSON_TYPE))
+                .build()
+            val raw = try {
+                HttpSupport.execute(http, req)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return Result.failure(Failure(ModelListResult.Failed(ListFailure.of(e))))
+            }
+            if (raw.status == 401 && token.refreshable && !fresh) {
+                fresh = true
+                bearer = try {
+                    token.get(true)?.takeIf { it.isNotBlank() }
+                        ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.Auth)))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ModelError) {
+                    return Result.failure(Failure(failureFor(e)))
+                }
+                continue
+            }
+            if (raw.status !in 200..299) return Result.failure(Failure(failureFor(raw.status, raw.body)))
+            val root = try { json.parseToJsonElement(raw.body).jsonObject } catch (_: Exception) { null }
+                ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.BadResponse)))
+            return Result.success(root)
+        }
+    }
+
     private fun openAiModel(o: JsonObject): ListedModel? {
         // 用 ChatGPT 账号列模型时(`models` 表)名字在 `slug`、显示名在 `display_name`,只留 `visibility` 为 list 的
         o.str("visibility")?.let { if (it != "list") return null }
@@ -298,6 +493,86 @@ class ModelCatalog(private val http: OkHttpClient) {
         )
     }
 
+    private fun vertexModel(el: JsonElement): ListedModel? {
+        val rawId = when (el) {
+            is JsonPrimitive -> el.takeIf { it.isString }?.contentOrNull
+            is JsonObject -> {
+                val methods = (el["supportedGenerationMethods"] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                if (methods != null && "generateContent" !in methods) return null
+                el.str("name") ?: el.str("model") ?: el.str("id")
+            }
+            else -> null
+        } ?: return null
+        val id = VertexEndpoints.cleanModelId(rawId)
+        if (id.isEmpty()) return null
+        val lower = id.lowercase()
+        if ("gemini" !in lower) return null
+        if (VERTEX_EXCLUDED_TOKENS.any { it in lower }) return null
+        val obj = el as? JsonObject
+        return ListedModel(
+            id = id,
+            displayName = obj?.str("displayName").orEmpty(),
+            contextTokens = obj?.int("inputTokenLimit"),
+            reasoning = obj?.bool("thinking"),
+        )
+    }
+
+    private suspend fun fetchVertexPage(
+        url: String,
+        token: BearerToken,
+        initialBearer: String,
+        initialFresh: Boolean,
+        projectId: String?,
+        headers: Map<String, String>,
+    ): Result<Pair<JsonObject, Pair<String, Boolean>>> {
+        var bearer = initialBearer
+        var fresh = initialFresh
+        while (true) {
+            val req = Request.Builder()
+                .url(url)
+                .get()
+                .withHeaders(headers)
+                .removeHeader("x-goog-api-key")
+                .header("Authorization", "Bearer $bearer")
+                .apply { if (projectId != null) header("x-goog-user-project", projectId) }
+                .build()
+            val raw = try {
+                HttpSupport.execute(http, req)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return Result.failure(Failure(ModelListResult.Failed(ListFailure.of(e))))
+            }
+            if (raw.status == 401 && token.refreshable && !fresh) {
+                fresh = true
+                bearer = try {
+                    token.get(true)?.takeIf { it.isNotBlank() }
+                        ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.Auth)))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ModelError) {
+                    return Result.failure(Failure(failureFor(e)))
+                }
+                continue
+            }
+            if (raw.status !in 200..299) return Result.failure(Failure(failureFor(raw.status, raw.body)))
+            val root = try { json.parseToJsonElement(raw.body).jsonObject } catch (_: Exception) { null }
+                ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.BadResponse)))
+            return Result.success(root to (bearer to fresh))
+        }
+    }
+
+    private fun failureFor(e: ModelError): ModelListResult.Failed = when (e) {
+        is ModelError.Auth, is ModelError.SignInExpired -> ModelListResult.Failed(ListFailure.Auth)
+        is ModelError.QuotaExceeded -> ModelListResult.Failed(ListFailure.Quota)
+        is ModelError.RateLimited -> ModelListResult.Failed(ListFailure.RateLimited)
+        is ModelError.Server -> ModelListResult.Failed(ListFailure.Server, "HTTP ${e.status}")
+        is ModelError.BadResponse -> ModelListResult.Failed(ListFailure.BadResponse)
+        is ModelError.Proxy -> ModelListResult.Failed(ListFailure.of(e))
+        else -> ModelListResult.Failed(ListFailure.Network)
+    }
+
     private class Failure(val result: ModelListResult.Failed) : Exception(result.message)
 
     private fun Throwable.asFailure(): ModelListResult.Failed =
@@ -337,16 +612,29 @@ class ModelCatalog(private val http: OkHttpClient) {
     private fun JsonObject.bool(k: String): Boolean? = (this[k] as? JsonPrimitive)?.booleanOrNull
     private fun JsonObject.int(k: String): Int? = (this[k] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }
 
-    private companion object {
+    companion object {
         /** 翻页上限:防止服务端一直给下一页。 */
-        const val MAX_PAGES = 10
+        private const val MAX_PAGES = 10
         /** Anthropic 的 `capabilities.effort` 按字母排;界面按由浅到深排,不认得的排最后。 */
-        val EFFORT_ORDER = listOf("low", "medium", "high", "xhigh", "max")
+        private val EFFORT_ORDER = listOf("low", "medium", "high", "xhigh", "max")
         /** 列表里 `type` 一项的写法:是对话模型的,和不是的(向量、重排、画图、语音、审核)。 */
-        val CHAT_TYPES = setOf("chat", "llm", "language", "text", "vlm", "code")
-        val NON_CHAT_TYPES = setOf(
+        private val CHAT_TYPES = setOf("chat", "llm", "language", "text", "vlm", "code")
+        private val NON_CHAT_TYPES = setOf(
             "embedding", "embeddings", "rerank", "reranker", "image", "images", "video", "audio", "tts", "stt", "asr",
             "speech", "transcription", "moderation",
+        )
+        private val VERTEX_EXCLUDED_TOKENS = listOf("embedding", "imagen", "veo", "tts", "live", "audio", "transcribe")
+        private val CURATED_VERTEX_MODELS = listOf(
+            ListedModel(id = "gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen"),
+            ListedModel(id = "gemini-4-argon", displayName = "Gemini 4 Argon"),
+            ListedModel(id = "gemini-4-carbon", displayName = "Gemini 4 Carbon"),
+            ListedModel(id = "gemini-3.8-flash", displayName = "Gemini 3.8 Flash"),
+        )
+        private val JSON_TYPE = "application/json".toMediaType()
+        val CURATED_ANTIGRAVITY_MODELS = listOf(
+            ListedModel(id = "gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen"),
+            ListedModel(id = "gemini-4-argon", displayName = "Gemini 4 Argon"),
+            ListedModel(id = "gemini-3.8-flash", displayName = "Gemini 3.8 Flash"),
         )
     }
 }

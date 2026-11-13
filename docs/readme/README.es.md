@@ -1,4 +1,4 @@
-<!-- translated-from: README.md @ dbbd6498b424 -->
+<!-- translated-from: README.md @ bc456d6095ad -->
 <div align="center">
 
 <img src="../media/logo.png" alt="Mika" width="88" />
@@ -78,6 +78,8 @@ Trabaja en una pantalla en segundo plano que no ves, así que puedes seguir usan
 | 🆓 **Código abierto y gratis** | Apache-2.0, todo el código es público |
 
 ## Empieza en tres pasos
+
+> **Nota sobre el fork:** Si ya tienes instalado un APK oficial de Mika, desinstálalo antes de instalar un APK compilado desde este fork, ya que las claves de firma son distintas.
 
 1. **Instálalo**: descarga el APK desde [Releases](https://github.com/wangzan101/Mika/releases/latest).
 2. **Conecta un modelo**: en Ajustes › Modelo, elige un proveedor e introduce una clave de API, o simplemente inicia sesión con una cuenta ([modelos e inicio de sesión](../models.en.md)).

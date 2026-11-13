@@ -60,12 +60,16 @@ data class AccountSession(
     val issuer: String = "",
     /** 登录时从发现文档读到、核对过主机的令牌地址;刷新用它。旧版本存下的没有,刷新时按签发方推。 */
     val tokenUrl: String = "",
+    val projectId: String = "",
 ) {
     val signedIn: Boolean get() = accessToken.isNotEmpty() || refreshToken.isNotEmpty()
 
-    fun signedOut() = copy(accessToken = "", refreshToken = "", expiresAtMs = 0)
+    fun signedOut() = copy(accessToken = "", refreshToken = "", expiresAtMs = 0, projectId = "")
 
     fun toJson(): String = JSON.encodeToString(serializer(), this)
+
+    override fun toString(): String =
+        "AccountSession(provider=$provider, accountId=$accountId, label=$label, projectId=$projectId, signedIn=$signedIn)"
 
     companion object {
         private val JSON = Json { ignoreUnknownKeys = true }

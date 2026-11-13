@@ -6,6 +6,7 @@ import com.wangzan101.mika.core.model.ListFailure
 import com.wangzan101.mika.core.net.ProxyFailure
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ListedModel
+import com.wangzan101.mika.core.model.ModelCatalog
 import com.wangzan101.mika.core.model.ModelEndpoint
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelListResult
@@ -37,8 +38,11 @@ import com.wangzan101.mika.core.chatgpt.SignInFailure
 import com.wangzan101.mika.core.chatgpt.signInWithChatGpt
 import com.wangzan101.mika.core.oauth.AccountSignInException
 import com.wangzan101.mika.core.oauth.AccountSignInFailure
+import com.wangzan101.mika.core.oauth.AntigravityAuth
 import com.wangzan101.mika.core.oauth.DeviceChallenge
 import com.wangzan101.mika.core.oauth.OpenRouterAuth
+import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.oauth.VertexServiceAccount
 import com.wangzan101.mika.core.oauth.XaiAuth
 import com.wangzan101.mika.core.oauth.signInWithOpenRouter
 import kotlinx.coroutines.CancellationException
@@ -71,7 +75,9 @@ data class ChatGptAccount(val email: String, val signedIn: Boolean)
  * ChatGPT 的登录另有一套(见 [ModelSetupViewModel.signInWithChatGpt]),界面上和它们并排。
  */
 enum class AccountProvider(val target: SignInTarget) {
-    Xai(SignInTarget.Xai), OpenRouter(SignInTarget.OpenRouter);
+    Xai(SignInTarget.Xai),
+    OpenRouter(SignInTarget.OpenRouter),
+    Antigravity(SignInTarget.Antigravity);
 
     companion object {
         fun of(target: SignInTarget): AccountProvider? = entries.firstOrNull { it.target == target }
@@ -120,6 +126,11 @@ data class AddForm(
     val noList: Boolean = false,
     val name: String = "",
     val manual: Boolean = false,
+    val projectId: String = "",
+    val location: String = VertexEndpoints.DEFAULT_LOCATION,
+    val saSummary: String = "",
+    val saError: String? = null,
+    private val autoProjectId: String = "",
 ) {
     /** 显示「模型名」一栏:没列出模型,或用户要手填。 */
     val showModel: Boolean get() = noList || manual
@@ -128,6 +139,8 @@ data class AddForm(
     val typedModel: String get() = if (showModel) model.trim() else ""
 
     val isCustom: Boolean get() = preset == ProviderPresets.custom.label
+
+    val isVertex: Boolean get() = kind == ProviderConfig.Kind.Vertex
 
     /** 跑在用户自己机器上的服务(见 [ProviderPreset.selfHosted]):地址预填了本机的默认端口,要能改成那台机器的。 */
     val isSelfHosted: Boolean get() = presetFor(preset).selfHosted
@@ -142,6 +155,23 @@ data class AddForm(
             else -> null
         }
 
+    /** Vertex AI 校验 GCP project id（非密钥字段）。 */
+    val projectProblem: String?
+        get() = when {
+            !isVertex -> null
+            projectId.isBlank() -> tr(R.string.vertex_project_required)
+            runCatching { VertexEndpoints.validateProjectId(projectId) }.isFailure -> tr(R.string.vertex_project_invalid)
+            else -> null
+        }
+
+    /** Vertex AI 校验 GCP location（留空默认 global）。 */
+    val locationProblem: String?
+        get() = if (isVertex && location.isNotBlank() && runCatching { VertexEndpoints.normalizeLocation(location) }.isFailure) {
+            tr(R.string.vertex_location_invalid)
+        } else {
+            null
+        }
+
     /** 明文 http 又不在本机、局域网的地址:提醒一句,不拦着(见 [LocalHosts])。 */
     val unencryptedWarning: String?
         get() = if (urlProblem == null && LocalHosts.unencryptedRemote(baseUrl)) tr(R.string.model_url_unencrypted) else null
@@ -150,10 +180,15 @@ data class AddForm(
     val keyRequired: Boolean get() = !isSelfHosted && !(isCustom && kind == ProviderConfig.Kind.OpenAiCompat)
 
     val canTest: Boolean get() =
-        urlProblem == null && (!keyRequired || apiKey.isNotBlank()) && test != ListState.Running && (!noList || model.isNotBlank())
+        urlProblem == null && (!keyRequired || apiKey.isNotBlank()) &&
+            (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
+            test != ListState.Running && (!noList || model.isNotBlank())
 
     /** 不测试也能存:地址格式对、该有 Key 的有 Key。和 [canTest] 不同,不看测试进度,也不要求填模型名。 */
-    val canSaveUntested: Boolean get() = urlProblem == null && (!keyRequired || apiKey.isNotBlank()) && test != ListState.Running
+    val canSaveUntested: Boolean get() =
+        urlProblem == null && (!keyRequired || apiKey.isNotBlank()) &&
+            (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
+            test != ListState.Running
 
     /** 自定义填的是某家服务商的官方地址(主机名对得上,见 [ProviderPresets.forHost]):建议改用那个预设。 */
     val suggestedPreset: ProviderPreset? get() = if (isCustom && urlProblem == null) ProviderPresets.forHost(baseUrl) else null
@@ -209,10 +244,14 @@ data class ModelSetupUi(
     val chatGptRevokeUnconfirmed: Boolean = false,
     /** 已连接的 Grok 订阅;没有这家时为 null。 */
     val xaiAccount: SubscriptionAccount? = null,
+    /** 已连接的 Antigravity 账号;没有这家时为 null。 */
+    val antigravityAccount: SubscriptionAccount? = null,
     /** 用 OpenRouter 账号授权连上的那一家;没有时为 null。 */
     val openRouterAccount: SubscriptionAccount? = null,
-    /** xAI、OpenRouter 的登录进度。 */
+    /** xAI、OpenRouter、Antigravity 的登录进度。 */
     val accountSignIn: AccountSignInUi = AccountSignInUi(),
+    /** Vertex AI 服务账号的非密钥摘要（仅 client_email / project_id，按服务商 id 索引）。 */
+    val vertexSummaries: Map<String, String> = emptyMap(),
     /** 刚用账号登录成功的服务商 id:界面打开它的详情页(看账号和模型、设主模型),打开后清掉。 */
     val signedInProvider: String? = null,
     /**
@@ -282,10 +321,11 @@ data class ModelSetupUi(
      */
     fun untested(p: Provider): Boolean = p.savedUntested
 
-    /** 用账号登录的这一家已经退出了登录(ChatGPT、xAI 的令牌清了,OpenRouter 的 Key 删了)。 */
+    /** 用账号登录的这一家已经退出了登录(ChatGPT、xAI、Antigravity 的令牌清了,OpenRouter 的 Key 删了)。 */
     fun signedOut(p: Provider): Boolean = when {
         p.kind == ProviderConfig.Kind.ChatGpt -> chatGptAccount?.signedIn != true
         p.kind == ProviderConfig.Kind.Xai -> xaiAccount?.signedIn != true
+        p.kind == ProviderConfig.Kind.Antigravity -> antigravityAccount?.signedIn != true
         p.signIn != null -> p.id !in keyed
         else -> false
     }
@@ -394,7 +434,24 @@ class ModelSetupViewModel(
             xaiAccount = store.xaiProvider()?.let { p ->
                 store.accountSession(p.id).let { SubscriptionAccount(it?.label.orEmpty(), it?.signedIn == true) }
             },
+            antigravityAccount = store.antigravityProvider()?.let { p ->
+                store.accountSession(p.id).let { SubscriptionAccount(it?.label.orEmpty(), it?.signedIn == true) }
+            },
             openRouterAccount = store.openRouterAccount()?.let { p -> SubscriptionAccount("", store.hasKey(p.id)) },
+            vertexSummaries = providers.asSequence()
+                .filter { it.kind == ProviderConfig.Kind.Vertex }
+                .mapNotNull { p ->
+                    store.vertexAccountSummary(p.id)?.let { (email, proj) ->
+                        val summary = when {
+                            email.isNotBlank() && proj.isNotBlank() -> "$email ($proj)"
+                            email.isNotBlank() -> email
+                            proj.isNotBlank() -> proj
+                            else -> return@mapNotNull null
+                        }
+                        p.id to summary
+                    }
+                }
+                .toMap(),
             speech = speech?.choice?.value ?: SpeechChoice.Auto,
             systemSpeech = systemSpeech(),
         )
@@ -414,15 +471,66 @@ class ModelSetupViewModel(
     fun selectPreset(label: String) {
         val p = AddForm.presetFor(label)
         if (p.label == _state.value.form.preset) return
-        val key = _state.value.form.apiKey
-        edit { AddForm.of(p).copy(apiKey = key) }
+        val prev = _state.value.form
+        val keepKey = prev.isVertex == (p.kind == ProviderConfig.Kind.Vertex)
+        edit {
+            val next = AddForm.of(p)
+            if (keepKey) next.copy(apiKey = prev.apiKey) else next
+        }
     }
 
     // 换了接口类型或地址,上次「没列出模型」就不作数了,要重新列
-    fun setKind(kind: ProviderConfig.Kind) = edit { it.copy(kind = kind, noList = false) }
+    fun setKind(kind: ProviderConfig.Kind) = edit {
+        if (it.isVertex != (kind == ProviderConfig.Kind.Vertex)) {
+            it.copy(
+                kind = kind, noList = false, apiKey = "", projectId = "",
+                location = VertexEndpoints.DEFAULT_LOCATION, saSummary = "", saError = null, autoProjectId = "",
+            )
+        } else {
+            it.copy(kind = kind, noList = false)
+        }
+    }
     fun setBaseUrl(url: String) = edit { it.copy(baseUrl = url, noList = false) }
     fun setApiKey(key: String) = edit { it.copy(apiKey = key) }
     fun setModel(model: String) = edit { it.copy(model = model) }
+
+    /**
+     * Vertex AI 导入或粘贴服务账号 JSON：解析非密钥摘要并尽量预填 `project_id`，绝不把私钥放入错误信息。
+     */
+    fun setServiceAccountJson(raw: String) = edit {
+        if (raw.isBlank()) {
+            val resetProject = if (it.projectId == it.autoProjectId) "" else it.projectId
+            return@edit it.copy(apiKey = raw, saSummary = "", saError = null, projectId = resetProject, autoProjectId = "")
+        }
+        val parsed = runCatching { VertexServiceAccount.parse(raw) }.getOrNull()
+        if (parsed == null) {
+            it.copy(apiKey = raw, saSummary = "", saError = tr(R.string.vertex_sa_invalid))
+        } else {
+            val keepTypedProject = it.projectId.isNotBlank() && it.projectId != it.autoProjectId
+            val nextProject = if (keepTypedProject) it.projectId else parsed.projectId
+            it.copy(
+                apiKey = raw,
+                saSummary = parsed.displaySummary,
+                saError = null,
+                projectId = nextProject,
+                autoProjectId = parsed.projectId,
+            )
+        }
+    }
+
+    fun setProjectId(projectId: String) = edit { it.copy(projectId = projectId) }
+
+    fun setLocation(location: String) = edit { it.copy(location = location) }
+
+    fun updateVertexSettings(providerId: String, projectId: String, location: String): Boolean {
+        val updated = store.updateVertexSettings(providerId, projectId, location)
+        if (updated) {
+            sync()
+            refreshJobs.remove(providerId)?.cancel()
+            refresh(providerId)
+        }
+        return updated
+    }
 
     /** 「手动填写模型名」:打开时显示模型名一栏;收起时清掉填的(没列出模型时那一栏一直在)。 */
     fun setManual(on: Boolean) = edit { it.copy(manual = on, model = if (on || it.noList) it.model else "") }
@@ -463,7 +571,9 @@ class ModelSetupViewModel(
             val key = f.apiKey.trim()
             val baseUrl = f.baseUrl.trim()
             val typed = f.typedModel
-            val models = when (val r = withContext(io) { store.listModels(f.kind, baseUrl, key.ifEmpty { null }, f.sessionHeader) }) {
+            val projectId = if (f.isVertex) f.projectId.trim() else ""
+            val location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else ""
+            val models = when (val r = withContext(io) { store.listModels(f.kind, baseUrl, key.ifEmpty { null }, f.sessionHeader, projectId, location) }) {
                 is ModelListResult.Ok -> r.models
                 is ModelListResult.Failed -> {
                     if (r.reason != ListFailure.NotSupported && typed.isEmpty()) {
@@ -481,10 +591,11 @@ class ModelSetupViewModel(
             if (typed.isNotEmpty()) {
                 val listed = models.firstOrNull { it.id == typed }
                 val base = (ProviderPresets.forBaseUrl(baseUrl) ?: ProviderPresets.custom).capabilities
-                val caps = listed?.let { ModelOptions.merge(listOf(it), base).firstOrNull()?.capabilities } ?: base
+                val caps = listed?.let { ModelOptions.merge(listOf(it), base, f.kind).firstOrNull()?.capabilities } ?: base
                 val outcome = probeModel(
                     f.kind, baseUrl, key.ifEmpty { null }, f.sessionHeader, typed, listed?.endpoint, caps, f.exampleKind,
                     listMissing = models.isEmpty() && f.isCustom,
+                    projectId = projectId, location = location,
                 )
                 if (outcome is ProbeOutcome.Failed) {
                     _state.update { it.copy(form = it.form.copy(test = ListState.Failed(outcome.message))) }
@@ -495,6 +606,7 @@ class ModelSetupViewModel(
                     val p = store.connect(
                         f.providerName, f.kind, baseUrl, key, models, f.sessionHeader, setOf(typed),
                         typed = if (listed == null) setOf(typed) else emptySet(),
+                        projectId = projectId, location = location,
                     )
                     if (!noTools && store.roles.value.main == null) use(ModelRole.Main, p, typed, ModelOptions.ofProvider(p, store.list()))
                 }
@@ -511,7 +623,10 @@ class ModelSetupViewModel(
             }
             val noneUsable = probed.main == null && probed.rejected.isNotEmpty()
             val saved = withContext(io) {
-                val p = store.connect(f.providerName, f.kind, baseUrl, key, models, f.sessionHeader, setOfNotNull(probed.main))
+                val p = store.connect(
+                    f.providerName, f.kind, baseUrl, key, models, f.sessionHeader, setOfNotNull(probed.main),
+                    projectId = projectId, location = location,
+                )
                 if (!noneUsable && store.roles.value.main == null) {
                     val options = ModelOptions.ofProvider(p, store.list())
                     (probed.main ?: ModelOptions.defaultMain(options, f.familyTokens) ?: options.firstOrNull()?.id)
@@ -548,9 +663,12 @@ class ModelSetupViewModel(
             val key = f.apiKey.trim()
             val baseUrl = f.baseUrl.trim()
             val typed = f.typedModel
+            val projectId = if (f.isVertex) f.projectId.trim() else ""
+            val location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else ""
             val saved = withContext(io) {
                 store.connect(
-                    f.providerName, f.kind, baseUrl, key.ifEmpty { null }, emptyList(), f.sessionHeader, untested = true,
+                    f.providerName, f.kind, baseUrl, key.ifEmpty { null }, emptyList(), f.sessionHeader,
+                    untested = true, projectId = projectId, location = location,
                 ).also { p -> if (typed.isNotEmpty()) store.markTyped(p.id, typed) }
             }
             _state.update {
@@ -604,12 +722,12 @@ class ModelSetupViewModel(
      * 试的全都是这样,才当成整家不可用,不存。只碰到过 5xx 时 Key 还没证明是对的,这之后再碰到别的原因失败也照旧不存。
      */
     private suspend fun probe(f: AddForm, baseUrl: String, key: String?, models: List<ListedModel>): ListProbe {
-        // 用 ChatGPT 登录不走这张表单(登录本身就核对过了);表单只给 Key 的接口类型,这里再挡一次
-        if (f.kind == ProviderConfig.Kind.ChatGpt || f.kind == ProviderConfig.Kind.Xai) {
+        // 用账号登录不走这张表单(登录本身就核对过了);表单只给 Key / 服务账号接口类型,这里再挡一次
+        if (f.kind == ProviderConfig.Kind.ChatGpt || f.kind == ProviderConfig.Kind.Xai || f.kind == ProviderConfig.Kind.Antigravity) {
             return ListProbe.Done(null, emptyList())
         }
         val base = (ProviderPresets.forBaseUrl(baseUrl) ?: ProviderPresets.custom).capabilities
-        val options = ModelOptions.merge(models, base)
+        val options = ModelOptions.merge(models, base, f.kind)
         // 接口写明了模型能走哪几种协议时,只试这个接口类型能走的:用不匹配的协议调用必然失败(如聚合服务把只支持
         // /messages 的模型排在前面,而当前接口是 OpenAI 兼容),三个都撞墙就是白白干等 PROBE_TIMEOUT_MS × 3 分钟。
         // 列表给某个模型单独指定了接口的(见 [ListedModel.endpoint]),调用按它自己说的协议走、与这里选的接口类型
@@ -628,10 +746,15 @@ class ModelSetupViewModel(
         val order = usable.ifEmpty { listOfNotNull(options.firstOrNull()?.id) }
         val rejected = mutableListOf<Rejected>()
         var firstServerError: String? = null
+        val projectId = if (f.isVertex) f.projectId.trim() else ""
+        val location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else ""
         for ((i, model) in order.take(PROBE_CANDIDATES).withIndex()) {
             val caps = options.first { it.id == model }.capabilities
             val endpoint = models.firstOrNull { it.id == model }?.endpoint
-            when (val o = probeModel(f.kind, baseUrl, key, f.sessionHeader, model, endpoint, caps, f.exampleKind, listMissing = false)) {
+            when (val o = probeModel(
+                f.kind, baseUrl, key, f.sessionHeader, model, endpoint, caps, f.exampleKind,
+                listMissing = false, projectId = projectId, location = location,
+            )) {
                 ProbeOutcome.Passed -> return ListProbe.Done(model, rejected)
                 is ProbeOutcome.NoToolCall -> rejected += Rejected(model, tr(R.string.model_reason_no_tools), notAvailable = false)
                 is ProbeOutcome.Failed -> when {
@@ -688,9 +811,14 @@ class ModelSetupViewModel(
     private suspend fun probeModel(
         kind: ProviderConfig.Kind, baseUrl: String, key: String?, sessionHeader: String?,
         model: String, endpoint: ModelEndpoint?, caps: Capabilities, exampleKind: ProviderConfig.Kind, listMissing: Boolean,
+        projectId: String = "", location: String = "",
     ): ProbeOutcome {
         val result = try {
-            withContext(io) { withTimeout(PROBE_TIMEOUT_MS) { store.probe(kind, baseUrl, key, sessionHeader, model, endpoint, caps) } }
+            withContext(io) {
+                withTimeout(PROBE_TIMEOUT_MS) {
+                    store.probe(kind, baseUrl, key, sessionHeader, model, endpoint, caps, projectId = projectId, location = location)
+                }
+            }
         } catch (e: TimeoutCancellationException) {
             return ProbeOutcome.Failed(tr(R.string.model_probe_timeout, model, (PROBE_TIMEOUT_MS / 1000).toInt()))
         }
@@ -729,7 +857,10 @@ class ModelSetupViewModel(
         val caps = options.firstOrNull { it.id == model }?.capabilities ?: ModelOptions.baseOf(p)
         val endpoint = p.models?.firstOrNull { it.id == model }?.endpoint
         val example = ProviderPresets.forHost(p.baseUrl)?.kind ?: p.kind
-        return probeModel(p.kind, p.baseUrl, store.providerKey(p.id), p.sessionHeader, model, endpoint, caps, example, listMissing = false)
+        return probeModel(
+            p.kind, p.baseUrl, store.providerKey(p.id), p.sessionHeader, model, endpoint, caps, example,
+            listMissing = false, projectId = p.projectId, location = p.location,
+        )
     }
 
     // ---------- 用 ChatGPT 登录 ----------
@@ -809,6 +940,7 @@ class ModelSetupViewModel(
                     val (p, listed) = when (provider) {
                         AccountProvider.Xai -> connectXai(browser)
                         AccountProvider.OpenRouter -> connectOpenRouter(browser)
+                        AccountProvider.Antigravity -> connectAntigravity(browser)
                     }
                     if (store.roles.value.main == null) {
                         val options = ModelOptions.ofProvider(p, store.list())
@@ -849,6 +981,27 @@ class ModelSetupViewModel(
         return store.connectOpenRouter(key, (listed as? ModelListResult.Ok)?.models ?: existing?.models.orEmpty()) to listed
     }
 
+    /** Antigravity Google 登录，列出模型并归一到裸族 ID，存成(或更新)那一家。 */
+    private suspend fun connectAntigravity(browser: SignInBrowser): Pair<Provider, ModelListResult> {
+        val session = store.antigravityAuth.signIn(
+            openBrowser = browser::open,
+            page = { e -> browser.page(e?.let(ModelsCopy::accountFailure)) },
+        )
+        val existing = store.antigravityProvider()
+        val baseUrl = session.apiBase.ifBlank { AntigravityAuth.API_BASE }
+        val listed = store.listModels(
+            ProviderConfig.Kind.Antigravity,
+            baseUrl,
+            session.accessToken,
+            projectId = session.projectId,
+        )
+        val models = when (listed) {
+            is ModelListResult.Ok -> ModelOptions.collapseAntigravity(listed.models).ifEmpty { ModelCatalog.CURATED_ANTIGRAVITY_MODELS }
+            is ModelListResult.Failed -> existing?.models?.takeIf { it.isNotEmpty() } ?: ModelCatalog.CURATED_ANTIGRAVITY_MODELS
+        }
+        return store.connectAccount(session, models) to listed
+    }
+
     /** 把短码留在界面上。打开浏览器由登录流程自己做,这里不再开一次。 */
     private fun publishDevice(c: DeviceChallenge) {
         val openUrl = c.verificationUriComplete ?: c.verificationUri
@@ -867,12 +1020,16 @@ class ModelSetupViewModel(
     /** 详情页打开过了。 */
     fun signedInShown() = _state.update { it.copy(signedInProvider = null) }
 
-    /** 退出账号登录:xAI 清本机令牌,OpenRouter 删本机的 Key;服务商和用途留着,再登录接着用。 */
+    /** 退出账号登录:xAI、Antigravity 清本机令牌,OpenRouter 删本机的 Key;服务商和用途留着,再登录接着用。 */
     fun signOutAccount(providerId: String) {
         scope.launch {
             withContext(io) {
                 val p = store.provider(providerId) ?: return@withContext
-                if (p.kind == ProviderConfig.Kind.Xai) store.signOutAccount(providerId) else store.signOutOpenRouter(providerId)
+                if (p.kind == ProviderConfig.Kind.Xai || p.kind == ProviderConfig.Kind.Antigravity) {
+                    store.signOutAccount(providerId)
+                } else {
+                    store.signOutOpenRouter(providerId)
+                }
             }
             _state.update { snapshot(it.copy(listing = it.listing - providerId)) }
         }
@@ -1091,16 +1248,30 @@ class ModelSetupViewModel(
     /** 退出了登录的列不了模型,等再登录。 */
     private fun listable(p: Provider) = if (p.signIn != null) store.hasKey(p.id) else when (p.kind) {
         ProviderConfig.Kind.ChatGpt -> store.chatGptSession(p.id)?.signedIn == true
-        ProviderConfig.Kind.Xai -> store.accountSession(p.id)?.signedIn == true
+        ProviderConfig.Kind.Xai, ProviderConfig.Kind.Antigravity -> store.accountSession(p.id)?.signedIn == true
         else -> true
     }
 
-    /** 换 Key,然后用新 Key 重新列一次模型。 */
+    /** 换 Key（Vertex 会先校验 Service Account JSON）,然后用新凭证重新列一次模型。 */
     fun changeKey(providerId: String, apiKey: String) {
         val k = apiKey.trim()
         if (k.isEmpty()) return
         scope.launch {
-            withContext(io) { store.updateProviderKey(providerId, k) }
+            val updated = withContext(io) {
+                val p = store.provider(providerId) ?: return@withContext false
+                if (p.kind == ProviderConfig.Kind.Vertex) {
+                    val sa = runCatching { VertexServiceAccount.parse(k) }.getOrNull() ?: return@withContext false
+                    store.updateProviderKey(providerId, k)
+                    if (p.projectId.isBlank() && sa.projectId.isNotBlank()) {
+                        store.updateVertexSettings(providerId, sa.projectId, p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION })
+                    }
+                } else {
+                    store.updateProviderKey(providerId, k)
+                }
+                true
+            }
+            if (!updated) return@launch
+            sync()
             refreshJobs.remove(providerId)?.cancel()
             refresh(providerId)
         }
@@ -1113,7 +1284,7 @@ class ModelSetupViewModel(
                 // ChatGPT 的先在服务端注销登录,再删
                 when (store.provider(providerId)?.kind) {
                     ProviderConfig.Kind.ChatGpt -> store.signOutChatGpt(providerId)
-                    ProviderConfig.Kind.Xai -> store.signOutAccount(providerId)
+                    ProviderConfig.Kind.Xai, ProviderConfig.Kind.Antigravity -> store.signOutAccount(providerId)
                     else -> Unit
                 }
                 // OpenRouter 授权来的 Key 随服务商一起删;OpenRouter 那边的 Key 要用户自己到 Keys 页面删
