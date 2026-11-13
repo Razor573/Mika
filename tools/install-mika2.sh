@@ -9,7 +9,7 @@
 # permanent fix; the app itself cannot set the Play record.
 #
 # Usage (macOS / Linux, phone connected, USB debugging on):
-#   ./scripts/install-mika2.sh path/to/mika2-release.apk
+#   ./tools/install-mika2.sh path/to/mika2-release.apk
 # The APK is the `mika2-release-apk` artifact from the Build APK workflow
 # run on GitHub (Razor573/Mika > Actions > Build APK > Artifacts). Install
 # the release APK, never the debug one.

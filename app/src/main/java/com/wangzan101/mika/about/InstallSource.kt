@@ -31,7 +31,7 @@ import android.os.Build
  *
  * The legitimate routes are therefore outside the app:
  * - `adb install -r -i com.android.vending <apk>` (see
- * `scripts/install-mika2.ps1` / `scripts/install-mika2.sh`) sets the
+ * `tools/install-mika2.ps1` / `tools/install-mika2.sh`) sets the
  * installing package to Play. It only sets the *installing* package: the
  * *initiating* package stays `com.android.shell` and `packageSource`
  * stays 1 (a real Play install has initiating `com.android.vending` and

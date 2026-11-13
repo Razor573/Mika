@@ -46,7 +46,7 @@
     <string name="about_update_working">Working…</string>
     <string name="about_update_install_hint">When downloaded, tap “Install update” and confirm in the system installer. You may first need to allow Mika to install unknown apps.</string>
     <!-- English-only for now: banking/installer warning, pending translation. Installing an update in the app replaces the installer of record, so a copy installed from Google Play loses that record; see InstallSource.kt. -->
-    <string name="about_update_play_installer_warning" translatable="false">This copy was installed from Google Play. Installing this update in the app will change the installer, and banking apps that check the install source (for example HSBC UK) may flag Mika again. To keep Google Play as the installer, install the update from a computer with scripts/install-mika2.ps1 (adb install -r -i com.android.vending).</string>
+    <string name="about_update_play_installer_warning" translatable="false">This copy was installed from Google Play. Installing this update in the app will change the installer, and banking apps that check the install source (for example HSBC UK) may flag Mika again. To keep Google Play as the installer, install the update from a computer with tools/install-mika2.ps1 (adb install -r -i com.android.vending).</string>
     <string name="about_update_error">Download or installation did not complete. Please try again later.</string>
     <string name="about_update_bad_file">The downloaded package is incomplete or does not match the release. It was deleted; please download again.</string>
     <string name="about_update_not_newer">The downloaded package is not newer than the installed Mika. It was deleted.</string>

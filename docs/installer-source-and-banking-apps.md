@@ -82,13 +82,13 @@ again, and HSBC will flag Mika again.
 Windows (PowerShell, phone connected, USB debugging on):
 
 ```powershell
-.\scripts\install-mika2.ps1 -ApkPath .\mika2-release.apk
+.\tools\install-mika2.ps1 -ApkPath .\mika2-release.apk
 ```
 
 macOS / Linux:
 
 ```bash
-./scripts/install-mika2.sh path/to/mika2-release.apk
+./tools/install-mika2.sh path/to/mika2-release.apk
 ```
 
 The APK is the `mika2-release-apk` artifact from the Build APK workflow
