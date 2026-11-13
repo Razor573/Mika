@@ -107,17 +107,21 @@ class GeminiModelTest {
         )
         model().complete("s", history, emptyList())
         val c = sentBody().arr("contents")
-        assertEquals(listOf("user", "model", "user"), c.map { it.jsonObject.str("role") })
+        // Vertex AI rejects a user content mixing a functionResponse with
+        // text, so the response and the following "next" text are separate
+        // user contents instead of sharing one.
+        assertEquals(listOf("user", "model", "user", "user"), c.map { it.jsonObject.str("role") })
         val mp = c[1].jsonObject.arr("parts")
         assertEquals(2, mp.size)
         val fc = mp[1].jsonObject.obj("functionCall")
         assertEquals("phone_tap", fc.str("name")); assertEquals("x", fc.obj("args").str("ref"))
         val up = c[2].jsonObject.arr("parts")
+        assertEquals(1, up.size)
         val fr = up[0].jsonObject.obj("functionResponse")
         assertEquals("phone_tap", fr.str("name"))
         assertEquals("done", fr.obj("response").str("content"))
         assertFalse(fr.obj("response").containsKey("is_error"))
-        assertEquals("next", up[1].jsonObject.str("text"))
+        assertEquals("next", c[3].jsonObject.arr("parts")[0].jsonObject.str("text"))
     }
 
     @Test fun errorToolResultFlagged() = runTest {

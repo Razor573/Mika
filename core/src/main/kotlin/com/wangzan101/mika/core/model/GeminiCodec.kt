@@ -88,13 +88,38 @@ internal object GeminiCodec {
     fun buildContents(messages: List<Message>, vision: Boolean): JsonArray {
         val nameById = HashMap<String, String>()
         messages.forEach { m -> m.parts.filterIsInstance<Part.ToolCall>().forEach { nameById[it.id] = it.name } }
+        // One entry per content. Consecutive entries with the same role merge
+        // only when they are the same kind: both functionResponse-only, or
+        // both text/image-only. Vertex AI generateContent rejects a user
+        // content that mixes a functionResponse with text or image parts
+        // (HTTP 400 "Requests ending with a model turn are not supported"),
+        // while the Gemini API and Antigravity's Code Assist endpoint
+        // tolerate it - which is why this only failed on Vertex, on the call
+        // right after a tool call. AgentLoop.appendRuntimeState appends a
+        // runtime-state text part to the last message, which after a tool
+        // call is the Tool message carrying the functionResponse, so without
+        // this split every post-tool step sent [functionResponse, text] in
+        // one content. A functionResponse therefore always ends its own
+        // content, and any following text goes in a separate user content.
         val merged = mutableListOf<Pair<String, MutableList<JsonObject>>>()
+        fun add(role: String, parts: List<JsonObject>) {
+            if (parts.isEmpty()) return
+            val responseOnly = parts.all { it.containsKey("functionResponse") }
+            val last = merged.lastOrNull()
+            val lastResponseOnly = last?.second?.all { it.containsKey("functionResponse") } == true
+            if (last != null && last.first == role && responseOnly == lastResponseOnly) last.second += parts
+            else merged += role to parts.toMutableList()
+        }
         for (m in messages) {
             if (m.role == Role.System) continue
             val role = if (m.role == Role.Assistant) "model" else "user"
-            val parts = if (role == "model") modelParts(m) else userParts(m, nameById, vision)
-            if (parts.isEmpty()) continue
-            if (merged.lastOrNull()?.first == role) merged.last().second += parts else merged += role to parts.toMutableList()
+            if (role == "model") {
+                add(role, modelParts(m))
+            } else {
+                val parts = userParts(m, nameById, vision)
+                add(role, parts.filter { it.containsKey("functionResponse") })
+                add(role, parts.filterNot { it.containsKey("functionResponse") })
+            }
         }
         while (merged.lastOrNull()?.first == "model") merged.removeAt(merged.lastIndex)
         return buildJsonArray {
