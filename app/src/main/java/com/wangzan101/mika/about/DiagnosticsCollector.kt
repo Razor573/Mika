@@ -114,9 +114,7 @@ object DiagnosticsCollector {
         "$summary; ${copies?.size ?: "?"} app copies"
     }.getOrNull()
 
-    private fun installer(context: Context): String? = runCatching {
-        context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
-    }.getOrNull()
+    private fun installer(context: Context): String? = InstallSource.installingPackageName(context)
 
     private fun language(context: Context): String {
         val shown = context.resources.configuration.locales.takeUnless { it.isEmpty }?.get(0)?.toLanguageTag() ?: "?"

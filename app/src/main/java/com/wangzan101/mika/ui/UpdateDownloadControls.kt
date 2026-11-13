@@ -95,7 +95,16 @@ internal fun UpdateDownloadControls(release: ReleaseInfo) {
         }
     }
 
+    // If this copy was installed from Google Play, installing an update
+    // in the app hands the APK to the system package installer, which then
+    // becomes the installer of record - and banking apps that check the
+    // install source (e.g. HSBC UK) may flag Mika again. Warn, so the user
+    // can install the update via scripts/install-mika2.ps1 instead. See
+    // InstallSource: the app itself cannot keep or claim the Play record.
+    val playInstalled = remember { com.wangzan101.mika.about.InstallSource.isPlayInstalled(context) }
+
     UpdateDownloadActions(state, busy, error,
+        playInstalled = playInstalled,
         onDownload = { run { withContext(Dispatchers.IO) { updater.download(release) } } },
         onCancel = {
             run {
@@ -118,6 +127,8 @@ internal fun UpdateDownloadActions(
     busy: Boolean,
     /** 上次操作没成时的说明;为空时显示安装提示。 */
     error: Int?,
+    /** This copy was installed from Google Play; kept as a defaulted parameter so existing callers still compile. */
+    playInstalled: Boolean = false,
     onDownload: () -> Unit,
     onInstall: () -> Unit,
     onCancel: () -> Unit,
@@ -141,4 +152,8 @@ internal fun UpdateDownloadActions(
     val note = error ?: if (state.phase == DownloadPhase.Failed) R.string.about_update_error else R.string.about_update_install_hint
     Text(stringResource(note),
         Modifier.padding(top = 8.dp), style = MikaType.Caption, color = MikaTheme.colors.ink3)
+    if (playInstalled && error == null) {
+        Text(stringResource(R.string.about_update_play_installer_warning),
+            Modifier.padding(top = 8.dp), style = MikaType.Caption, color = MikaTheme.colors.ink3)
+    }
 }

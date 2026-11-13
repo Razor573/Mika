@@ -18,7 +18,7 @@ android {
         applicationId = "com.wangzan101.mika2"
         minSdk = 29
         targetSdk = 35
-        versionCode = 44
+        versionCode = 45
         versionName = "0.1.41"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
