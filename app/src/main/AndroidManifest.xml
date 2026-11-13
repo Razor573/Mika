@@ -363,7 +363,7 @@
             android:enabled="false"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.wangzan101.mika.SCHEDULE" />
+                <action android:name="com.wangzan101.mika2.SCHEDULE" />
             </intent-filter>
         </receiver>
         <receiver android:name=".teach.TeachReceiver" android:exported="false" />

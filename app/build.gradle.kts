@@ -15,7 +15,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.wangzan101.mika"
+        applicationId = "com.wangzan101.mika2"
         minSdk = 30
         targetSdk = 35
         versionCode = 42

@@ -16,11 +16,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 /**
- * 外部脚本经广播(com.wangzan101.mika.SCHEDULE)建定时任务的入口。
+ * 外部脚本经广播(com.wangzan101.mika2.SCHEDULE)建定时任务的入口。
  * 广播是 fire-and-forget,没有返回值:拒绝原因写进 logcat,绝不静默排队。
  */
 object ExternalSchedule {
-    const val ACTION = "com.wangzan101.mika.SCHEDULE"
+    const val ACTION = "com.wangzan101.mika2.SCHEDULE"
 
     /** 每分钟最多接几条;超过直接拒绝,不排队。 */
     private const val LIMIT_PER_MINUTE = 5
