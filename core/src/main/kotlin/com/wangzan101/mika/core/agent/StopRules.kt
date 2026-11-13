@@ -42,6 +42,8 @@ internal object StopRules {
     fun modelFailed(e: Throwable): TaskState.Failed = when (e) {
         is ModelError.TaskBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
         is ModelError.DailyBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
+        is ModelError.ProactiveBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
+        is ModelError.RateLimited -> TaskState.Failed(userReason(e), FailKind.Model, FailureCode.ModelRateLimited)
         is ModelError -> TaskState.Failed(userReason(e), FailKind.Model)
         else -> TaskState.Failed("Model call error: ${e.message ?: e::class.simpleName}", FailKind.Model)
     }
@@ -67,6 +69,8 @@ internal fun userReason(e: ModelError): String = when (e) {
     is ModelError.TaskBudgetExceeded -> "Reached this task's budget limit of ${e.limit} tokens; the task is not finished."
     is ModelError.DailyBudgetExceeded ->
         "Provider \"${e.providerName}\" has reached today's budget limit of ${e.limit} tokens; the task is not finished. It will reset when the local calendar date changes."
+    // 主动能力的调用不在任务里发,正常不会走到这里;万一走到,只如实说明,不提示用户去改什么
+    is ModelError.ProactiveBudgetExceeded -> "Proactive capability has reached today's budget limit. It will reset when the local calendar date changes."
     is ModelError.ModelNotFound -> {
         // 404 不一定是模型名不对(地址不对,或网关、中转服务说的别的情况):有原话时照原话说,不断定模型不存在
         val check = if (e.model.isEmpty()) "Check Settings › Models to make sure the model name and Base URL are correct."

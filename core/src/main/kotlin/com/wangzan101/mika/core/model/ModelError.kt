@@ -9,6 +9,12 @@ sealed class ModelError(message: String, cause: Throwable? = null) : Exception(m
     class TaskBudgetExceeded(val limit: Long, val used: Long) : ModelError("Token budget for this task exceeded")
     /** 这家服务商今天在本地已报告的用量达到预算；[providerName] 只用于给用户说明是哪一家。 */
     class DailyBudgetExceeded(val providerName: String, val limit: Long, val used: Long) : ModelError("Daily token budget for this provider exceeded")
+    /**
+     * 主动能力今天(本地日历日,各服务商合计)的已报告用量达到它自己的预算;不发请求。
+     * [byCalls] 为真时到的是请求次数的上限,[limit]、[used] 是次数;否则是 Token。
+     * 只会出现在主动能力的后台调用里,调用方应安静停下,不当作用户任务的失败去提示。见 [com.wangzan101.mika.core.usage.ProactiveBudget]。
+     */
+    class ProactiveBudgetExceeded(val limit: Long, val used: Long, val byCalls: Boolean = false) : ModelError("Daily budget for proactive capability exceeded")
     class RateLimited(val retryAfterMs: Long?) : ModelError("Too many requests; please try again later")
     class ContextTooLong : ModelError("Conversation exceeds the model's context length")
     /**

@@ -22,22 +22,28 @@ internal object CallSummaryGenerator {
         model: ChatModel,
         transcript: List<CallTranscriptLine>,
         context: Context,
-    ): CallSummary? = generate(model, transcript, CallPolicy.resolveLanguage(context))
+        direction: CallDirection = CallDirection.INCOMING,
+        canSend: () -> Boolean = { true },
+    ): CallSummary? = generate(model, transcript, CallPolicy.resolveLanguage(context), direction, canSend)
 
     suspend fun generate(
         model: ChatModel,
         transcript: List<CallTranscriptLine>,
         language: AppLanguage = AppLanguage.English,
+        direction: CallDirection = CallDirection.INCOMING,
+        canSend: () -> Boolean = { true },
     ): CallSummary? {
+        val otherParty = if (direction == CallDirection.OUTGOING) "Callee" else "Caller"
         val input = transcript.asSequence().mapNotNull { line ->
             val text = line.text.trim().takeIf(String::isNotBlank) ?: return@mapNotNull null
-            "${if (line.role == "assistant") "Mika" else "Caller"}: $text"
+            "${if (line.role == "assistant") "Mika" else otherParty}: $text"
         }.joinToString("\n").takeLast(MAX_INPUT_CHARS)
         if (input.isBlank()) return null
         val message = Message(Role.User, listOf(Part.Text(input)), Author.User)
         val systemPrompt = prompt(language)
         val response = try {
             withTimeoutOrNull(TIMEOUT_MS) {
+                if (!canSend()) return@withTimeoutOrNull null
                 model.complete(systemPrompt, listOf(message), emptyList()).parts
                     .filterIsInstance<Part.Text>().joinToString("") { it.text }
             }

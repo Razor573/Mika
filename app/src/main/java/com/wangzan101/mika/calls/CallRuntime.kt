@@ -71,6 +71,11 @@ data class CallRuntimeState(
     val shellConnected: Boolean = false,
     val notificationsAvailable: Boolean = false,
     val audioReady: Boolean = false,
+    val serviceReady: Boolean = false,
+    val deviceReady: Boolean = false,
+    val manualReady: Boolean = false,
+    val dialReady: Boolean = false,
+    val autoAnswerReady: Boolean = false,
     val audioDetail: String? = null,
     val canAnswer: Boolean = false,
     val canHangUp: Boolean = false,
@@ -92,8 +97,10 @@ data class CallRuntimeState(
 @Suppress("DEPRECATION")
 class CallRuntime(private val app: MikaApp) {
     val settings = CallSettings.create(app)
+    val voiceProfiles = CallVoiceProfileStore.create(app)
     val instructions = CallInstructionStore.create(app)
     private val access = CallTelecomAccess(app)
+    private val realtimeProvider: CallRealtimeProvider = VolcRealtimeProvider()
     private val telecom get() = app.getSystemService(TelecomManager::class.java)
     private val telephony get() = app.getSystemService(TelephonyManager::class.java)
     private val notifications = CallNotifications(app)
@@ -131,6 +138,17 @@ class CallRuntime(private val app: MikaApp) {
 
 
     init {
+        scope.launch { loadVoiceProfiles() }
+        scope.launch {
+            var previousRevision = -1L
+            voiceProfiles.revision.collect { current ->
+                if (previousRevision >= 0 && current > previousRevision) {
+                    lockedDial?.let { finishLockedDial(it, "实时语音配置已变更，未执行锁屏拨出") }
+                    cancelWork("实时语音配置已变更，电话由系统处理")
+                }
+                previousRevision = current
+            }
+        }
         scope.launch {
             app.phone.hub.shell.collect { current ->
                 if (shell != null && shell !== current) {
@@ -149,13 +167,14 @@ class CallRuntime(private val app: MikaApp) {
             var previousMode: CallAudioMode? = null
             var previousEnabled = false
             settings.state.collect { config ->
-                lockedDial?.takeIf { !config.enabled || !config.credentialsConfigured || config.audioMode != it.config.audioMode }
+                lockedDial?.takeIf { !config.enabled || !config.credentialsConfigured || config.audioMode != it.config.audioMode ||
+                    config.activeVoiceProfileId != it.config.activeVoiceProfileId }
                     ?.let { finishLockedDial(it, "Call settings changed; locked-screen dialling was not run") }
                 if (!hasAuthorizedIncomingStandby()) standbyService?.revokeIncomingAuthorization()
                 stopBackgroundStandbyIfUnneeded()
                 val active = work
                 if (active != null && (!config.enabled || !config.credentialsConfigured ||
-                        config.audioMode != active.config.audioMode ||
+                        config.audioMode != active.config.audioMode || config.activeVoiceProfileId != active.config.activeVoiceProfileId ||
                         (active.automatic && !active.answerSent && !CallPolicy.callerAllowed(config, active.track?.number)))) {
                     cancelWork("AI call settings changed; the system Phone app is handling the call")
                 }
@@ -431,7 +450,112 @@ class CallRuntime(private val app: MikaApp) {
         CallHistory.Result.WRITE_FAILED -> fail("Could not save call history changes; please try again")
     }
 
+    fun activeVoiceProfile(): CallVoiceProfile {
+        val config = settings.state.value
+        return voiceProfiles.get(config.activeVoiceProfileId) ?: CallVoiceProfile(
+            id = config.activeVoiceProfileId,
+            name = "默认实时语音",
+            speaker = config.speaker,
+            credentialsConfigured = config.credentialsConfigured,
+            connectionTested = config.credentialsConfigured,
+        )
+    }
+
+    private suspend fun loadVoiceProfiles() {
+        val migrated = withContext(Dispatchers.IO) {
+            try {
+                voiceProfiles.migrateLegacy(settings.state.value, settings::readLegacyCredentials)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                false
+            }
+        }
+        if (!migrated) return
+        val config = settings.state.value
+        val profile = voiceProfiles.get(config.activeVoiceProfileId)
+        val next = config.copy(
+            credentialsConfigured = profile?.credentialsConfigured == true,
+            audioVerified = profile != null && voiceProfiles.isAudioVerified(profile.id, config.audioMode),
+        )
+        if (next != config) runCatching { settings.save(next) }
+    }
+
+    suspend fun selectVoiceProfile(id: String): CallActionResult = onMain {
+        if (work != null || lockedDial != null) return@onMain fail("请先结束当前通话或锁屏拨出安排")
+        val profile = voiceProfiles.get(id) ?: return@onMain fail("实时语音配置不存在")
+        settings.save(settings.state.value.copy(
+            activeVoiceProfileId = profile.id,
+            speaker = profile.speaker,
+            credentialsConfigured = profile.credentialsConfigured,
+            audioVerified = voiceProfiles.isAudioVerified(profile.id, settings.state.value.audioMode),
+            autoAnswer = false,
+        ))
+        publish()
+        ok("已选择${profile.name}，自动接听需要重新开启")
+    }
+
+    suspend fun saveVoiceProfile(profile: CallVoiceProfile, credentials: VolcRealtimeCredentials? = null): CallActionResult = onMain {
+        if (work != null || lockedDial != null) return@onMain fail("请先结束当前通话或锁屏拨出安排")
+        val previous = voiceProfiles.get(profile.id)
+        val saved = withContext(Dispatchers.IO) { voiceProfiles.save(profile, credentials) }
+        if (settings.state.value.activeVoiceProfileId == saved.id) {
+            val serviceChanged = credentials != null || previous != null &&
+                (previous.protocol != saved.protocol || previous.endpoint != saved.endpoint || previous.model != saved.model)
+            settings.save(settings.state.value.copy(
+                speaker = saved.speaker,
+                credentialsConfigured = saved.credentialsConfigured,
+                audioVerified = voiceProfiles.isAudioVerified(saved.id, settings.state.value.audioMode),
+                autoAnswer = if (serviceChanged) false else settings.state.value.autoAnswer,
+            ))
+        }
+        publish()
+        ok("实时语音配置已保存")
+    }
+
+    suspend fun deleteVoiceProfile(id: String): CallActionResult = onMain {
+        if (work != null || lockedDial != null) return@onMain fail("请先结束当前通话或锁屏拨出安排")
+        withContext(Dispatchers.IO) { voiceProfiles.delete(id, settings.state.value.activeVoiceProfileId) }
+        publish()
+        ok("实时语音配置已删除")
+    }
+
+    suspend fun testVoiceProfile(id: String): CallActionResult = onMain {
+        if (work != null || lockedDial != null) return@onMain fail("请先结束当前通话或锁屏拨出安排")
+        val profile = voiceProfiles.get(id) ?: return@onMain fail("实时语音配置不存在")
+        val credentials = voiceProfiles.credentials(id) ?: return@onMain fail("请先配置实时语音凭据")
+        voiceProfiles.markConnectionTested(id, false)
+        publish()
+        try {
+            val session = realtimeProvider.connect(profile, credentials, "连接测试。不要生成语音。")
+            session.close()
+            voiceProfiles.markConnectionTested(id, true)
+            if (settings.state.value.activeVoiceProfileId == id) publish()
+            ok("实时语音服务连接成功；手机双向音频仍需通过测试电话验证")
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            val reason = when ((error as? VolcRealtimeException)?.kind) {
+                VolcRealtimeException.Kind.AUTH -> "凭据或服务权限无效"
+                VolcRealtimeException.Kind.RATE_LIMITED -> "实时语音服务请求过于频繁"
+                VolcRealtimeException.Kind.TIMEOUT -> "实时语音服务连接超时"
+                else -> "无法连接实时语音服务"
+            }
+            fail(reason)
+        }
+    }
+
+    suspend fun setAudioVerified(verified: Boolean): CallActionResult = onMain {
+        if (work != null || lockedDial != null) return@onMain fail("请先结束当前通话或锁屏拨出安排")
+        val config = settings.state.value
+        val id = config.activeVoiceProfileId
+        withContext(Dispatchers.IO) { voiceProfiles.markAudioVerified(id, config.audioMode, verified) }
+        settings.save(config.copy(audioVerified = verified, autoAnswer = verified && config.autoAnswer))
+        publish()
+        ok(if (verified) "已记录本机双向音频验证" else "已取消双向音频验证，自动接听已关闭")
+    }
+
     suspend fun refresh(): CallActionResult = onMain {
+        loadVoiceProfiles()
         accessLock.withLock { armed = withContext(Dispatchers.IO) { access.ready() } }
         readSims()
         if (settings.state.value.enabled && work == null && liveCalls().isEmpty()) probeAudio()
@@ -862,8 +986,10 @@ class CallRuntime(private val app: MikaApp) {
             prerequisite(ignoreWork = true)?.let { throw CallProblem(it) }
             validateTarget(w)
             val helper = shell ?: throw CallProblem("Built-in Mika assistant is not connected")
-            val credentials = withContext(Dispatchers.IO) { settings.credentials() }
-                ?: throw CallProblem("Volcengine credentials are unavailable; please save them again")
+            val profile = voiceProfiles.get(w.config.activeVoiceProfileId)
+                ?: throw CallProblem("Realtime voice profile is unavailable; please choose another")
+            val credentials = withContext(Dispatchers.IO) { voiceProfiles.credentials(profile.id) }
+                ?: throw CallProblem("Realtime voice credentials are unavailable; please save them again")
             if (!probeAudio()) throw CallProblem(audioDetail ?: "Two-way call audio is unavailable on this device")
             if (shell !== helper || w.config.audioMode != settings.state.value.audioMode) {
                 throw CallProblem("Call audio settings changed; please try again")
@@ -876,17 +1002,9 @@ class CallRuntime(private val app: MikaApp) {
             }
             validateTarget(w)
             val session = withTimeoutOrNull(5_000L) {
-                VolcRealtimeClient().connect(credentials, VolcRealtimeConfig(
-                    systemPrompt = CallPolicy.prompt(
-                        w.config.systemPrompt,
-                        w.direction,
-                        ownerRules,
-                        task = w.task,
-                        language = CallPolicy.resolveLanguage(app),
-                    ),
-                    speaker = w.config.speaker,
-                ))
-            } ?: throw CallProblem("Volcengine realtime voice connection timed out; AI did not handle the call")
+                realtimeProvider.connect(profile, credentials,
+                    CallPolicy.prompt(w.config.systemPrompt, w.direction, ownerRules, task = w.task, language = CallPolicy.resolveLanguage(app)))
+            } ?: throw CallProblem("Realtime voice connection timed out; AI did not handle the call")
             w.session = session
             if (!session.setMuted(true)) throw CallProblem("Volcengine realtime voice did not become ready")
             if (!withContext(Dispatchers.IO) { access.ready() }) {
@@ -1001,7 +1119,7 @@ class CallRuntime(private val app: MikaApp) {
                             summaryStatus = if (summaryRequested) SummaryStatus.PENDING else SummaryStatus.NOT_REQUESTED)
                         scope.launch {
                             records.append(record)
-                            if (answeredByAi) notifications.completed(w.id, record.number,
+                            if (answeredByAi) notifications.completed(w.id, record.number, w.direction,
                                 summaryPending = summaryRequested)
                             if (summaryRequested) summarizeCall(w.id, record.transcript)
                         }
@@ -1026,17 +1144,23 @@ class CallRuntime(private val app: MikaApp) {
     }
 
     suspend fun retrySummary(id: String): CallActionResult {
+        if (!settings.state.value.summaryEnabled) {
+            return CallActionResult(false, app.getString(R.string.calls_summary_cloud_consent))
+        }
         val record = records.state.value.firstOrNull { it.id == id }
             ?: return CallActionResult(false, "Could not find this call record")
         if (record.transcript.isEmpty()) return CallActionResult(false, "No transcript available to summarise")
-        records.setSummary(id, null, SummaryStatus.PENDING)
-        return if (summarizeCall(id, record.transcript)) CallActionResult(true, tr(R.string.calls_summary_updated))
+        return if (records.retryFailedSummary(id) { summarizeCall(id, it.transcript) }) CallActionResult(true, tr(R.string.calls_summary_updated))
         else CallActionResult(false, tr(R.string.calls_summary_failed))
     }
 
     private suspend fun summarizeCall(id: String, transcript: List<CallTranscriptLine>): Boolean {
+        val direction = records.state.value.firstOrNull { it.id == id }?.direction ?: CallDirection.INCOMING
         val summary = try {
-            app.providers.modelFor(ModelRole.Main)?.let { CallSummaryGenerator.generate(it, transcript, app) }
+            if (!settings.state.value.summaryEnabled) null
+            else app.providers.modelFor(ModelRole.Main)?.let {
+                CallSummaryGenerator.generate(it, transcript, app, direction) { settings.state.value.summaryEnabled }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -1044,12 +1168,12 @@ class CallRuntime(private val app: MikaApp) {
         }
         return if (summary == null) {
             records.setSummary(id, null, SummaryStatus.FAILED)
-            records.state.value.firstOrNull { it.id == id }?.let { notifications.updateCompletedSummary(id, it.number, null, failed = true) }
+            records.state.value.firstOrNull { it.id == id }?.let { notifications.updateCompletedSummary(id, it.number, it.direction, null, failed = true) }
             false
         } else {
             val saved = records.setSummary(id, summary, SummaryStatus.READY) == CallHistory.Result.SAVED
             if (saved) records.state.value.firstOrNull { it.id == id }?.let {
-                notifications.updateCompletedSummary(id, it.number, summary, failed = false)
+                notifications.updateCompletedSummary(id, it.number, it.direction, summary, failed = false)
             }
             saved
         }
@@ -1089,7 +1213,7 @@ class CallRuntime(private val app: MikaApp) {
         return ready
     }
 
-    private suspend fun runAudio(w: Work, helper: IMikaShell, session: VolcRealtimeSession) {
+    private suspend fun runAudio(w: Work, helper: IMikaShell, session: CallRealtimeSession) {
         val greeting = CallPolicy.spokenGreeting(w.config.greeting, hasTask = w.task != null)
         val notification = tr(
             if (greeting.isBlank()) R.string.calls_notification_connected_waiting else R.string.calls_notification_connected,
@@ -1118,8 +1242,8 @@ class CallRuntime(private val app: MikaApp) {
             val down = result.fd("downlink")
             val up = result.fd("uplink")
             if (down == null || up == null ||
-                result.getInt("captureRate") != VolcRealtimeClient.INPUT_SAMPLE_RATE ||
-                result.getInt("playRate") != VolcRealtimeClient.OUTPUT_SAMPLE_RATE) {
+                result.getInt("captureRate") != session.inputSampleRate ||
+                result.getInt("playRate") != session.outputSampleRate) {
                 runCatching { down?.close() }
                 runCatching { up?.close() }
                 throw CallProblem("Built-in assistant call audio format is incompatible")
@@ -1405,7 +1529,8 @@ class CallRuntime(private val app: MikaApp) {
         configuring -> "AI calls are being configured"
         !armed || !access.hasPhonePermissions() -> "Prepare AI calls first"
         shell == null -> "Built-in Mika assistant is not connected"
-        !settings.state.value.credentialsConfigured -> tr(R.string.calls_setup_credentials)
+        !activeVoiceProfile().credentialsConfigured -> "Please configure realtime voice credentials first"
+        !activeVoiceProfile().connectionTested -> "Please test the realtime voice connection first"
         !(notificationReady ?: notifications.ready()) -> "Allow AI call notifications so you can cancel or take over"
         !ignoreWork && work?.direction == CallDirection.OUTGOING -> "Another call is already being handled"
         else -> null
@@ -1477,6 +1602,13 @@ class CallRuntime(private val app: MikaApp) {
             calls.isNotEmpty() || active != null || unobservedManagedCall -> CallAutoAnswerStage.BUSY
             else -> CallAutoAnswerStage.STANDBY
         }
+        val profile = activeVoiceProfile()
+        val serviceReady = profile.credentialsConfigured && profile.connectionTested
+        val deviceReady = enabled && armed && shell != null && audioReady
+        val manualReady = deviceReady && serviceReady && prerequisite(ignoreWork = true, notificationReady = notificationReady) == null
+        val dialReady = manualReady && sims.isNotEmpty()
+        val autoAnswerReady = manualReady && config.audioVerified && CallStandbyService.notificationsAvailable(app) &&
+            (config.allowAllIncoming || config.allowedIncomingNumbers.isNotEmpty())
         mutable.value = CallRuntimeState(
             prepared = enabled && armed && !configuring,
             phase = current?.phase ?: when {
@@ -1500,6 +1632,11 @@ class CallRuntime(private val app: MikaApp) {
             shellConnected = shell != null,
             notificationsAvailable = notificationReady,
             audioReady = enabled && audioReady,
+            serviceReady = serviceReady,
+            deviceReady = deviceReady,
+            manualReady = manualReady,
+            dialReady = dialReady,
+            autoAnswerReady = autoAnswerReady,
             audioDetail = audioDetail,
             canAnswer = enabled && current?.phase == CallPhase.RINGING && current.direction == CallDirection.INCOMING &&
                 !current.suppressed && calls.size == 1 && (active == null || active.track === current && !active.answerSent && active.stopReason.value == null) &&
@@ -1655,7 +1792,7 @@ class CallRuntime(private val app: MikaApp) {
         var mediaStage = MediaStage.PREFLIGHT
         var mediaDiagnosticCount = 0
         val mediaCounters = CallMediaCounters()
-        var session: VolcRealtimeSession? = null
+        var session: CallRealtimeSession? = null
         val audioOwner = Binder()
         var audioHelper: IMikaShell? = null
         var muteLease: TelecomMuteLease? = null
