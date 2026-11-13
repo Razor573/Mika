@@ -48,8 +48,8 @@ class CallSummaryGeneratorTest {
 
     @Test fun outgoingSummaryNamesTheOtherPartyAsRecipient() = runBlocking {
         val model = FakeModel("{}")
-        CallSummaryGenerator.generate(model, listOf(CallTranscriptLine("caller", "你好")), CallDirection.OUTGOING)
-        assertTrue(model.received.startsWith("接听方:"))
+        CallSummaryGenerator.generate(model, listOf(CallTranscriptLine("caller", "Hello")), direction = CallDirection.OUTGOING)
+        assertTrue(model.received.startsWith("Callee:"))
     }
 
     @Test fun malformedReplyFailsWithoutInventingFields() = runBlocking {

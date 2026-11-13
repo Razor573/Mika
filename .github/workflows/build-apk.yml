@@ -53,7 +53,7 @@ jobs:
         run: python3 tools/i18n/translations.py check
 
       - name: Run unit tests
-        run: ./gradlew :core:test :app:testDebugUnitTest --no-daemon
+        run: ./gradlew :core:test :app:testDebugUnitTest --no-daemon --max-workers=2
 
       - name: Decode release keystore
         shell: bash
