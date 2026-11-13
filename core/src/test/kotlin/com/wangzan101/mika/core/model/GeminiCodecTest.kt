@@ -24,7 +24,7 @@ class GeminiCodecTest {
             listOf(
                 Message(Role.User, listOf(Part.Text("run tool")), Author.User),
                 Message(Role.Assistant, listOf(Part.ToolCall("c1", "read_file", """{"path":"a"}""")), Author.Mika),
-                Message(Role.Tool, listOf(Part.ToolResult("c1", "ok")), Author.User),
+                Message(Role.Tool, listOf(Part.ToolResult("c1", "ok", isError = false)), Author.User),
             ),
             vision = false,
         )
