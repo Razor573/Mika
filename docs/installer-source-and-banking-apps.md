@@ -29,7 +29,7 @@ too, and no installer change will fix that.
 
 ## What Android actually records
 
-`InstallSourceInfo` has three installer fields:
+`android.content.pm.InstallSourceInfo` has three installer fields:
 
 | Field | For a real Play install | For `adb install -i com.android.vending` |
 |---|---|---|
@@ -62,7 +62,7 @@ installer:
   apps holding `Manifest.permission.INSTALL_PACKAGES`. That is a
   system-signature permission; a normal app cannot obtain it. Mika
   holds only `REQUEST_INSTALL_PACKAGES`. Calling it with
-  `com.android.vending` from inside Mika throws a `SecurityException`.
+  `com.android.vending` from inside Mika throws a SecurityException.
 - Claiming to be Play when the app was not installed by Play would be
   spoofing the very check banks rely on. This repo does not do that.
 
