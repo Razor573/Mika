@@ -381,7 +381,7 @@ class ModelSetupViewModelTest {
             vm.selectPreset(ProviderPresets.custom.label); vm.setBaseUrl(url); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
             assertEquals("HTTP $status:只试第一个", listOf("vendor/a"), built.map { it.first })
             val failed = vm.state.value.form.test as ListState.Failed
-            assertTrue(failed.message, failed.message.contains("API Key 无效"))
+            assertTrue(failed.message, failed.message.contains("API key is invalid"))
             assertTrue(store.providers.value.isEmpty())
             assertNull(vm.state.value.pickToProbe)
         }
@@ -416,7 +416,7 @@ class ModelSetupViewModelTest {
         vm.selectPreset(ProviderPresets.custom.label); vm.setBaseUrl(url); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
         assertEquals(listOf("a-model", "b-model"), built.map { it.first })
         val failed = vm.state.value.form.test as ListState.Failed
-        assertTrue(failed.message, failed.message.contains("API Key 无效"))
+        assertTrue(failed.message, failed.message.contains("API key is invalid"))
         assertTrue(store.providers.value.isEmpty())
         assertTrue(store.list().isEmpty())
     }

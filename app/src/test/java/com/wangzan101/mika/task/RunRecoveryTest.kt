@@ -242,7 +242,7 @@ class RunRecoveryTest {
 
         val outcome = rig.conversations.turns("thread-a").single().outcome
         assertTrue(outcome, outcome.startsWith("任务中断了，可以重新发起。"))
-        assertTrue(outcome, "已确认进度:已加日程 · 12/36 · 第 12 条" in outcome)
+        assertTrue(outcome, "Confirmed progress: 已加日程 · 12/36 · 第 12 条" in outcome)
         assertEquals("任务中断了，可以重新发起。", rig.conversations.turns("thread-a").single().outcome.lineSequence().first())
         assertTrue((rig.channel.sent.single() as Delivery.Notice).text.length < 100)
     }
