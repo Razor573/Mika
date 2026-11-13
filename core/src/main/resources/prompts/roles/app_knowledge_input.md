@@ -1,13 +1,14 @@
+Target language:{{language}}
 App:{{app}}
-结局:{{outcome}}
-目标:{{goal}}
-回答或没办成的原因:{{said}}
+Outcome:{{outcome}}
+Goal:{{goal}}
+Answer or failure reason:{{said}}
 
-这个 App 现有的说明(空着就是没有):
+Existing app guide (empty if none):
 {{built_in}}
 
-已有的补充(空着就是没有):
+Existing supplement notes (empty if none):
 {{current}}
 
-这次在这个 App 里的动作:
+Actions in this app:
 {{actions}}

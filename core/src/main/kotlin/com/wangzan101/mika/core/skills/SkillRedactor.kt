@@ -8,11 +8,14 @@ import com.wangzan101.mika.core.memory.NumberText
  * 所有文字先统一写法(NFKC;中文数字、分隔开的数字并成一串阿拉伯数字),比较与替换按同一口径。
  */
 object SkillRedactor {
-    const val PLACEHOLDER = "<参数>"
+    const val PLACEHOLDER = "<param>"
 
     private val QUOTED = listOf("「", "」", "『", "』", "“", "”", "\"", "\"", "‘", "’", "《", "》")
         .chunked(2).map { (open, close) -> Regex(Regex.escape(open) + "([^" + Regex.escape(close) + "\\n]+)" + Regex.escape(close)) }
-    private val AMOUNT = Regex("[¥$]\\s*\\d+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?\\s*(?:元|块钱|块|万元|万|美元)")
+    private val AMOUNT = Regex(
+        "(?:[¥$£€]|(?:USD|GBP|EUR|RMB|CNY|JPY)\\b)\\s*\\d+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?\\s*(?:元|块钱|块|万元|万|美元|(?:pounds?|dollars?|euros?|pence|cents?|USD|GBP|EUR|RMB|CNY|JPY)\\b)",
+        RegexOption.IGNORE_CASE,
+    )
     private val DIGITS = Regex("\\d{2,}")
     private val ONLY_DIGITS = Regex("\\d+")
     private val PIECE_SPLIT = Regex("[\\s,.:;!?、。·]+")

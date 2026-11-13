@@ -75,7 +75,7 @@ class BundledKnowledgeTest {
     }
 
     @Test fun findSkillsMatchesTaskSkill() {
-        val hits = catalog.find("发消息")
+        val hits = catalog.find("send message")
         assertTrue(hits.size <= 10)
         assertTrue(hits.any { it.kind == "skill" && it.name == "messaging" })
         assertTrue(catalog.find("微信", kind = "app").all { it.kind == "app" })

@@ -8,26 +8,26 @@ import org.junit.Test
 class CallStopReasonTest {
     @Test fun closingMediaAfterTakeoverDoesNotReplaceHistoryOutcome() {
         val stop = CallStopReason()
-        val takeover = "已停止 AI，通话交给系统拨号器"
+        val takeover = "AI stopped; the system dialler is handling the call"
         assertTrue(stop.record(takeover))
-        assertFalse(stop.record("AI 音频连接失败，电话由系统处理"))
-        stop.refine("已达到 AI 通话时长上限", "达到时长上限，Android 已挂断")
+        assertFalse(stop.record("AI audio connection failed; the system Phone app is handling the call"))
+        stop.refine("Reached the AI call duration limit", "Duration limit reached; Android hung up")
         assertEquals(takeover, stop.value)
     }
 
     @Test fun aGenuineMediaFailureStaysRecordedWhenCallLaterEnds() {
         val stop = CallStopReason()
-        val mediaFailure = "AI 音频连接失败，电话由系统处理"
+        val mediaFailure = "AI audio connection failed; the system Phone app is handling the call"
         assertTrue(stop.record(mediaFailure))
-        assertFalse(stop.record("通话已结束"))
+        assertFalse(stop.record("Call ended"))
         assertEquals(mediaFailure, stop.value)
     }
 
     @Test fun timeoutMayBeRefinedWithItsOwnTelecomResult() {
         val stop = CallStopReason()
-        val timeout = "已达到 AI 通话时长上限"
+        val timeout = "Reached the AI call duration limit"
         assertTrue(stop.record(timeout))
-        stop.refine(timeout, "达到时长上限，Android 已挂断")
-        assertEquals("达到时长上限，Android 已挂断", stop.value)
+        stop.refine(timeout, "Duration limit reached; Android hung up")
+        assertEquals("Duration limit reached; Android hung up", stop.value)
     }
 }

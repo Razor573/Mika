@@ -1,4 +1,4 @@
-outcome: Succeeded(answer=咖啡豆 ¥79(页面上看到的), verified=false, note=未确认:79、屏上写的是 ¥89, sources=[AnswerSource(obsId=1, kind=read, place=com.x, title=null, step=1, mediaIds=[], source=phone)], unconfirmed=[79, 屏上写的是 ¥89], reviewed=true)
+outcome: Succeeded(answer=咖啡豆 ¥79(页面上看到的), verified=false, note=Unconfirmed: 79, 屏上写的是 ¥89, sources=[AnswerSource(obsId=1, kind=read, place=com.x, title=null, step=1, mediaIds=[], source=phone)], unconfirmed=[79, 屏上写的是 ¥89], reviewed=true)
 
 ## main #1
 system: len=17983 #a1c79085 | You are Mika, the user's personal assistant on their phone. Your job is to get ⏎…

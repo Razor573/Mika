@@ -68,11 +68,11 @@ class SkillDrafterTest {
         updates: String? = null,
     ): String {
         val sections = listOf(
-            "## 入口" to "用 `phone_launch_app` 打开微信。",
-            "## 步骤" to "1. 点搜索,用 `phone_type_text` 输入 老妈\n2. 输入 明天回家吃饭 后点发送$body",
-            "## 容易出错的地方" to "搜索结果里可能有同名群聊。",
-            "## 怎样算办成(核实证据)" to "聊天里出现刚发的消息,没有红色感叹号。",
-            "## 什么时候停下交给用户" to "需要登录时用 `hand_to_user`。",
+            "## Entry" to "用 `phone_launch_app` 打开微信。",
+            "## Steps" to "1. 点搜索,用 `phone_type_text` 输入 老妈\n2. 输入 明天回家吃饭 后点发送$body",
+            "## Common pitfalls" to "搜索结果里可能有同名群聊。",
+            "## Done criteria" to "聊天里出现刚发的消息,没有红色感叹号。",
+            "## When to pause for the user" to "需要登录时用 `hand_to_user`。",
         ).filter { it.first != drop }
         return "---\nname: $name\ndisplay: 发微信消息\ndescription: $description\napps: [$apps]\n" + updates?.let { "updates: $it\n" }.orEmpty() + "source: learned\nlearned_from: r1\n---\n" +
             sections.joinToString("\n") { "${it.first}\n${it.second}" }
@@ -81,9 +81,14 @@ class SkillDrafterTest {
     private fun text(s: String) = ModelReply(listOf(Part.Text(s)), StopReason.EndTurn, null)
     private val bundled = GuideCatalog.loadBundled()
 
-    private fun draft(reply: Any, existing: PersonalSkills = InMemoryPersonalSkills(), model: FakeModel = FakeModel(reply)): DraftResult =
+    private fun draft(
+        reply: Any,
+        existing: PersonalSkills = InMemoryPersonalSkills(),
+        model: FakeModel = FakeModel(reply),
+        targetLanguage: String = "English",
+    ): DraftResult =
         runBlocking {
-            SkillDrafter(model).draft(DraftInput("r1", goal, answer, emptyList(), runEvents(), tools, TOOLS), existing, GuideCatalog.withPersonal(bundled, existing))
+            SkillDrafter(model).draft(DraftInput("r1", goal, answer, emptyList(), runEvents(), tools, TOOLS), existing, GuideCatalog.withPersonal(bundled, existing), targetLanguage)
         }
 
     @Test fun eligibilityRules() {
@@ -111,7 +116,7 @@ class SkillDrafterTest {
         assertTrue(lines.all { it.where == "com.tencent.mm" })
         assertEquals(false, lines.last().changed)
         val text = ActionDigest.render(lines)
-        assertTrue(text.contains("<输入内容>"))
+        assertTrue(text.contains("<typed text>"))
         assertFalse(text.contains("明天回家吃饭"))
         assertFalse(text.contains("张三"))
         assertEquals(2, ActionDigest.of(runEvents(), TOOLS, maxLines = 2).size)
@@ -126,7 +131,7 @@ class SkillDrafterTest {
         val d = draft(text(md())) as DraftResult.Draft
         assertFalse(d.skill.markdown.contains("老妈"))
         assertFalse(d.skill.markdown.contains("明天回家吃饭"))
-        assertTrue(d.skill.markdown.contains("输入 <参数>\n2. 输入 <参数> 后点发送"))
+        assertTrue(d.skill.markdown.contains("输入 <param>\n2. 输入 <param> 后点发送"))
         assertEquals(SkillStatus.pending, d.skill.status)
         assertEquals("r1", d.skill.learnedFrom)
         assertNull(d.isUpdateOf)
@@ -140,10 +145,18 @@ class SkillDrafterTest {
         assertFalse(request.contains("晚上一起吃饭"))
         assertFalse(request.contains("老妈"))
         assertFalse(request.contains("明天回家吃饭"))
-        assertTrue(request.contains("目标:给『<参数>』发『<参数>』"))
-        assertTrue(request.contains("<输入内容>"))
-        assertTrue(request.contains("tap 「搜索」"))
+        assertTrue(request.contains("Target language: English"))
+        assertTrue(request.contains("Goal: 给『<param>』发『<param>』"))
+        assertTrue(request.contains("<typed text>"))
+        assertTrue(request.contains("tap \"搜索\""))
         assertTrue(model.offeredTools.single().isEmpty())
+    }
+
+    @Test fun targetLanguageIsForwardedToModelRequest() {
+        val model = FakeModel(text(md()))
+        draft(text(md()), model = model, targetLanguage = "Japanese")
+        val request = model.requests.single().flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(request.contains("Target language: Japanese"))
     }
 
     @Test fun numbersFromTheRunNeverInDraft() {
@@ -241,7 +254,7 @@ class SkillDrafterTest {
     }
 
     @Test fun missingSectionDropped() {
-        assertEquals(DraftResult.Dropped("missing_section"), draft(text(md(drop = "## 容易出错的地方"))))
+        assertEquals(DraftResult.Dropped("missing_section"), draft(text(md(drop = "## Common pitfalls"))))
     }
 
     @Test fun unknownToolNameDropped() {
@@ -320,9 +333,9 @@ class SkillDrafterTest {
         val lines = ActionDigest.of(runEvents(extra = web), TOOLS)
         val nav = lines.single { it.tool == "web_navigate" }
         assertEquals("shop.example.com", nav.target) // 只记站点,不记查询串
-        assertEquals("网站 shop.example.com", nav.where)
+        assertEquals("site shop.example.com", nav.where)
         val tapOnPage = lines.single { it.step == 12 }
-        assertEquals("网站 shop.example.com", tapOnPage.where)
+        assertEquals("site shop.example.com", tapOnPage.where)
         assertEquals("李四的订单 2024-001", tapOnPage.target)
         // 回到手机:又记在 App 下
         assertEquals("com.tencent.mm", lines.single { it.step == 13 }.where)

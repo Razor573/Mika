@@ -30,7 +30,7 @@ data class TaskScore(
 )
 
 object Scoring {
-    private val MODEL_ERROR = Regex("API Key|额度|限流|模型")
+    private val MODEL_ERROR = Regex("API Key|额度|限流|模型|quota|rate limit|model", RegexOption.IGNORE_CASE)
 
     /** 评测运行器自己出错时,失败原因以此开头。 */
     const val HARNESS_PREFIX = "评测器:"
@@ -42,7 +42,8 @@ object Scoring {
     const val GAVE_UP = "Agent 如实报告做不成"
 
     /** 核查一直不通过时失败原因的开头(见 AgentLoop)。 */
-    const val VERIFICATION_PREFIX = "核查未通过"
+    const val VERIFICATION_PREFIX = "Verification failed"
+    private const val LEGACY_VERIFICATION_PREFIX = "核查未通过"
 
     /**
      * 交给打分的失败原因:按失败来源 [FailKind] 生成,不用 Agent 自己说的话,
@@ -91,12 +92,12 @@ object Scoring {
         if (o.outcome == "unverified") return FailureClass.unverified_wrong
         val reason = o.failReason.orEmpty()
         // 未满足的标准原文可能带「模型」等字,先认核查
-        if (reason.startsWith(VERIFICATION_PREFIX)) return FailureClass.verifier_reject
+        if (reason.startsWith(VERIFICATION_PREFIX) || reason.startsWith(LEGACY_VERIFICATION_PREFIX)) return FailureClass.verifier_reject
         infraClass(o)?.let { return it }
         return when {
-            "已安全停止" in reason -> FailureClass.guard_stop
-            "步上限" in reason -> FailureClass.step_limit
-            "核查未通过" in reason -> FailureClass.verifier_reject
+            "Stopped safely" in reason || "已安全停止" in reason -> FailureClass.guard_stop
+            "-step limit" in reason || "步上限" in reason -> FailureClass.step_limit
+            VERIFICATION_PREFIX in reason || LEGACY_VERIFICATION_PREFIX in reason -> FailureClass.verifier_reject
             o.outcome == "takeover" && t.category != EvalCategory.Barrier -> FailureClass.barrier
             else -> FailureClass.unknown
         }

@@ -46,6 +46,7 @@ class SkillOutcomesTest {
         // 判下来办成、没跑核查:和核实过一样算好(试用据此转正式)
         assertEquals(SkillResult.verified, SkillOutcomes.resultOf(TaskState.Succeeded("ok", verified = false, reviewed = false), RunOutcome.Done))
         assertEquals(SkillResult.unreviewed, SkillOutcomes.resultOf(TaskState.Succeeded("ok", verified = false, reviewed = false), RunOutcome.Unknown))
+        assertEquals(SkillResult.verifier_rejected, SkillOutcomes.resultOf(TaskState.Failed("${SkillOutcomes.VERIFIER_REJECTED_MARK}: message not sent", FailKind.GaveUp), RunOutcome.Unknown))
         assertEquals(SkillResult.verifier_rejected, SkillOutcomes.resultOf(TaskState.Failed("核查未通过:没发出去", FailKind.GaveUp), RunOutcome.Unknown))
         // 回答如实说没办成、只办了一部分:算失败;没判成:不算灵也不算不灵
         assertEquals(SkillResult.failed, SkillOutcomes.resultOf(TaskState.Succeeded("找不到这个菜单", verified = true), RunOutcome.NotPossible))

@@ -13,15 +13,15 @@ class RetestHintTest {
 
     /** 模型失败、主模型没测试通过:原因后面另起一行指向那家的「重新测试」。 */
     @Test fun modelFailureWithUntestedMainPointsToRetest() {
-        val end = RetestHint.apply(TaskState.Failed("找不到该模型。", FailKind.Model), untested, hint)
-        assertEquals(TaskState.Failed("找不到该模型。\nretest Local", FailKind.Model), end)
+        val end = RetestHint.apply(TaskState.Failed("Model not found.", FailKind.Model), untested, hint)
+        assertEquals(TaskState.Failed("Model not found.\nretest Local", FailKind.Model), end)
     }
 
     /** 主模型测过了、或不是模型的问题:原样返回。 */
     @Test fun otherEndsStayAsTheyAre() {
-        val model = TaskState.Failed("找不到该模型。", FailKind.Model)
+        val model = TaskState.Failed("Model not found.", FailKind.Model)
         assertEquals(model, RetestHint.apply(model, null, hint))
-        val guard = TaskState.Failed("已安全停止。", FailKind.Guard)
+        val guard = TaskState.Failed("Stopped safely.", FailKind.Guard)
         assertEquals(guard, RetestHint.apply(guard, untested, hint))
         assertEquals(TaskState.Cancelled, RetestHint.apply(TaskState.Cancelled, untested, hint))
     }

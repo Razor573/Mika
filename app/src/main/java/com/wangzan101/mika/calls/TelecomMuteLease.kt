@@ -77,20 +77,20 @@ internal class TelecomMuteState(private val dedicatedMuteCallback: Boolean) {
 
 /** An allowlist maps known shell outcomes to fixed diagnostics; no raw shell string leaves here. */
 internal fun shellAudioStopDiagnostic(reason: String?): String? = when (val code = reason?.trim()) {
-    "Handset microphone was unmuted." -> "设备麦克风静音已解除，AI 已交还通话"
-    "Cellular audio mode ended.", "Cellular audio ended." -> "运营商通话音频模式已结束，电话由系统处理"
-    "Downlink consumer stopped draining audio." -> "运营商下行音频传输阻塞，电话由系统处理"
-    "Android silenced the cellular audio capture." -> "安卓停止向 AI 提供通话声音，已交还系统"
-    "Uplink playback stopped accepting audio." -> "运营商上行音频播放无进展，电话由系统处理"
-    "Helper released.", "Call audio owner died." -> "内置助手已释放电话音频，电话由系统处理"
+    "Handset microphone was unmuted." -> "Device microphone mute was lifted; AI handed the call back"
+    "Cellular audio mode ended.", "Cellular audio ended." -> "Carrier call audio mode ended; the system Phone app is handling the call"
+    "Downlink consumer stopped draining audio." -> "Carrier downlink audio stalled; the system Phone app is handling the call"
+    "Android silenced the cellular audio capture." -> "Android stopped sending call audio to the AI; handed back to the system"
+    "Uplink playback stopped accepting audio." -> "Carrier uplink audio playback stopped making progress; the system Phone app is handling the call"
+    "Helper released.", "Call audio owner died." -> "The built-in helper released call audio; the system Phone app is handling the call"
     else -> when {
         code == null -> null
-        code.startsWith("Downlink read failed (") -> "设备无法读取运营商下行音频，电话由系统处理"
-        code.startsWith("Uplink write failed (") -> "设备无法写入运营商上行音频，电话由系统处理"
-        code.startsWith("Uplink flush failed:") -> "设备无法清空运营商上行音频，电话由系统处理"
+        code.startsWith("Downlink read failed (") -> "The device could not read carrier downlink audio; the system Phone app is handling the call"
+        code.startsWith("Uplink write failed (") -> "The device could not write carrier uplink audio; the system Phone app is handling the call"
+        code.startsWith("Uplink flush failed:") -> "The device could not flush carrier uplink audio; the system Phone app is handling the call"
         code.startsWith("Uplink did not route to the telephony device (") ||
-            code.startsWith("Uplink unexpectedly routed to device type ") -> "设备上行未路由至运营商通话，电话由系统处理"
-        code.startsWith("Downlink unexpectedly routed to device type ") -> "设备下行未路由至运营商通话，电话由系统处理"
+            code.startsWith("Uplink unexpectedly routed to device type ") -> "Device uplink was not routed to the carrier call; the system Phone app is handling the call"
+        code.startsWith("Downlink unexpectedly routed to device type ") -> "Device downlink was not routed to the carrier call; the system Phone app is handling the call"
         else -> null
     }
 }

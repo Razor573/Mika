@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">Conectando el audio de la llamada</string>
     <string name="calls_notification_connected_waiting">IA conectada. Esperando a que hable la otra persona. Puedes intervenir en cualquier momento.</string>
     <string name="calls_notification_connected">IA conectada. Puedes hablar personalmente en cualquier momento.</string>
+    <string name="calls_summary_updated">Resumen actualizado</string>
 </resources>

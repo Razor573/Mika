@@ -102,7 +102,15 @@ enum class AppRunKind(val wire: String) { Done("done"), Bumpy("bumpy"), NotDone(
  * 交回的补充照原样收;写了密码、验证码这类东西的整份不收。
  */
 class AppKnowledgeDrafter(private val model: ChatModel) {
-    suspend fun draft(run: AppRunInput, app: KnowledgeEntry, builtIn: String?, current: AppKnowledgeDraft?, id: String, atMs: Long): AppKnowledgeDraft? {
+    suspend fun draft(
+        run: AppRunInput,
+        app: KnowledgeEntry,
+        builtIn: String?,
+        current: AppKnowledgeDraft?,
+        id: String,
+        atMs: Long,
+        targetLanguage: String = "English",
+    ): AppKnowledgeDraft? {
         if (app.surface != Surface.Android || app.packages.isEmpty()) return null
         if (Eligibility.interrupted(run.events) != null || run.events.any { it is RunEvent.Replay && it.matched }) return null
         val lines = ActionDigest.of(run.events, run.tools).filter { it.where in app.packages }
@@ -116,6 +124,7 @@ class AppKnowledgeDrafter(private val model: ChatModel) {
         }
         val existing = current?.let { facts(it.markdown) }
         val request = Prompts.fill(INPUT, mapOf(
+            "language" to targetLanguage,
             "app" to app.display + " (" + app.packages.joinToString(", ") + ")",
             "outcome" to kind.wire,
             "goal" to run.goal,

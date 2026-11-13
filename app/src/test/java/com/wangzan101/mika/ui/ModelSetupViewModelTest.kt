@@ -188,7 +188,7 @@ class ModelSetupViewModelTest {
         }
         val store = store()
         val vm = vm(store)
-        vm.selectPreset("通义千问"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
+        vm.selectPreset("Qwen"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
         assertEquals("自家的先试、向量模型不试", listOf("qwen3-max-preview", "qwen-plus"), built.map { it.first })
         val p = store.providers.value.single()
         assertEquals("qwen-plus", store.configFor(ModelRole.Main)?.model)
@@ -429,7 +429,7 @@ class ModelSetupViewModelTest {
         reply = { throw ModelError.ModelNotAvailable(built.last().first, "The product is not activated.") }
         val store = store()
         val vm = vm(store)
-        vm.selectPreset("通义千问"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
+        vm.selectPreset("Qwen"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
         assertEquals("至多试 3 个", listOf("qwen-plus", "qwen-max", "qwen-turbo"), built.map { it.first })
         val p = store.providers.value.single()
         assertEquals(4, p.models?.size)
@@ -467,7 +467,7 @@ class ModelSetupViewModelTest {
         reply = { throw ModelError.Auth() }
         val store = store()
         val vm = vm(store)
-        vm.selectPreset("通义千问"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
+        vm.selectPreset("Qwen"); vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
         assertEquals(listOf("qwen-plus"), built.map { it.first })
         assertTrue(vm.state.value.form.test is ListState.Failed)
         assertTrue(store.providers.value.isEmpty())
@@ -564,7 +564,7 @@ class ModelSetupViewModelTest {
 
     /** 预设(列表接口照理有)没列出模型、手填的找不到:只说模型不存在。 */
     @Test fun presetWithoutListReportsTheMissingModel() = runTest {
-        val ark = ProviderPresets.all.first { it.label == "火山方舟" }
+        val ark = ProviderPresets.all.first { it.label == "Volcengine Ark" }
         listing[ark.baseUrl] = ModelListResult.Failed(ListFailure.NotSupported)
         reply = { throw ModelError.ModelNotFound("doubao") }
         val store = store()
@@ -684,9 +684,9 @@ class ModelSetupViewModelTest {
         val main = store.roles.value.main
         vm.openForm()
         assertTrue(vm.state.value.showForm)
-        vm.selectPreset("通义千问")
+        vm.selectPreset("Qwen")
         vm.setApiKey("qk"); vm.testAndSave(); runCurrent()
-        assertEquals(listOf("DeepSeek", "通义千问"), vm.state.value.providers.map { it.name })
+        assertEquals(listOf("DeepSeek", "Qwen"), vm.state.value.providers.map { it.name })
         assertEquals(listOf("sk", "qk"), store.providers.value.map { store.providerKey(it.id) })
         assertEquals("第二家不改主模型", main, store.roles.value.main)
         assertEquals(1, store.list().size)
@@ -699,8 +699,8 @@ class ModelSetupViewModelTest {
         val store = store()
         val vm = vm(store)
         vm.setApiKey("sk"); vm.testAndSave(); runCurrent()
-        vm.openForm(); vm.selectPreset("通义千问"); vm.setApiKey("qk"); vm.testAndSave(); runCurrent()
-        val qwen = vm.state.value.providers.first { it.name == "通义千问" }
+        vm.openForm(); vm.selectPreset("Qwen"); vm.setApiKey("qk"); vm.testAndSave(); runCurrent()
+        val qwen = vm.state.value.providers.first { it.name == "Qwen" }
         // 选择页列出所有服务商的全部模型,不按能力过滤
         assertEquals(listOf(3, 2), vm.state.value.providers.map { vm.state.value.options(it).size })
         vm.pick(ModelRole.Vision, qwen.id, "qwen-plain"); runCurrent()
@@ -742,7 +742,7 @@ class ModelSetupViewModelTest {
     @Test fun nextNeedsAMainModel() = runTest {
         val store = store()
         val vm = vm(store)
-        vm.selectPreset("自定义")
+        vm.selectPreset("Custom")
         vm.setBaseUrl("http://192.168.1.5:8000/v1")
         assertTrue("自定义的 OpenAI 兼容接口可以不填 Key", vm.state.value.form.canTest)
         listing["http://192.168.1.5:8000/v1"] = ModelListResult.Failed(ListFailure.NotSupported)

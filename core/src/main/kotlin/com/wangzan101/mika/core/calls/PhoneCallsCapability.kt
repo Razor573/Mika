@@ -56,17 +56,17 @@ private class CallAgentTool(private val action: String, override val verb: Verb)
                 "dial" -> {
                     val (number, simId, task) = dialArgs(a)
                     val content = buildString {
-                        append(label).append(' ').append(number)
+                        append("Dial ").append(number)
                         if (task != null) {
-                            append("\n本次目标：").append(task.goal)
-                            if (task.constraints.isNotEmpty()) append("\n本次边界：").append(task.constraints)
-                            task.questions.forEachIndexed { index, question -> append("\n必问 ").append(index + 1).append("：").append(question) }
-                            if (task.context.isNotEmpty()) append("\n本次背景：").append(task.context)
+                            append("\nGoal: ").append(task.goal)
+                            if (task.constraints.isNotEmpty()) append("\nConstraints: ").append(task.constraints)
+                            task.questions.forEachIndexed { index, question -> append("\nRequired question ").append(index + 1).append(": ").append(question) }
+                            if (task.context.isNotEmpty()) append("\nContext: ").append(task.context)
                         }
                     }
-                    ConfirmationRequest(IrrevAction.other, "SIM ${simId ?: "（仅一张可用时自动选择）"}", content, null, capability)
+                    ConfirmationRequest(IrrevAction.other, "SIM ${simId ?: "(auto if only one available)"}", content, null, capability)
                 }
-                "answer", "hangup" -> ConfirmationRequest(IrrevAction.other, "通话 ${callId(a)}", label, null, capability)
+                "answer", "hangup" -> ConfirmationRequest(IrrevAction.other, "Call ${callId(a)}", if (action == "answer") "AI answer" else "Hang up", null, capability)
                 else -> null
             }
         } catch (_: ArgError) {

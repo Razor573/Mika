@@ -32,46 +32,46 @@ object Licenses {
     data class Entry(val name: String, val license: String, val note: String)
 
     const val GPL_SOURCE_OFFER =
-        "PRoot(GPL-2.0-or-later)与 talloc(LGPL-3.0-or-later)以独立程序的形式随 Mika 安装包发布,Mika 不链接它们。" +
-            "它们的完整源码、Mika 打的补丁和编译脚本随每个版本放在 Mika 的发布页,文件名 mika-<版本>-gpl-sources.tar.gz;" +
-            "源码仓库的 tools/sandbox/ 里也有源码地址、校验值、补丁与编译脚本,可以自己重新编译。"
+        "PRoot (GPL-2.0-or-later) and talloc (LGPL-3.0-or-later) are distributed alongside the Mika installation package as standalone binaries; Mika does not link against them. " +
+            "Their complete source code, patches applied by Mika, and build scripts are included on each Mika release page as mika-<version>-gpl-sources.tar.gz; " +
+            "the source URLs, checksums, patches, and build scripts can also be found in tools/sandbox/ in the source repository if you wish to rebuild them yourself."
 
     const val RUNTIME_NOTE =
-        "运行 Python、Node 等程序用的系统随 Mika 安装包发布,来自 Alpine Linux 3.22,下面逐个列出其中的软件包与许可证。" +
-            "其中 GPL、LGPL、MPL 软件包的源码(Alpine 的构建配方与上游源码)同样放在 mika-<版本>-gpl-sources.tar.gz 里。"
+        "The system environment used to run Python, Node, and other programs is packaged with Mika and based on Alpine Linux 3.22; each package and its licence are listed below. " +
+            "Source code for GPL, LGPL, and MPL packages (Alpine build recipes and upstream sources) is likewise included in mika-<version>-gpl-sources.tar.gz."
 
     /** 自带运行环境里的软件包(assets/runtime/packages.json,由 tools/sandbox/build-runtime.py 生成)。 */
     fun runtimePackages(json: String): List<Entry> =
         Json.parseToJsonElement(json).jsonObject.getValue("packages").jsonArray.map { e ->
             val o = e.jsonObject
             fun f(k: String) = o[k]?.jsonPrimitive?.content.orEmpty()
-            Entry(f("name"), f("license"), "版本 ${f("version")}。${f("url")}")
+            Entry(f("name"), f("license"), "Version ${f("version")}. ${f("url")}")
         }
 
     val ENTRIES = listOf(
-        Entry("Mika", "Apache-2.0", "Mika 本身,包括运行环境的启动器、其中的 mika 命令与技能脚本。许可证全文见本页顶上。"),
-        Entry("PRoot", "GPL-2.0-or-later", "运行 Python、Node 等程序用的环境,版本 5.4.0,打了一个补丁(PRoot 退出时结束所有子进程)。$GPL_SOURCE_OFFER"),
-        Entry("talloc", "LGPL-3.0-or-later", "版本 2.4.3,未修改,静态链接进 PRoot 程序。可用 tools/sandbox/ 的源码与脚本重新链接。"),
-        Entry("Apache Commons Compress", "Apache-2.0", "首次启动时解包自带的运行环境。Copyright 2002-2025 The Apache Software Foundation."),
-        Entry("Apache Commons Codec", "Apache-2.0", "Apache Commons Compress 的依赖。Copyright 2002-2025 The Apache Software Foundation."),
-        Entry("Apache Commons IO", "Apache-2.0", "Apache Commons Compress 的依赖。Copyright 2002-2025 The Apache Software Foundation."),
-        Entry("Apache Commons Lang", "Apache-2.0", "Apache Commons Compress 的依赖。Copyright 2001-2025 The Apache Software Foundation."),
-        Entry("Kotlin 标准库", "Apache-2.0", "kotlin-stdlib 2.1.20 等,以及 JetBrains annotations 23.0.0。https://kotlinlang.org/"),
-        Entry("kotlinx.coroutines", "Apache-2.0", "版本 1.9.0。https://github.com/Kotlin/kotlinx.coroutines"),
-        Entry("kotlinx.serialization", "Apache-2.0", "版本 1.7.3。https://github.com/Kotlin/kotlinx.serialization"),
-        Entry("OpenTelemetry", "Apache-2.0", "详细 Trace 的 OTLP 消息定义。 https://opentelemetry.io/"),
-        Entry("Protocol Buffers", "BSD-3-Clause", "详细 Trace 的 Protobuf 编码。 https://protobuf.dev/"),
-        Entry("OkHttp", "Apache-2.0", "版本 4.12.0,用于访问模型接口。https://square.github.io/okhttp/"),
-        Entry("Okio", "Apache-2.0", "版本 3.6.0,OkHttp 的依赖。https://github.com/square/okio/"),
-        Entry("AndroidX(含 Jetpack Compose)", "Apache-2.0", "Compose 1.7.6、Material3 1.3.1、Activity 1.9.3、Lifecycle 2.8.3、Core 1.13.1、WebKit 1.12.1 等界面与系统组件库。https://developer.android.com/jetpack/androidx"),
-        Entry("Guava ListenableFuture(由 AndroidX 库引入)", "Apache-2.0", "listenablefuture 1.0。https://github.com/google/guava"),
-        Entry("scrcpy", "Apache-2.0", "以 shell 身份取得系统上下文的做法仿照 scrcpy,相关源文件头部保留出处。"),
-        Entry("通话功能（calls/）实现", "Apache-2.0", "通话功能（拨号、接听、挂断、AI 接听、人工接管、PCM 音频桥、实时语音客户端）按 Apache-2.0 许可并入;实时语音经火山引擎（Volcengine）的 WebSocket 接口。"),
-        Entry("Alpine Linux", "各软件包各自的许可证", RUNTIME_NOTE),
-        Entry("XZ for Java", "0BSD", "版本 1.10,首次启动时解压自带的运行环境。https://tukaani.org/xz/java.html"),
-        Entry("ZXing", "Apache-2.0", "版本 3.5.3,在本机生成微信绑定二维码。https://github.com/zxing/zxing"),
-        Entry("commonmark-java", "BSD-2-Clause", "版本 0.30.1(含表格、删除线扩展),把回答里的 Markdown 解析成结构后显示。Copyright (c) 2015, Atlassian Pty Ltd. https://github.com/commonmark/commonmark-java"),
-        Entry("xterm.js", "MIT", "版本 5.5.0(及 @xterm/addon-fit 0.10.0),用户终端页的终端仿真器。https://github.com/xtermjs/xterm.js"),
+        Entry("Mika", "Apache-2.0", "Mika itself, including the runtime launcher, the mika command inside it, and skill scripts. The full licence text appears at the top of this page."),
+        Entry("PRoot", "GPL-2.0-or-later", "Environment used to run Python, Node, and other programs, version 5.4.0, with one patch (terminate all child processes when PRoot exits). $GPL_SOURCE_OFFER"),
+        Entry("talloc", "LGPL-3.0-or-later", "Version 2.4.3, unmodified, statically linked into the PRoot binary. Can be relinked using the sources and scripts in tools/sandbox/."),
+        Entry("Apache Commons Compress", "Apache-2.0", "Unpacks the bundled runtime environment on first launch. Copyright 2002-2025 The Apache Software Foundation."),
+        Entry("Apache Commons Codec", "Apache-2.0", "Dependency of Apache Commons Compress. Copyright 2002-2025 The Apache Software Foundation."),
+        Entry("Apache Commons IO", "Apache-2.0", "Dependency of Apache Commons Compress. Copyright 2002-2025 The Apache Software Foundation."),
+        Entry("Apache Commons Lang", "Apache-2.0", "Dependency of Apache Commons Compress. Copyright 2001-2025 The Apache Software Foundation."),
+        Entry("Kotlin standard library", "Apache-2.0", "kotlin-stdlib 2.1.20 and related artefacts, plus JetBrains annotations 23.0.0. https://kotlinlang.org/"),
+        Entry("kotlinx.coroutines", "Apache-2.0", "Version 1.9.0. https://github.com/Kotlin/kotlinx.coroutines"),
+        Entry("kotlinx.serialization", "Apache-2.0", "Version 1.7.3. https://github.com/Kotlin/kotlinx.serialization"),
+        Entry("OpenTelemetry", "Apache-2.0", "OTLP message definitions for detailed traces. https://opentelemetry.io/"),
+        Entry("Protocol Buffers", "BSD-3-Clause", "Protobuf encoding for detailed traces. https://protobuf.dev/"),
+        Entry("OkHttp", "Apache-2.0", "Version 4.12.0, used for model API requests. https://square.github.io/okhttp/"),
+        Entry("Okio", "Apache-2.0", "Version 3.6.0, dependency of OkHttp. https://github.com/square/okio/"),
+        Entry("AndroidX (including Jetpack Compose)", "Apache-2.0", "UI and system libraries including Compose 1.7.6, Material3 1.3.1, Activity 1.9.3, Lifecycle 2.8.3, Core 1.13.1, and WebKit 1.12.1. https://developer.android.com/jetpack/androidx"),
+        Entry("Guava ListenableFuture (pulled in by AndroidX)", "Apache-2.0", "listenablefuture 1.0. https://github.com/google/guava"),
+        Entry("scrcpy", "Apache-2.0", "The technique for obtaining system context as shell is modelled after scrcpy; attributions are preserved in the relevant source file headers."),
+        Entry("Call feature (calls/) implementation", "Apache-2.0", "Call features (dialling, answering, hanging up, AI answering, human takeover, PCM audio bridge, and real-time voice client) are incorporated under the Apache-2.0 licence; real-time voice uses Volcengine's WebSocket interface."),
+        Entry("Alpine Linux", "Each package's own licence", RUNTIME_NOTE),
+        Entry("XZ for Java", "0BSD", "Version 1.10, decompresses the bundled runtime environment on first launch. https://tukaani.org/xz/java.html"),
+        Entry("ZXing", "Apache-2.0", "Version 3.5.3, generates WeChat binding QR codes locally on device. https://github.com/zxing/zxing"),
+        Entry("commonmark-java", "BSD-2-Clause", "Version 0.30.1 (with tables and strikethrough extensions), parses Markdown in replies into structured elements for display. Copyright (c) 2015, Atlassian Pty Ltd. https://github.com/commonmark/commonmark-java"),
+        Entry("xterm.js", "MIT", "Version 5.5.0 (and @xterm/addon-fit 0.10.0), terminal emulator for the user terminal view. https://github.com/xtermjs/xterm.js"),
     )
 }
 

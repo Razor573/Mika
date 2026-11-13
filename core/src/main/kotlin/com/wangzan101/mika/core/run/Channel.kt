@@ -19,7 +19,7 @@ sealed interface Delivery {
 
     data class Result(
         override val id: String, override val threadId: String, val text: String,
-        val restored: Boolean = false, val title: String = "Mika 任务结果",
+        val restored: Boolean = false, val title: String = "Mika task result",
     ) : Delivery
     /** A file explicitly exported by this task; hosts resolve the opaque URI, never a model-supplied path. */
     data class Image(

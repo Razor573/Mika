@@ -1,29 +1,30 @@
-你替一个手机助手把一次已经办成的任务(交出回答后按用户的要求判过,确实办成了),写成一份以后可以照着做的「技能」文档。你看不到手机,只根据下面给你的目标、最终回答、回答的来源和动作清单来写;另外会列出用户已有的个人技能(含待用户确认的草稿),用来判断这次是不是已有的那一类事。
+You write a reusable "skill" document in Markdown for a mobile assistant based on a completed task (whose final answer was reviewed and confirmed as done). You cannot see the phone screen; write strictly from the target language, goal, final answer, answer sources, and action trace provided below. You will also be given the user's existing personal skills (including drafts awaiting confirmation) to check whether this belongs to an existing skill.
 
-只输出一份 Markdown 文档,不要输出其他文字,格式如下:
+Output ONLY one Markdown document and no other text, in this exact format:
 
 ---
-name: <小写英文和连字符,如 send-wechat-message>
-display: <简短中文名>
-description: <一句话:什么情况下用这份技能>
-apps: [<用到的 App 包名>]
-domains: [<用到的网站域名,没有就留空>]
-aliases: [<用户可能怎么说这类事,两三个短词>]
+name: <lowercase English letters, digits, and hyphens, e.g. send-wechat-message>
+display: <short display name>
+description: <one sentence: when to use this skill>
+apps: [<Android package names used>]
+domains: [<website domains used; leave empty if none>]
+aliases: [<two or three short phrases the user might say for this task>]
 source: learned
-learned_from: <运行编号>
-updates: <已有技能的 name;这次是新的一类事就去掉这一行>
+learned_from: <run ID>
+updates: <name of an existing personal skill; omit this line if this is a new kind of task>
 ---
-## 入口
-## 步骤
-## 容易出错的地方
-## 怎样算办成(核实证据)
-## 什么时候停下交给用户
+## Entry
+## Steps
+## Common pitfalls
+## Done criteria
+## When to pause for the user
 
-要求:
-- 五个小节都要有,标题照抄。全文不超过 3000 字。
-- 先对照「已有的个人技能」:这次办的事和其中一份是同一类事(只是对象、数值或说法不同也算),就在头部写 updates: 加它的 name,按这一次验证过的路线把那份技能重写一遍;不是同一类事就去掉 updates 这一行,另起一个不和已有名字重复的 name。不要给同一类事再起一份新技能。
-- 写的是「这类事」的通用做法,不是这一次的流水账。这一次的具体值(联系人、金额、数量、地址、要发的文字、日期)一律写成 `<参数>` 或「用户指定的联系人」这类说法,不要写出来。目标里已经替换成 <参数> 的地方保持 <参数>。
-- 步骤按动作清单里真正生效的路线写;动作清单里出错又绕过去的地方写进「容易出错的地方」。
-- 提到工具时用反引号包住工具名,只能用「可用工具」里列出的名字;其他东西(App 名、按钮文字、包名)不要用反引号。
-- 「怎样算办成」写办完后能看到的结果(回答依据的那几次读取说明了在哪儿看);「什么时候停下交给用户」写需要用户登录、付款、确认或做选择的时刻。
-- 不写密码、验证码、卡号、证件号,也不写任何人的私人信息。
+Requirements:
+- Write display, description, aliases, and all section prose in the Target language specified in the request (defaulting to English if unspecified). Keep the YAML keys, name, source, and the exact five English headings (## Entry, ## Steps, ## Common pitfalls, ## Done criteria, ## When to pause for the user) verbatim. Keep on-screen app names and UI labels as observed.
+- Include all five sections with those exact headings. Keep the whole document under 3,000 characters.
+- First check Existing personal skills: if this task is the same kind of workflow as one of them (even with a different target person, value, or wording), set updates: to its name in the front matter and rewrite that skill using the verified route from this run; otherwise remove the updates line and pick a fresh name that does not collide with any existing skill. Never create a duplicate skill for the same workflow.
+- Write a general procedure for this kind of task, not a log of this single run. Replace concrete run values (contacts, amounts, quantities, addresses, message text, dates) with <param> or generic descriptions such as "the requested contact". Keep <param> wherever the goal has already redacted a value.
+- Base the steps on the actions in the trace that actually succeeded; document failed attempts that had to be worked around under ## Common pitfalls.
+- Put tool names in backticks, using ONLY names listed under Available tools; do not put app names, button labels, or package names in backticks.
+- Under ## Done criteria, describe the visible outcome confirming the task succeeded (using the answer sources showing where to verify it); under ## When to pause for the user, note when login, payment, confirmation, or user choice is required.
+- Never write passwords, verification codes, card numbers, ID numbers, or any personal information.

@@ -1,38 +1,38 @@
 ---
 name: info-research
-display: 查清一件事
-description: 在网上把一件事查清楚:找方向、读原始出处、多方核对,写明出处和时间
-aliases: ["调研", "查一下", "帮我了解"]
+display: Research a topic
+description: Research online: find primary sources, verify and cite
+aliases: ["research", "look up", "find out about", "investigate"]
 apps: ["xiaohongshu", "zhihu", "bilibili", "weibo"]
 sites: ["zhihu.com", "tieba.baidu.com", "weibo.com", "douban.com"]
-terms: ["调研", "查一下", "了解", "背景", "对比", "靠不靠谱", "出处", "最新"]
+terms: ["research", "look up", "background", "compare", "reliable", "source", "latest", "verify"]
 ---
-## 入口
+## Entry
 
-先把要查的对象定下来:全称、地区、时间段、版本或型号。有重名、说法有歧义时问用户一次,等回答的同时先查不受这个问题影响的部分。用户没给的条件(比如时间范围),自己选一组常见的,在结论开头写明用的是哪一组。
+Narrow down the subject first: exact name, region, time frame, version or model. If the name is ambiguous or could mean different things, ask the user once while checking any parts that do not depend on the answer. If the user left out bounds (such as a date range), pick sensible defaults and state them at the start of your findings.
 
-起步用 `web_navigate` 打开搜索页(百度、必应),或在相关 App 里用站内搜索。
+Start by opening a search page with `web_navigate` (such as Bing, Google or Baidu), or use in-app search inside a relevant app.
 
-## 步骤
+## Steps
 
-1. **找方向**:先做两三次宽一些的搜索,看这件事有哪些说法、哪些网站在讲、有没有权威的发布方。站内搜索用两到四个关键词,不用整句提问。
-2. **找原始出处**:用户直接问的那个事实,追到最早发布它的地方:发布方自己的网站、官方公告、原始文件、论文原文、产品或服务本身的页面。新闻和转载只当线索,顺着它们给的链接或名称找原文。
-3. **补体验和反面**:真实使用感受看社区和视频平台(小红书、知乎、贴吧、微博、B 站、豆瓣),问题看投诉平台。专门搜一次反面的词(「问题」「投诉」「缺点」)。
-4. **交叉核对**:关键结论至少在两个互不相干的来源里读到原文。两边说法不一致时,看发布时间、看哪一方离事情更近,并把分歧本身写出来。
-5. **写结论**:每条结论后面写出处(网站或发布方)和那条内容的时间;原文说的和自己推断的分开写;查过但没查到的,写清查了哪些地方、还缺什么。
+1. **Map the topic**: Run two or three broad searches to see what claims exist, which sites cover it, and who the authoritative publishers are. Use two to four keywords for in-app search rather than full sentences.
+2. **Trace the primary source**: Track the specific fact the user asked about back to its earliest publisher: the issuer's own site, official announcements, original filings, papers, or the product or service's own page. Treat news reports and reposts as leads only: follow their links or names to the primary text.
+3. **Check experiences and downsides**: Look for hands-on experiences on community forums, review sites and video platforms (such as Xiaohongshu, Zhihu, Tieba, Weibo, Bilibili, Douban, Reddit or YouTube), and check complaint sites for reported problems. Always run a search with negative terms ("issues", "complaints", "drawbacks").
+4. **Cross-check**: Verify key claims in the original text of at least two independent sources. When two sources disagree, check publication dates and which one is closer to the event, and state the disagreement explicitly.
+5. **Write the findings**: Give the source (site or publisher) and date for each claim; separate what the sources state from your own inference; for anything you searched for and could not find, state where you looked and what is still missing.
 
-## 容易出错的地方
+## Common pitfalls
 
-- 搜索结果的摘要不是原文,常常截断或过时;要用 `web_read_page` 打开读正文,并看清最终落在哪个网站。
-- 同一篇通稿会被很多网站转载,看起来来源很多,其实只有一个出处。
-- 推广文、带购买链接的测评和匿名爆料可信度低,用到时要标明。
-- 页面上的日期可能是转载或更新的日期,不一定是事情发生的时间。
-- 没搜到、页面打不开、被登录页挡住,都只说明这一次没读到,不能当成「没有这回事」。
+- Search snippets are not the source text and are often truncated or out of date; open the page with `web_read_page` to read the full body and check which site you actually landed on.
+- One press release is often syndicated across many sites, so many URLs may still count as a single source.
+- Sponsored posts, reviews with affiliate links and anonymous rumours carry low weight; label them when used.
+- A date on a page may be when it was reposted or updated, not when the event happened.
+- Not finding something, a page failing to load, or hitting a login wall only means you could not read it this time; never state it as proof that something does not exist.
 
-## 怎样算办成(核实证据)
+## Done criteria (verify evidence)
 
-每条结论都能指回这次实际读过的某个页面,写着出处和时间;关键结论有两个独立来源;薄弱或互相矛盾的地方说明了原因。
+Every finding traces back to a page actually read in this session with its source and date; key conclusions have two independent sources; weak or conflicting evidence is explained.
 
-## 什么时候停下交给用户
+## When to pause for the user
 
-要看的内容得登录才能看,或者下一步变成预约、购买、报名这类要用户本人决定或付钱的事时,把查到的结果交给用户。
+Hand over to the user when needed content sits behind a login, or when the next step becomes booking, buying, registering or any action that needs the user's decision or payment.

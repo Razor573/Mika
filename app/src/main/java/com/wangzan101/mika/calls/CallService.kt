@@ -10,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.R
+import com.wangzan101.mika.i18n.trOr
 import com.wangzan101.mika.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -22,14 +23,14 @@ internal class CallNotifications(private val context: Context) {
     fun ready(): Boolean = runCatching {
         val notificationManager = manager ?: return false
         notificationManager.createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.calls_title), NotificationManager.IMPORTANCE_DEFAULT).apply {
+            NotificationChannel(CHANNEL, trOr(context, R.string.calls_title), NotificationManager.IMPORTANCE_DEFAULT).apply {
                 setSound(null, null)
                 enableVibration(false)
                 setShowBadge(false)
             },
         )
         notificationManager.createNotificationChannel(
-            NotificationChannel(COMPLETED_CHANNEL, context.getString(R.string.calls_completed_notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
+            NotificationChannel(COMPLETED_CHANNEL, trOr(context, R.string.calls_completed_notification_channel), NotificationManager.IMPORTANCE_DEFAULT).apply {
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
             },
@@ -47,12 +48,12 @@ internal class CallNotifications(private val context: Context) {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             .putExtra(MainActivity.EXTRA_OPEN_CALLS, true), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val builder = Notification.Builder(context, CHANNEL)
-            .setContentTitle(context.getString(R.string.app_name)).setContentText(message)
+            .setContentTitle(trOr(context, R.string.app_name)).setContentText(message)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setOnlyAlertOnce(true).setOngoing(true).setVisibility(Notification.VISIBILITY_PRIVATE)
             .setContentIntent(openCalls)
             .addAction(Notification.Action.Builder(null,
-                context.getString(if (ringing) R.string.calls_cancel_ai_answer else R.string.calls_takeover), takeOver).build())
+                trOr(context, if (ringing) R.string.calls_cancel_ai_answer else R.string.calls_takeover), takeOver).build())
         manager?.notify(ID, builder.build()) ?: return false
         true
     }.getOrDefault(false)
@@ -61,7 +62,7 @@ internal class CallNotifications(private val context: Context) {
         runCatching {
             if (!ready()) return
             manager?.notify(ID, Notification.Builder(context, CHANNEL)
-                .setContentTitle(context.getString(R.string.app_name)).setContentText(context.getString(R.string.calls_notification_handoff))
+                .setContentTitle(trOr(context, R.string.app_name)).setContentText(trOr(context, R.string.calls_notification_handoff))
                 .setSmallIcon(android.R.drawable.sym_action_call).setAutoCancel(true)
                 .setVisibility(Notification.VISIBILITY_PRIVATE).setTimeoutAfter(12_000L).build())
         }
@@ -93,24 +94,24 @@ internal class CallNotifications(private val context: Context) {
             .putExtra(MainActivity.EXTRA_CALL_HISTORY_ID, callId)
         val pending = PendingIntent.getActivity(context, callId.hashCode(), openDetail,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val caller = number?.takeIf { it.isNotBlank() } ?: context.getString(R.string.calls_completed_notification_text)
-        val title = "${context.getString(R.string.calls_completed_notification_title)} · $caller"
+        val caller = number?.takeIf { it.isNotBlank() } ?: trOr(context, R.string.calls_completed_notification_text)
+        val title = "${trOr(context, R.string.calls_completed_notification_title)} · $caller"
         val summaryText = summary?.let { value ->
             buildList {
-                value.purpose?.takeIf(String::isNotBlank)?.let { add("${context.getString(R.string.calls_summary_purpose)}: $it") }
+                value.purpose?.takeIf(String::isNotBlank)?.let { add("${trOr(context, R.string.calls_summary_purpose)}: $it") }
                 value.highlights.take(3).forEach { add("• $it") }
                 value.actions.filter { it.status == CallFollowUp.Status.PENDING }.take(2)
                     .forEach { add("• ${it.text}") }
             }.joinToString("\n").take(700).ifBlank { null }
         }
         val body = summaryText ?: when {
-            summaryPending -> context.getString(R.string.calls_summary_generating)
-            summaryFailed -> context.getString(R.string.calls_summary_failed)
-            else -> context.getString(R.string.calls_completed_notification_text)
+            summaryPending -> trOr(context, R.string.calls_summary_generating)
+            summaryFailed -> trOr(context, R.string.calls_summary_failed)
+            else -> trOr(context, R.string.calls_completed_notification_text)
         }
         val publicNotification = Notification.Builder(context, COMPLETED_CHANNEL)
-            .setContentTitle(context.getString(R.string.calls_completed_notification_title))
-            .setContentText(context.getString(R.string.calls_completed_notification_text))
+            .setContentTitle(trOr(context, R.string.calls_completed_notification_title))
+            .setContentText(trOr(context, R.string.calls_completed_notification_text))
             .setSmallIcon(android.R.drawable.sym_action_call).build()
         notificationManager.notify(notificationId, Notification.Builder(context, COMPLETED_CHANNEL)
             .setContentTitle(title)

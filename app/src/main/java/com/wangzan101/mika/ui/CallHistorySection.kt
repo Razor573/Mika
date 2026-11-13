@@ -69,6 +69,7 @@ internal fun CallHistorySection(
     val failure = stringResource(R.string.calls_action_failed)
     val clearFailure = stringResource(R.string.calls_history_clear_failed)
     val summaryFailure = stringResource(R.string.calls_summary_failed)
+    val summaryUpdated = stringResource(R.string.calls_summary_updated)
     val cleared = stringResource(R.string.calls_history_cleared)
     val deleted = stringResource(R.string.calls_history_deleted)
     val handled = stringResource(R.string.calls_history_done)
@@ -171,7 +172,7 @@ internal fun CallHistorySection(
                             change(if (next) handled else unhandled) { onMark(record.id, next) }
                         },
                         onDelete = { pendingDelete = record.id },
-                        onRetrySummary = { change("摘要已更新", summaryFailure) { onRetrySummary(record.id) } },
+                        onRetrySummary = { change(summaryUpdated, summaryFailure) { onRetrySummary(record.id) } },
                         onReuse = if (record.number != null && record.task != null && onReuseTask != null) {
                             { onReuseTask(record.number, record.task) }
                         } else null,
@@ -262,12 +263,12 @@ private fun CallHistoryItem(
                 Text(stringResource(R.string.calls_history_period, start, end),
                     style = MaterialTheme.typography.bodySmall, color = MikaTheme.colors.ink3)
                 record.summary?.let { summary ->
-                    summary.purpose?.let { Text("${stringResource(R.string.calls_summary_purpose)}：$it") }
+                    summary.purpose?.let { Text("${stringResource(R.string.calls_summary_purpose)}: $it") }
                     if (summary.highlights.isNotEmpty()) {
                         Text(stringResource(R.string.calls_summary_highlights), style = MaterialTheme.typography.labelLarge)
                         summary.highlights.forEach { Text("• $it") }
                     }
-                    summary.conclusion?.let { Text("${stringResource(R.string.calls_summary_conclusion)}：$it") }
+                    summary.conclusion?.let { Text("${stringResource(R.string.calls_summary_conclusion)}: $it") }
                     if (summary.uncertainties.isNotEmpty()) {
                         Text(stringResource(R.string.calls_summary_uncertainties), style = MaterialTheme.typography.labelLarge)
                         summary.uncertainties.forEach { Text("• $it") }
@@ -280,7 +281,7 @@ private fun CallHistoryItem(
                                 com.wangzan101.mika.calls.CallFollowUp.Status.DONE -> R.string.calls_summary_done
                                 com.wangzan101.mika.calls.CallFollowUp.Status.UNKNOWN -> R.string.calls_summary_unknown
                             }
-                            Text("${stringResource(state)}：${item.text}")
+                            Text("${stringResource(state)}: ${item.text}")
                         }
                     }
                 }

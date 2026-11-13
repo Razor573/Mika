@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">Connecting call audio</string>
     <string name="calls_notification_connected_waiting">AI connected. Waiting for the other party to speak. You can take over anytime.</string>
     <string name="calls_notification_connected">AI connected. You can take over anytime.</string>
+    <string name="calls_summary_updated">Summary updated</string>
 </resources>

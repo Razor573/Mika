@@ -92,11 +92,11 @@ class TelecomMuteLeaseTest {
     }
 
     @Test fun shellReasonIsSpecificButNeverLeaksRawContent() {
-        assertEquals("设备麦克风静音已解除，AI 已交还通话",
+        assertEquals("Device microphone mute was lifted; AI handed the call back",
             shellAudioStopDiagnostic("Handset microphone was unmuted."))
-        assertEquals("安卓停止向 AI 提供通话声音，已交还系统",
+        assertEquals("Android stopped sending call audio to the AI; handed back to the system",
             shellAudioStopDiagnostic("Android silenced the cellular audio capture."))
-        assertEquals("设备上行未路由至运营商通话，电话由系统处理",
+        assertEquals("Device uplink was not routed to the carrier call; the system Phone app is handling the call",
             shellAudioStopDiagnostic("Uplink did not route to the telephony device (private diagnostic)."))
         assertNull(shellAudioStopDiagnostic("unknown private diagnostic"))
         assertNull(shellAudioStopDiagnostic("Call PCM pipe closed.")) // May be caused by normal app-side release.

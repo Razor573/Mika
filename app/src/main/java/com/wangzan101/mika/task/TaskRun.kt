@@ -1327,6 +1327,7 @@ class TaskRun(
             ids = { UUID.randomUUID().toString() },
             autoApprove = env.evalHooks.autoApproveSkillDrafts,
             yieldToForeground = { while (service.hasActiveRuns()) delay(500) },
+            context = service,
         )
         val notes = learning.learn(RunAftermath(
             conversationId, runId, k.agent.taskText ?: goal, end, k.utterances.takeIf { k.memory != null }?.all.orEmpty(), k.dispatcher.savedChanges, k.agent.usedMemoryIds,

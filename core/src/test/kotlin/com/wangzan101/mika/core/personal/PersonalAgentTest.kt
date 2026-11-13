@@ -103,7 +103,7 @@ class PersonalAgentTest {
         assertTrue(actions.started.isEmpty())
         assertEquals(1, store.state.value.tasks.size)
         assertEquals("task_amendment", store.state.value.tasks.single().detailSystemType)
-        assertEquals("补充：只看开源项目", store.state.value.tasks.single().detail)
+        assertEquals("Additional instruction: 只看开源项目", store.state.value.tasks.single().detail)
     }
 
     @Test fun duplicateDelegationInOneTurnCannotLaunchWorkTwice() = runTest {
@@ -244,7 +244,7 @@ class PersonalAgentTest {
         val agent = PersonalAgent(store, backgroundScope, { null }, Actions())
         agent.send("你好"); runCurrent()
         assertTrue(store.state.value.messages.last().error)
-        assertTrue(store.state.value.messages.last().text.contains("主模型"))
+        assertTrue(store.state.value.messages.last().text.contains("primary model"))
         assertTrue(store.state.value.messages.last().systemType != null)
     }
 
@@ -258,7 +258,7 @@ class PersonalAgentTest {
         val message = store.state.value.messages.last()
         assertTrue(message.error)
         assertTrue(message.systemType != null)
-        assertTrue(message.text.contains("超时"))
+        assertTrue(message.text.contains("timed out"))
         val restored = Json.decodeFromString<PersonalState>(Json.encodeToString(store.state.value))
         assertTrue(restored.messages.last().systemType != null)
     }

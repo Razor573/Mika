@@ -1,5 +1,7 @@
 package com.wangzan101.mika.calls
 
+import com.wangzan101.mika.i18n.AppLanguage
+import java.util.Locale
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -99,24 +101,27 @@ class CallPolicyTest {
     }
 
     @Test fun ownerRulesArePassedAsAnExplicitSectionOfTheBoundedCallPrompt() {
-        val ownerRules = "仅在来电者说包裹到了时，请对方留下取件地点。"
-        val prompt = CallPolicy.prompt("确认对方称呼。", CallDirection.INCOMING, ownerRules)
-        assertTrue(prompt.indexOf("不得索取或透露密码") in 0 until prompt.indexOf(ownerRules))
-        assertTrue(prompt.contains("机主明确保存的通话规则"))
-        assertTrue(prompt.contains("确认对方称呼。"))
-        assertFalse(CallPolicy.prompt("", CallDirection.INCOMING).contains("机主明确保存的通话规则"))
+        val ownerRules = "Only if the caller mentions a parcel arrival, ask where it was left."
+        val prompt = CallPolicy.prompt("Confirm caller name.", CallDirection.INCOMING, ownerRules)
+        assertTrue(prompt.indexOf("Never ask for or disclose passwords") in 0 until prompt.indexOf(ownerRules))
+        assertTrue(prompt.contains("Saved call rules from the owner"))
+        assertTrue(prompt.contains("Confirm caller name."))
+        assertFalse(CallPolicy.prompt("", CallDirection.INCOMING).contains("Saved call rules from the owner"))
     }
 
     @Test fun legacyGreetingMigratesOnlyTheExactOldDefault() {
-        val legacyDefault = "您好，我是 Mika 的 AI 电话助手。请问有什么需要我转告？"
+        val legacyV1Default = "您好，我是 Mika 的 AI 电话助手。请问有什么需要我转告？"
+        val legacyZhDefault = "您好，我是 Mika AI 电话助手。请问有什么需要我转告？"
         val customWithOldName = "您好，我是 Mika 的 AI 电话助手。请留下可回拨的时间。"
-        val currentDefault = "您好，我是 Mika AI 电话助手。请问有什么需要我转告？"
+        val currentDefault = "Hello, I'm Mika, your AI phone assistant. Would you like me to pass on a message?"
         assertEquals(currentDefault, CallConfig().greeting)
-        assertEquals(currentDefault, CallPolicy.migrateDefaultGreeting(legacyDefault))
-        assertEquals(currentDefault, CallPolicy.spokenGreeting(legacyDefault, hasTask = false))
+        assertEquals(currentDefault, CallPolicy.migrateDefaultGreeting(legacyV1Default))
+        assertEquals(currentDefault, CallPolicy.migrateDefaultGreeting(legacyZhDefault))
+        assertEquals(currentDefault, CallPolicy.spokenGreeting(legacyV1Default, hasTask = false))
+        assertEquals(currentDefault, CallPolicy.spokenGreeting(legacyZhDefault, hasTask = false))
         assertEquals(customWithOldName, CallPolicy.migrateDefaultGreeting(customWithOldName))
         assertEquals(customWithOldName, CallPolicy.spokenGreeting(customWithOldName, hasTask = false))
-        assertEquals("您好，我是 Mika AI 电话助手。请问现在方便通话吗？",
+        assertEquals("Hello, I'm Mika, your AI phone assistant. Is now a convenient time to talk?",
             CallPolicy.spokenGreeting(currentDefault, hasTask = true))
     }
 
@@ -130,14 +135,26 @@ class CallPolicyTest {
 
     @Test fun dialogueDoesNotDemandAnotherIntroductionAfterTheConfiguredGreeting() {
         for (direction in CallDirection.entries) {
-            val prompt = CallPolicy.prompt("你好", direction)
-            assertTrue(prompt.contains("你好"))
-            assertFalse(prompt.contains("通话开始时明确说明自己是 AI"))
+            val prompt = CallPolicy.prompt("Keep replies brief.", direction)
+            assertTrue(prompt.contains("Keep replies brief."))
             assertFalse(prompt.contains("Flash phone"))
-            assertTrue(prompt.contains("只有对方直接问接话者的身份"))
-            assertTrue(prompt.contains("‘喂，能听到吗’，只答‘能听到，您说’"))
-            assertFalse(prompt.contains("你是 AI 电话助手"))
+            assertTrue(prompt.contains("State your identity truthfully in one sentence only if directly asked who is speaking"))
+            assertTrue(prompt.contains("if asked 'Can you hear me?', give only a brief confirmation"))
+            assertFalse(prompt.contains("I'm Mika, your AI phone assistant"))
         }
+    }
+
+    @Test fun callPromptFollowsConfiguredLanguageAndDefaultsToEnglish() {
+        assertTrue(CallPolicy.prompt("", CallDirection.INCOMING).contains("Use brief, natural English."))
+        assertTrue(CallPolicy.prompt("", CallDirection.INCOMING, language = AppLanguage.System)
+            .contains("Use brief, natural English."))
+        assertTrue(CallPolicy.prompt("", CallDirection.INCOMING, language = AppLanguage.SimplifiedChinese)
+            .contains("Use brief, natural Simplified Chinese."))
+        assertTrue(CallPolicy.prompt("", CallDirection.INCOMING, language = AppLanguage.Japanese)
+            .contains("Use brief, natural Japanese."))
+        assertEquals(AppLanguage.English, CallPolicy.resolveLocale(Locale.US))
+        assertEquals(AppLanguage.TraditionalChinese, CallPolicy.resolveLocale(Locale.TAIWAN))
+        assertEquals(AppLanguage.Japanese, CallPolicy.resolveLocale(Locale.JAPAN))
     }
 
     @Test fun explicitSimOverridesPreferenceAndMissingPreferenceNeverFallsBack() {

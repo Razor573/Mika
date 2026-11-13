@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">در حال اتصال صدای تماس</string>
     <string name="calls_notification_connected_waiting">هوش مصنوعی متصل شد. در انتظار صحبت طرف مقابل است؛ هر زمان می‌توانید تماس را بر عهده بگیرید.</string>
     <string name="calls_notification_connected">هوش مصنوعی متصل شد. هر زمان می‌توانید خودتان تماس را بر عهده بگیرید.</string>
+    <string name="calls_summary_updated">خلاصه به‌روزرسانی شد</string>
 </resources>

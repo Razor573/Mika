@@ -24,7 +24,8 @@ object SkillOutcomes {
     private const val WINDOW = 3
     private const val BAD_IN_WINDOW = 2
     /** 结果卡片与核查退回:照着技能做却被核查退回,判为 verifier_rejected。 */
-    const val VERIFIER_REJECTED_MARK = "核查未通过"
+    const val VERIFIER_REJECTED_MARK = "Verification failed"
+    private const val LEGACY_VERIFIER_REJECTED_MARK = "核查未通过"
 
     /** 追加一次结果并只留最近 [KEEP] 次;按规则可能转为停用。 */
     fun record(s: PersonalSkill, r: SkillResult, followed: Boolean): PersonalSkill {
@@ -61,7 +62,7 @@ object SkillOutcomes {
             else -> SkillResult.unverified
         }
         is TaskState.Failed -> when {
-            VERIFIER_REJECTED_MARK in end.reason -> SkillResult.verifier_rejected
+            VERIFIER_REJECTED_MARK in end.reason || LEGACY_VERIFIER_REJECTED_MARK in end.reason -> SkillResult.verifier_rejected
             end.kind == FailKind.GaveUp || end.kind == FailKind.StepLimit || end.kind == FailKind.TokenLimit -> SkillResult.failed
             // 模型出错、运行环境出问题、操作保护停下、进程中断:和照着做灵不灵无关
             else -> SkillResult.unreviewed

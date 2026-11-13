@@ -112,16 +112,16 @@ data class ModelEndpoint(val protocol: ModelProtocol, val baseUrl: String, val r
 
 /** 列模型为什么失败;[text] 是给人看的原因。 */
 enum class ListFailure(val text: String) {
-    BadUrl("接口地址不对,要以 http:// 或 https:// 开头"),
-    Auth("API Key 无效或没有权限"),
-    Quota("账户额度已用完"),
-    RateLimited("请求太频繁,请稍后再试"),
-    Network("连不上这个地址,请检查网络和接口地址"),
-    ProxyUnreachable("连不上网络代理,或代理没有转发这个请求;请检查设置 › 网络代理"),
-    ProxyAuth("网络代理拒绝了账号或密码,请检查设置 › 网络代理"),
-    NotSupported("这个服务不提供模型列表"),
-    Server("服务暂时出错,请稍后再试"),
-    BadResponse("返回的内容看不懂,请检查接口地址和接口类型"),
+    BadUrl("Invalid endpoint URL; it must start with http:// or https://"),
+    Auth("Invalid API key or missing permission"),
+    Quota("Account quota exhausted"),
+    RateLimited("Too many requests; please try again later"),
+    Network("Could not reach this address; check your network and endpoint URL"),
+    ProxyUnreachable("Could not reach the network proxy, or the proxy did not forward the request; check Settings › Network proxy"),
+    ProxyAuth("Network proxy rejected the username or password; check Settings › Network proxy"),
+    NotSupported("This service does not provide a model list"),
+    Server("Service temporarily unavailable; please try again later"),
+    BadResponse("Could not understand the response; check the endpoint URL and API format"),
     ;
 
     companion object {
@@ -137,7 +137,7 @@ enum class ListFailure(val text: String) {
 sealed interface ModelListResult {
     data class Ok(val models: List<ListedModel>) : ModelListResult
     data class Failed(val reason: ListFailure, val detail: String = "") : ModelListResult {
-        val message: String get() = if (detail.isEmpty()) reason.text else "${reason.text}($detail)"
+        val message: String get() = if (detail.isEmpty()) reason.text else "${reason.text} ($detail)"
     }
 }
 

@@ -1,37 +1,37 @@
 ---
 name: content-transcribe
-display: 把内容整理成文字
-description: 把视频、播客、文章整理成文字:摘要、分章节、摘引文或改写成文章
-aliases: ["总结视频", "整理播客", "文章摘要", "提取字幕"]
+display: Turn content into text
+description: Summarise, quote or rewrite videos, podcasts and articles
+aliases: ["summarise video", "summarise podcast", "summarise article", "extract subtitles", "get transcript"]
 apps: ["bilibili", "xiaohongshu"]
 sites: ["youtube.com", "xiaoyuzhoufm.com"]
-terms: ["摘要", "总结", "转录", "字幕", "播客", "章节", "要点", "引文", "文字稿"]
+terms: ["summary", "summarise", "transcribe", "transcript", "subtitles", "captions", "podcast", "chapters", "key points", "quotes"]
 ---
-## 入口
+## Entry
 
-先问清要哪种结果:全文文字稿、摘要、章节、引文,还是改写成一篇文章。用户没说时,做一份五到十句的摘要。
+First clarify which output format the user wants: full transcript, summary, chapters, quotes, or a rewritten article. If the user did not specify, write a five-to-ten-sentence summary.
 
-文字从内容所在的地方取:文章读网页正文;视频取字幕或简介里的文字稿;播客看节目页有没有文字稿或节目笔记。本机没有语音转文字,只有音频时请用户给文字稿或字幕文件。
+Get the text from wherever the content lives: read page body text for articles; use subtitles/captions or a transcript in the description for videos; check the episode page for a transcript or show notes for podcasts. This device has no speech-to-text transcription: if only audio is available, ask the user for a transcript or subtitle file.
 
-## 步骤
+## Steps
 
-1. **取全文**:用 `web_read_page` 读页面正文;用户发来的字幕或文字稿文件在 `/workspace/inbox/`,用 `read_file` 读。
-2. **分段读**:内容长时分几段读,段与段之间留一点重叠,读完去掉重复,确认从头到尾没有漏段。
-3. **按要的形式写**:各种形式的写法和样例见 `references/transcript-output-formats.md`,写之前读一遍。摘要的骨架是:一两句总述;按出现顺序列三到八个主题,每个带大致的开始时间和两三句内容;最后列值得记下的观点、数字和提到的书或作品。
-4. **用原内容的语言写**,用户另有要求时照用户的。
-5. **复读**:写完对照原文看一遍:顺序对不对,有没有漏掉的主题,时间和引文能不能在原文里找到。
+1. **Get the full text**: Read page content with `web_read_page`; for subtitle or transcript files the user sent under `/workspace/inbox/`, read them with `read_file`.
+2. **Read in chunks**: For long content, read it in several sections with a little overlap between chunks, remove duplicates after reading, and verify nothing was skipped from start to finish.
+3. **Write in the requested format**: Read `references/transcript-output-formats.md` before writing for the layout and examples of each format. A summary follows this outline: a one- or two-sentence overview; three to eight topics in order of appearance, each with an approximate start time and two or three sentences; and a closing list of notable arguments, figures, and any books or works mentioned.
+4. **Write in the source material's language**, unless the user asks for another language.
+5. **Re-read**: Check the result against the source: is the order right, were any topics missed, and can every timestamp and quote be traced back to the original text?
 
-## 容易出错的地方
+## Common pitfalls
 
-- 字幕只有文字,画面里的图表、演示和屏幕上的字读不到,写的时候不能说成看过画面。
-- 自动生成的字幕常有错字和断句错误,专有名词、人名和数字要结合上下文或简介核对。
-- 时间是根据字幕位置估的,就写「约第 23 分钟」,不写成精确到秒。
-- 听不清、字幕缺失的段落要标出来,不去补写。
+- Captions only contain spoken words: charts, demos and on-screen text are not visible in them, so never write as though you saw the visuals.
+- Auto-generated captions often have typos and wrong sentence breaks; verify proper nouns, names and figures against the context or description.
+- When timestamps are estimated from subtitle positions, write "around 23:00" rather than pretending second-level precision.
+- Mark unclear or missing parts of captions as gaps instead of inventing text to fill them.
 
-## 怎样算办成(核实证据)
+## Done criteria (verify evidence)
 
-结果覆盖原内容的全部段落;每条引文和时间都能在取到的字幕或正文里找到。
+The output covers every section of the source material, and every quote and timestamp can be found in the fetched captions or body text.
 
-## 什么时候停下交给用户
+## When to pause for the user
 
-内容要登录或付费才能看,或者只有音频、没有任何文字稿时,告诉用户缺什么,请用户提供。
+If the content requires a login or payment, or if there is only audio with no transcript or captions, tell the user what is missing and ask them to provide it.

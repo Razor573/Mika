@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">جارٍ توصيل صوت المكالمة</string>
     <string name="calls_notification_connected_waiting">تم اتصال الذكاء الاصطناعي. بانتظار حديث الطرف الآخر، ويمكنك تولي المكالمة في أي وقت.</string>
     <string name="calls_notification_connected">تم اتصال الذكاء الاصطناعي. يمكنك تولي المكالمة بنفسك في أي وقت.</string>
+    <string name="calls_summary_updated">تم تحديث الملخص</string>
 </resources>

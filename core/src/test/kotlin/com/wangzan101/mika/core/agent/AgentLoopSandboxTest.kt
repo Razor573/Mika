@@ -52,7 +52,7 @@ class AgentLoopSandboxTest {
         val r = loop(m).run("跑脚本")
         assertTrue(r.toString(), r is TaskState.Failed)
         r as TaskState.Failed
-        assertTrue(r.reason, r.reason.startsWith("已安全停止(sandbox_loop)"))
+        assertTrue(r.reason, r.reason.startsWith("Stopped safely (sandbox_loop)"))
         assertEquals(FailKind.Guard, r.kind)
         assertEquals(5, sb.runs.size)
         val results = toolResults(m)

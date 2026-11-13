@@ -112,7 +112,7 @@
 |---|---|
 | **App** | 阿里巴巴、支付宝、Android 设置、百度、百家号、哔哩哔哩、BOSS直聘、Chrome、得到、大众点评、抖音、飞书、Gmail、京东、即刻、快手、领英、美团、美团外卖、拼多多、QQ、QQ邮箱、QQ音乐、淘宝、Telegram、今日头条、Uber、Uber Eats、微信、微博、WhatsApp、X、闲鱼、小红书、知乎 |
 | **网站** | 铁路12306、1688、Amazon、百度搜索、哔哩哔哩、Google Calendar、携程旅行、大众点评、豆瓣、抖音、GitHub、Instagram、京东、Gmail、Google Maps、美团、淘宝网、Telegram、百度贴吧、百度热搜、微博、搜狗微信、WhatsApp、小红书、小宇宙、QQ音乐、YouTube、知乎、BOSS直聘 |
-| **通用做法**（技能） | 改 Mika 自己的设置、把内容整理成文字、处理 PDF 文档、查清一件事、消息与邮件、写技能 |
+| **通用做法**（技能） | Change Mika's settings、Turn content into text、Work with PDFs、Research a topic、Messages & email、Write skills |
 <!-- generated:knowledge:end -->
 
 </details>
@@ -122,7 +122,7 @@
 
 <!-- generated:providers:start -->
 <!-- 这一段由 ./gradlew updateReadme 生成，不要手改 -->
-内置 DeepSeek、通义千问、Kimi、智谱、智谱 Coding Plan、硅基流动、火山方舟、MiniMax、阶跃星辰、腾讯混元、百度千帆、OpenRouter、Requesty、OpenCode Go、Anthropic、Gemini、Vertex AI、OpenAI、xAI、Mistral、Groq、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、Vertex、OpenAI Responses 接口都能接。
+内置 DeepSeek、Qwen、Kimi、Zhipu、Zhipu Coding Plan、SiliconFlow、Volcengine Ark、MiniMax、StepFun、Tencent Hunyuan、Baidu Qianfan、OpenRouter、Requesty、OpenCode Go、Anthropic、Gemini、Vertex AI、OpenAI、xAI、Mistral、Groq、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、Vertex、OpenAI Responses 接口都能接。
 <!-- generated:providers:end -->
 
 也可以不填 Key：ChatGPT（Plus / Pro）、xAI / Grok、OpenRouter 账号登录。添加模型的步骤和各家登录的注意事项见[模型与登录](../models.md)。

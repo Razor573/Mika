@@ -1,7 +1,10 @@
+@file:Suppress("UNUSED_PARAMETER")
+
 package com.wangzan101.mika.personal
 
 import android.content.Context
 import com.wangzan101.mika.R
+import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.core.personal.PersonalMessage
 import com.wangzan101.mika.core.personal.PersonalTask
 import com.wangzan101.mika.core.personal.PersonalSystemException
@@ -30,16 +33,23 @@ fun personalSystemText(context: Context, type: String?, fallback: String): Strin
         "waiting" -> R.string.personal_system_waiting
         else -> return fallback
     }
-    return context.getString(id)
+    return tr(id)
 }
 
 fun personalStopErrorText(context: Context, error: Throwable): String =
     personalSystemText(context, (error as? PersonalSystemException)?.systemType,
-        error.message ?: context.getString(R.string.personal_system_stop_failed))
+        error.message ?: tr(R.string.personal_system_stop_failed))
 
 fun PersonalMessage.displayText(context: Context): String = personalSystemText(context, systemType, text)
-fun PersonalTask.displayDetail(context: Context): String =
-    if (detailSystemType == "task_amendment" && detail.startsWith("补充：")) {
-        context.getString(R.string.personal_system_task_amendment, detail.removePrefix("补充："))
-    } else personalSystemText(context, detailSystemType, detail)
+fun PersonalTask.displayDetail(context: Context): String {
+    val amendment = if (detailSystemType == "task_amendment") {
+        when {
+            detail.startsWith("Additional instruction: ") -> detail.removePrefix("Additional instruction: ")
+            detail.startsWith("补充：") -> detail.removePrefix("补充：")
+            else -> null
+        }
+    } else null
+    return amendment?.let { tr(R.string.personal_system_task_amendment, it) }
+        ?: personalSystemText(context, detailSystemType, detail)
+}
 fun PersonalTask.displayResult(context: Context): String? = result?.let { personalSystemText(context, resultSystemType, it) }

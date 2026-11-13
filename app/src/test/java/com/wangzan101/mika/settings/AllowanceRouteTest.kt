@@ -14,7 +14,7 @@ class AllowanceRouteTest {
         val sources = mapOf(
             "DeepSeek" to AllowanceSource.DeepSeek,
             "Kimi" to AllowanceSource.Kimi,
-            "硅基流动" to AllowanceSource.SiliconFlow,
+            "SiliconFlow" to AllowanceSource.SiliconFlow,
             "OpenRouter" to AllowanceSource.OpenRouter,
         )
         for (preset in ProviderPresets.all.filter { it.baseUrl.isNotEmpty() }) {

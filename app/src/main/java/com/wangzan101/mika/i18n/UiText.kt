@@ -1,5 +1,6 @@
 package com.wangzan101.mika.i18n
 
+import android.content.Context
 import android.content.res.Resources
 import com.wangzan101.mika.R
 import java.util.Locale
@@ -25,6 +26,11 @@ object UiText {
 
 /** 取一条界面文字;有 [args] 时按格式填进去(和 Resources.getString 一样)。 */
 fun tr(@StringRes id: Int, vararg args: Any?): String = UiText.require().string(id, args)
+
+/** Resolves UI text via [UiText] when initialized, or falls back to [context.getString]. */
+fun trOr(context: Context, @StringRes id: Int, vararg args: Any?): String =
+    UiText.source?.string(id, args)
+        ?: if (args.isEmpty()) context.getString(id) else context.getString(id, *args)
 
 /** 取一条随数量变化的界面文字;不给 [args] 时把 [count] 当唯一的参数填进去。 */
 fun trPlural(@PluralsRes id: Int, count: Int, vararg args: Any?): String = UiText.require().plural(id, count, args)

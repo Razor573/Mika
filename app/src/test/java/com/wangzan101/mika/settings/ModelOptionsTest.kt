@@ -66,7 +66,7 @@ class ModelOptionsTest {
             ListedModel("moonshot-v1"),
         )
         val options = ModelOptions.merge(listed, base)
-        val qwen = ProviderPresets.all.single { it.label == "通义千问" }.familyTokens
+        val qwen = ProviderPresets.all.single { it.label == "Qwen" }.familyTokens
         assertEquals(listOf("qwen"), qwen)
         assertEquals(
             listOf("qwen-plus", "qwen-max", "Other/Chat", "antdigital/Ling-3.1-flash", "moonshot-v1"),

@@ -1,26 +1,27 @@
-你把同一次人工示范整理成一份待确认的技能。你看不到屏幕，只能根据下面的目标和步骤摘要来写。摘要里没有输入的原文，也没有截图。
+You turn a single human demonstration into a pending personal skill awaiting confirmation. You cannot see the screen; write solely from the target language, goal, and step summary below. Neither typed text nor screenshots are saved in the summary.
 
-只输出一份 Markdown，不要输出别的文字。格式：
+Output ONLY one Markdown document and no other text, in this exact format:
 
 ---
-name: <小写英文和连字符>
-display: <简短名称>
-description: <什么情况下用这份技能>
-apps: [<这次出现过的包名>]
-aliases: [<用户可能怎么说这件事>]
+name: <lowercase English letters, digits, and hyphens>
+display: <short display name>
+description: <when to use this skill>
+apps: [<package names seen in this demonstration>]
+aliases: [<short phrases the user might say for this task>]
 source: demonstrated
 ---
-## 入口
-## 步骤
-## 容易出错的地方
-## 怎样算办成(核实证据)
-## 什么时候停下交给用户
+## Entry
+## Steps
+## Common pitfalls
+## Done criteria
+## When to pause for the user
 
-要求：
-- 五个小节都要有，标题照抄。全文不超过 3000 字。
-- 写的是难找的入口和操作策略，不是坐标，也不是逐步宏。
-- 每条事实标明来源：观察到的、你说明的、推测。摘要里没有的内容只能写成推测，而且要少。
-- 这次没走到的入口不能写成不存在。
-- 不要写密码、验证码、卡号，也不要声称 Mika 已经试跑成功。
-- 「什么时候停下交给用户」要写明：当前界面看不出入口或前置条件时，停止套用，改用平常的查看和询问。付款、发送、下单交给用户。
-- 不要用反引号包工具名。
+Requirements:
+- Write display, description, aliases, and all section prose in the Target language specified in the request (defaulting to English if unspecified). Keep the YAML keys, source, and the exact five English headings (## Entry, ## Steps, ## Common pitfalls, ## Done criteria, ## When to pause for the user) verbatim. Keep on-screen UI labels as observed.
+- Include all five sections with those exact headings. Keep the whole document under 3,000 characters.
+- Describe hard-to-find entry points and interaction strategies rather than screen coordinates or rigid step-by-step macros.
+- Mark the provenance of each fact: [Observed], [You noted], or [Inferred]. Keep inferred items rare and limited strictly to what is not stated in the summary.
+- Never claim an entry point not taken during this demonstration does not exist.
+- Never include passwords, verification codes, or card numbers, and never claim that Mika has already successfully trial-run this skill.
+- Under ## When to pause for the user, state clearly: if the current screen does not show the entry or preconditions, stop following this skill and fall back to normal inspection and asking; pause and hand over to the user for payment, sending, or placing an order.
+- Do not put tool names in backticks.

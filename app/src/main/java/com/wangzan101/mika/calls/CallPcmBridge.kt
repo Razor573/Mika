@@ -72,18 +72,18 @@ internal class CallPcmBridge(
         }
         try {
             if (!session.setMuted(false) || (greeting.isNotBlank() && !session.sendGreeting(greeting))) {
-                throw CallMediaFailure("火山未接受本次通话的开场白")
+                throw CallMediaFailure("Volcengine rejected the greeting for this call")
             }
             val input = launch(Dispatchers.IO) {
                 val frame = ByteArray(VolcRealtimeClient.INPUT_CHUNK_BYTES)
                 var position = 0
                 while (true) {
                     val count = callPipeIo { capture.read(frame, position, frame.size - position) }
-                    if (count < 0) throw CallMediaFailure("运营商音频输入已断开")
+                    if (count < 0) throw CallMediaFailure("Carrier audio input disconnected")
                     if (count == 0) continue
                     position += count
                     if (position == frame.size) {
-                        if (!session.sendPcm16(frame)) throw CallMediaFailure("火山音频输入已中断")
+                        if (!session.sendPcm16(frame)) throw CallMediaFailure("Volcengine audio input interrupted")
                         counters?.inputAccepted(frame, System.nanoTime())
                         position = 0
                     }
@@ -98,7 +98,7 @@ internal class CallPcmBridge(
                                 val queuedBytes = playbackQueue.offer(event.pcm)
                                 if (queuedBytes == null) {
                                     counters?.outputRejected()
-                                    throw CallMediaFailure("通话待播音频积压超过安全上限，已交还系统")
+                                    throw CallMediaFailure("Pending call audio queue exceeded the safe limit; handed back to the system")
                                 }
                                 cancelFarewellWaiter()
                                 farewell.audio(event.pcm.size)
@@ -114,7 +114,7 @@ internal class CallPcmBridge(
                                     val cleared = interruptPlayback() && withTimeoutOrNull(750) {
                                         writerLock.withLock { interruptPlayback() }
                                     } == true
-                                    if (!cleared) throw CallMediaFailure("通话音频无法及时停止，已交还系统")
+                                    if (!cleared) throw CallMediaFailure("Call audio could not stop in time; handed back to the system")
                                     farewell.afterPairedFlush()
                                 }
                                 // Some providers report a second cancellation after user speech starts.
@@ -147,11 +147,11 @@ internal class CallPcmBridge(
                                 checkFarewell()
                             }
                             is VolcRealtimeEvent.Failed -> throw event.error
-                            VolcRealtimeEvent.Closed -> throw CallMediaFailure("火山语音会话已结束，电话由系统处理")
+                            VolcRealtimeEvent.Closed -> throw CallMediaFailure("Volcengine voice session ended; the system Phone app is handling the call")
                             else -> Unit
                         }
                     }
-                    throw CallMediaFailure("火山语音连接已断开，电话由系统处理")
+                    throw CallMediaFailure("Volcengine voice connection disconnected; the system Phone app is handling the call")
                 } finally {
                     input.cancel()
                     flushAssistantText()

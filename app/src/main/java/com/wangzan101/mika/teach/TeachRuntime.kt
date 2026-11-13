@@ -19,6 +19,7 @@ import com.wangzan101.mika.core.teach.TeachTrace
 import com.wangzan101.mika.core.teach.TeachWatch
 import com.wangzan101.mika.core.teach.teachGoalAccepted
 import com.wangzan101.mika.core.tool.Verb
+import com.wangzan101.mika.i18n.AppLanguage
 import com.wangzan101.mika.settings.ProviderStore
 import com.wangzan101.mika.task.TaskCenterState
 import kotlinx.coroutines.CoroutineScope
@@ -253,7 +254,7 @@ class TeachRuntime(
         }
         return TeachDraft.draft(
             snapshot, model, knownToolNames(), knownTools().nameOf(Verb.RunBundledScript), bundled.runnableScripts(), taken,
-            System.currentTimeMillis(),
+            System.currentTimeMillis(), AppLanguage.promptLanguageName(app),
         )
     }
 

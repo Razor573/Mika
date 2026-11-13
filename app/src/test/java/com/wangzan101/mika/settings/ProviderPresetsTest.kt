@@ -50,8 +50,8 @@ class ProviderPresetsTest {
         assertEquals("Anthropic", ProviderPresets.forHost("https://api.anthropic.com/v1")?.label)
         assertEquals("OpenAI", ProviderPresets.forHost("https://api.openai.com")?.label)
         assertEquals("DeepSeek", ProviderPresets.forHost("https://api.deepseek.com/v1")?.label)
-        assertEquals("智谱", ProviderPresets.forHost("https://open.bigmodel.cn/api/paas/v4")?.label)
-        assertEquals("智谱 Coding Plan", ProviderPresets.forHost("https://open.bigmodel.cn/api/coding/paas/v4")?.label)
+        assertEquals("Zhipu", ProviderPresets.forHost("https://open.bigmodel.cn/api/paas/v4")?.label)
+        assertEquals("Zhipu Coding Plan", ProviderPresets.forHost("https://open.bigmodel.cn/api/coding/paas/v4")?.label)
         assertNull(ProviderPresets.forHost("https://models.example.com/v1"))
         assertNull(ProviderPresets.forHost("http://127.0.0.1:11434/v1"))
         assertNull(ProviderPresets.forHost("not a url"))
@@ -79,8 +79,8 @@ class ProviderPresetsTest {
 
     /** Coding Plan 的 Key 和标准 API 不通用;地址要落在官方分开的 OpenAI 兼容端点上。 */
     @Test fun codingPlanUsesItsOwnDocumentedEndpoint() {
-        val standard = preset("智谱")
-        val coding = preset("智谱 Coding Plan")
+        val standard = preset("Zhipu")
+        val coding = preset("Zhipu Coding Plan")
         assertEquals("https://open.bigmodel.cn/api/coding/paas/v4", coding.baseUrl)
         assertEquals(ProviderConfig.Kind.OpenAiCompat, coding.kind)
         assertNotEquals(standard.baseUrl, coding.baseUrl)

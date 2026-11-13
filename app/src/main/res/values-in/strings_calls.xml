@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">Menghubungkan audio panggilan</string>
     <string name="calls_notification_connected_waiting">AI terhubung. Menunggu lawan bicara berbicara. Anda dapat mengambil alih kapan saja.</string>
     <string name="calls_notification_connected">AI terhubung. Anda dapat berbicara sendiri kapan saja.</string>
+    <string name="calls_summary_updated">Ringkasan diperbarui</string>
 </resources>

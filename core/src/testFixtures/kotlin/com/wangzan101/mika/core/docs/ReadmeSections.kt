@@ -81,7 +81,7 @@ object ReadmeSections {
         val names = presets.filter { it.baseUrl.isNotEmpty() }.joinToString(", ") { it.label }
         val custom = presets.firstOrNull { it.baseUrl.isEmpty() }?.label
         val kinds = orList(customKinds(presets).map { kindNameEn(it) })
-        val pick = if (custom == null) "Custom" else "Custom ($custom)"
+        val pick = if (custom == null || custom == "Custom") "Custom" else "Custom ($custom)"
         return listOf(NOTE_EN, "Presets for $names and more; for any other provider pick $pick, which takes any $kinds endpoint.").joinToString("\n")
     }
 

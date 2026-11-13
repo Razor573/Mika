@@ -6,10 +6,14 @@ import com.wangzan101.mika.core.agent.FailKind
 import com.wangzan101.mika.core.agent.RunOutcome
 import com.wangzan101.mika.core.agent.TaskState
 import com.wangzan101.mika.core.knowledge.GuideCatalog
+import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.record.RunEvent
 import com.wangzan101.mika.core.skills.PersonalSkill
 import com.wangzan101.mika.core.skills.SkillDrafter
+import com.wangzan101.mika.core.skills.SkillOutcomes
 import com.wangzan101.mika.core.skills.SkillStatus
+import com.wangzan101.mika.i18n.ResFileTexts
+import com.wangzan101.mika.i18n.UiText
 import com.wangzan101.mika.settings.MemorySwitches
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -28,7 +32,7 @@ class SedimentationWiringTest {
     private val catalog = GuideCatalog.loadBundled()
     private val tools = setOf("phone_launch_app", "phone_observe", "phone_tap", "phone_type_text", "hand_to_user", "finish")
     private val draftMd = "---\nname: send-wechat-message\ndisplay: 发微信消息\ndescription: 给指定联系人发一条微信消息\napps: [com.tencent.mm]\nsource: learned\n---\n" +
-        "## 入口\n用 `phone_launch_app` 打开。\n## 步骤\n1. 点搜索\n## 容易出错的地方\n同名群聊。\n## 怎样算办成(核实证据)\n消息出现在聊天里。\n## 什么时候停下交给用户\n要登录时。"
+        "## Entry\n用 `phone_launch_app` 打开。\n## Steps\n1. 点搜索\n## Common pitfalls\n同名群聊。\n## Done criteria\n消息出现在聊天里。\n## When to pause for the user\n要登录时。"
 
     private fun events(verdict: String = "pass", extra: List<RunEvent> = emptyList()): List<RunEvent> {
         var t = 0L
@@ -116,7 +120,7 @@ class SedimentationWiringTest {
         val skills = MapSkills(skill)
         val used = listOf(RunEvent.SkillUsed(41, "wechat-msg", "viewed"))
         val notes = runBlocking {
-            learning(skills, learn = true).learn(after(events(verdict = "fail", extra = used), TaskState.Failed("核查未通过:消息没发出去", FailKind.GaveUp)))
+            learning(skills, learn = true).learn(after(events(verdict = "fail", extra = used), TaskState.Failed("${SkillOutcomes.VERIFIER_REJECTED_MARK}: message not sent", FailKind.GaveUp)))
         }
         assertEquals(SkillStatus.suspended, skills.get("wechat-msg")!!.status)
         assertEquals(listOf("verifier_rejected"), skills.get("wechat-msg")!!.outcomes)
@@ -159,5 +163,37 @@ class SedimentationWiringTest {
         assertEquals(listOf("verifier_rejected"), skills.get("wechat-msg")!!.outcomes)
         assertEquals(SkillStatus.suspended, skills.get("wechat-msg")!!.status)
         assertEquals("wechat-msg", notes.skillNotes.single().suspended)
+    }
+
+    @Test fun targetLanguageFollowsUiLocaleAndDefaultsToEnglish() {
+        val zhModel = TextModel(draftMd)
+        runBlocking { learning(MapSkills(), learn = true, model = zhModel).learn(after(events())) }
+        val zhSent = zhModel.requests.single().flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString { it.text }
+        assertTrue(zhSent, zhSent.contains("Target language: Simplified Chinese"))
+
+        val prev = UiText.source
+        try {
+            UiText.source = ResFileTexts.english
+            val enModel = TextModel(draftMd)
+            runBlocking { learning(MapSkills(), learn = true, model = enModel).learn(after(events())) }
+            val enSent = enModel.requests.single().flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString { it.text }
+            assertTrue(enSent, enSent.contains("Target language: English"))
+
+            UiText.source = null
+            val fallbackModel = TextModel(draftMd)
+            // Verify RunLearning without UiText.source drafts safely using default English targetLanguage
+            val skills = MapSkills()
+            val note = runBlocking {
+                RunLearning(
+                    MemorySwitches(learnSkills = true), null, skills, GuideCatalog.withPersonal(catalog, skills),
+                    null, SkillDrafter(fallbackModel), { "draft-en" }, autoApprove = true,
+                ).learn(after(events()))
+            }
+            assertTrue(note.skillNotes.isEmpty())
+            val fallbackSent = fallbackModel.requests.single().flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString { it.text }
+            assertTrue(fallbackSent, fallbackSent.contains("Target language: English"))
+        } finally {
+            UiText.source = prev
+        }
     }
 }

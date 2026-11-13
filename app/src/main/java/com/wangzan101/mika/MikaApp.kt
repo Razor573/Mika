@@ -398,6 +398,7 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         // 上次进程在复制或绑定分享草稿途中退出时留下的临时文件;目录至多保留一份有效草稿。
         runCatching { sharedDrafts.cleanup() }
         // 界面以外的文字(通知、服务、悬浮胶囊)按 App 语言取
+        AppLanguage.ensureDefaultLanguage(this)
         AppLanguage.applyDefaultLocale(this)
         UiText.source = ResourceTexts { AppLanguage.resources(this) }
         teach = TeachRuntime(this, taskState)

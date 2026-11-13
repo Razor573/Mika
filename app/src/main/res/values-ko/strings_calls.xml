@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">통화 오디오 연결 중</string>
     <string name="calls_notification_connected_waiting">AI가 연결되었습니다. 상대방의 말을 기다리는 중이며 언제든 이어받을 수 있습니다.</string>
     <string name="calls_notification_connected">AI가 연결되었습니다. 언제든 직접 이어받을 수 있습니다.</string>
+    <string name="calls_summary_updated">요약이 업데이트되었습니다</string>
 </resources>

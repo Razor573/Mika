@@ -1,7 +1,11 @@
 package com.wangzan101.mika.task
 
+import android.content.Context
 import com.wangzan101.mika.R
+import com.wangzan101.mika.i18n.AppLanguage
+import com.wangzan101.mika.i18n.UiText
 import com.wangzan101.mika.i18n.tr
+import com.wangzan101.mika.i18n.uiLocale
 import com.wangzan101.mika.core.agent.LearnGate
 import com.wangzan101.mika.core.agent.RunOutcome
 import com.wangzan101.mika.core.agent.TaskState
@@ -81,6 +85,8 @@ class RunLearning(
     private val yieldToForeground: suspend () -> Unit = {},
     private val appDrafter: AppKnowledgeDrafter? = null,
     private val appDrafts: AppKnowledgeDraftStore? = null,
+    private val context: Context? = null,
+    private val targetLanguage: () -> String = { resolveTargetLanguage(context) },
 ) {
     suspend fun learn(a: RunAftermath): RunNotes {
         yieldToForeground()
@@ -142,7 +148,7 @@ class RunLearning(
         if (Eligibility.check(events, followed, a.tools, done = LearnGate.done(a.end, a.outcome)) != null) return null
         val r = guarded(null) {
             yieldToForeground()
-            d.draft(DraftInput(runId, a.goal, done?.answer.orEmpty(), done?.sources.orEmpty(), events, a.toolNames, a.tools), skills, catalog)
+            d.draft(DraftInput(runId, a.goal, done?.answer.orEmpty(), done?.sources.orEmpty(), events, a.toolNames, a.tools), skills, catalog, targetLanguage())
         }
         val draft = r as? DraftResult.Draft ?: return null
         // 是对一份待确认草稿的更新:写回那份草稿,不另起一份
@@ -169,7 +175,7 @@ class RunLearning(
             val current = guarded(null) { drafts.inUse(app.name) }
             val draft = guarded(null) {
                 yieldToForeground()
-                drafter.draft(run, app, knowledge.builtIn(app.name), current, ids(), events.lastOrNull()?.atMs ?: 0L)
+                drafter.draft(run, app, knowledge.builtIn(app.name), current, ids(), events.lastOrNull()?.atMs ?: 0L, targetLanguage())
             } ?: return@mapNotNull null
             if (!guarded(false) { drafts.putPending(draft) }) return@mapNotNull null
             SkillNote(tr(if (draft.revises != null) R.string.skill_app_revised else R.string.skill_app_draft, app.display))
@@ -186,6 +192,12 @@ class RunLearning(
     }
 
     companion object {
+        private fun resolveTargetLanguage(context: Context?): String = when {
+            context != null -> AppLanguage.promptLanguageName(context)
+            UiText.source != null -> AppLanguage.fromTag(uiLocale().toLanguageTag()).promptLanguageName(uiLocale())
+            else -> AppLanguage.English.promptLanguageName()
+        }
+
         /** 先发结果通知,再在后台学:用户先看到结果,学东西慢一点没关系。 */
         suspend fun launchAfter(scope: CoroutineScope, notify: suspend () -> Unit, learn: suspend () -> Unit): Job {
             notify()

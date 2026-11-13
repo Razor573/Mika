@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">正在連接通話音訊</string>
     <string name="calls_notification_connected_waiting">AI 已接通，正在等待對方說話，可隨時接管</string>
     <string name="calls_notification_connected">AI 已接通，可隨時手動接管</string>
+    <string name="calls_summary_updated">摘要已更新</string>
 </resources>

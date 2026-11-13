@@ -15,7 +15,7 @@ class CallTelecomAccessTest {
             val result = CallTelecomCommandOutcome.classify(exitCode, output)
             assertEquals(CallTelecomCommandOutcome.SHELL_APP_OPS_DENIED, result)
             assertEquals(
-                "系统限制 ADB 修改通话管理权限（缺少 MANAGE_APP_OPS_MODES），无法启用电话伴侣",
+                "The system restricts ADB from changing call management permissions (missing MANAGE_APP_OPS_MODES), so call companion cannot be enabled",
                 result.appOpsFailureMessage,
             )
             assertFalse(result.appOpsFailureMessage.contains(privateSuffix))
@@ -31,7 +31,7 @@ class CallTelecomAccessTest {
         ).forEach {
             val result = CallTelecomCommandOutcome.classify(255, it)
             assertEquals(CallTelecomCommandOutcome.FAILED, result)
-            assertEquals("系统未授予管理通话权限", result.appOpsFailureMessage)
+            assertEquals("The system did not grant call management permission", result.appOpsFailureMessage)
         }
         assertEquals(CallTelecomCommandOutcome.OK, CallTelecomCommandOutcome.classify(0, ""))
     }

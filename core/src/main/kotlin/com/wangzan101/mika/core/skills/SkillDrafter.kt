@@ -131,7 +131,7 @@ object ActionDigest {
                     }
                     val result = parse(e.resultJson)
                     val error = (result?.get("error") as? JsonPrimitive)?.contentOrNull
-                    val where = if (onWeb) site?.let { "网站 $it" } else app
+                    val where = if (onWeb) site?.let { "site $it" } else app
                     out += ActionLine(e.step, e.tool, target, where, e.changed, error, typed = verb == Verb.TypeText)
                 }
                 else -> Unit
@@ -145,13 +145,13 @@ object ActionDigest {
     fun render(lines: List<ActionLine>): String = lines.joinToString("\n") { l ->
         buildString {
             append(l.step).append(". ").append(l.tool)
-            l.target?.let { append(" 「").append(it).append("」") }
-            if (l.typed) append(" 输入 <输入内容>")
-            l.where?.let { append(" 在 ").append(it) }
+            l.target?.let { append(" \"").append(it).append("\"") }
+            if (l.typed) append(" type <typed text>")
+            l.where?.let { append(" in ").append(it) }
             when {
-                l.error != null -> append(" 出错:").append(l.error)
-                l.changed == true -> append(" 生效")
-                l.changed == false -> append(" 画面没变")
+                l.error != null -> append(" error:").append(l.error)
+                l.changed == true -> append(" changed")
+                l.changed == false -> append(" screen unchanged")
             }
         }
     }
@@ -184,13 +184,19 @@ sealed interface DraftResult {
  * 另列出已有的个人技能(连同待确认的草稿):这次的事和哪份是同一类事,由模型在头部写 `updates: <名字>` 说明,代码只核对名字确有其事。
  */
 class SkillDrafter(private val model: ChatModel) {
-    suspend fun draft(input: DraftInput, existing: PersonalSkills, catalog: GuideCatalog): DraftResult {
+    suspend fun draft(
+        input: DraftInput,
+        existing: PersonalSkills,
+        catalog: GuideCatalog,
+        targetLanguage: String = "English",
+    ): DraftResult {
         // 这一次的值(目标里引号内的、这次输入的文字、数字)换成占位,技能下次换个对象也用得上;
         // 回答和屏上的字照原样给、照原样收:里面的页面、按钮名字正是做法本身
         val literals = SkillRedactor.literals(input.goal, emptyList()) + SkillRedactor.textLiterals(typedTexts(input.events, input.tools))
         val keepDigits = catalogDigits(catalog)
         // 已有技能的名字照原样给(换了数字就对不上了);它们是用户自己的技能,不是这一次的值
-        val request = SkillRedactor.scrubNumbers(SkillRedactor.redact(request(input), literals), keepDigits) + "\n" + existingSkills(existing)
+        val redactedRequest = SkillRedactor.scrubNumbers(SkillRedactor.redact(request(input), literals), keepDigits)
+        val request = "Target language: $targetLanguage\n$redactedRequest\n${existingSkills(existing)}"
         val reply = try {
             model.complete(PROMPT, listOf(Message(Role.User, listOf(Part.Text(request)), Author.Mika)), emptyList())
         } catch (e: CancellationException) {
@@ -235,7 +241,7 @@ class SkillDrafter(private val model: ChatModel) {
             val meta = FrontMatter.parse(s.markdown).first
             "- ${s.name}(${meta["display"] as? String ?: s.name}):${meta["description"] as? String ?: ""}"
         }
-        return "已有的个人技能(含待用户确认的草稿):" + if (lines.isEmpty()) "无" else "\n" + lines.joinToString("\n")
+        return "Existing personal skills (including drafts awaiting confirmation):" + if (lines.isEmpty()) " none" else "\n" + lines.joinToString("\n")
     }
 
 
@@ -253,16 +259,16 @@ class SkillDrafter(private val model: ChatModel) {
             .flatMap { Regex("\\d{2,}").findAll(SkillRedactor.norm(it)).map { m -> m.value }.toList() }.toSet()
 
     private fun request(input: DraftInput): String = buildString {
-        appendLine("运行编号:${input.runId}")
-        appendLine("目标:${input.goal}")
-        appendLine("最终回答:${input.answer}")
+        appendLine("Run ID: ${input.runId}")
+        appendLine("Goal: ${input.goal}")
+        appendLine("Final answer: ${input.answer}")
         if (input.sources.isNotEmpty()) {
-            appendLine("回答的来源:")
-            input.sources.forEach { s -> appendLine("- 第 ${s.step} 步 ${s.kind} ${s.place.orEmpty()}" + s.title?.let { "「$it」" }.orEmpty()) }
+            appendLine("Answer sources:")
+            input.sources.forEach { s -> appendLine("- step ${s.step} ${s.kind} ${s.place.orEmpty()}" + s.title?.let { " \"$it\"" }.orEmpty()) }
         }
-        appendLine("动作清单:")
+        appendLine("Action trace:")
         appendLine(ActionDigest.render(ActionDigest.of(input.events, input.tools)))
-        append("可用工具:").append(input.toolNames.sorted().joinToString(", "))
+        append("Available tools: ").append(input.toolNames.sorted().joinToString(", "))
     }
 
     companion object {
@@ -285,8 +291,8 @@ class SkillDrafter(private val model: ChatModel) {
             val name = meta["name"] as? String
             if (name == null || !PersonalSkills.NAME.matches(name)) return "invalid_name"
             if ((meta["description"] as? String).isNullOrBlank()) return "missing_description"
-            val headings = body.lines().filter { it.startsWith("## ") }
-            if (SECTIONS.any { s -> headings.none { it.removePrefix("## ").trim().startsWith(s) } }) return "missing_section"
+            val headings = body.lines().filter { it.startsWith("## ") }.map { it.removePrefix("## ").trim() }
+            if (SECTION_ALIASES.any { aliases -> headings.none { h -> aliases.any { h.startsWith(it, ignoreCase = true) } } }) return "missing_section"
             if (md.length > MAX_CHARS) return "too_long"
             if (TOOL_MENTION.findAll(md).any { it.groupValues[1] !in toolNames }) return "unknown_tool"
             if (scriptTool != null && TOOL_MENTION.findAll(md).any { it.groupValues[1] == scriptTool }) {
@@ -297,7 +303,9 @@ class SkillDrafter(private val model: ChatModel) {
             if (SensitiveFilter.hit(md) != null) return "sensitive"
             return null
         }
-        val SECTIONS = listOf("入口", "步骤", "容易出错的地方", "怎样算办成", "什么时候停下交给用户")
+        val SECTIONS = listOf("Entry", "Steps", "Common pitfalls", "Done criteria", "When to pause for the user")
+        private val LEGACY_SECTIONS = listOf("入口", "步骤", "容易出错的地方", "怎样算办成", "什么时候停下交给用户")
+        private val SECTION_ALIASES = SECTIONS.zip(LEGACY_SECTIONS) { en, zh -> listOf(en, zh) }
         /** 反引号里形如工具名的标识符。 */
         private val TOOL_MENTION = Regex("`([a-z][a-z0-9_]*)`")
         /** 文中的技能脚本路径,如 `scripts/extract_pdf.py` 或 `skills/documents/scripts/extract_pdf.py`。 */

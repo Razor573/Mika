@@ -41,8 +41,8 @@ class StopSummaryTest {
         val events = greeting + RunEvent.Criteria(8, listOf("36 条日程都已保存"), emptyList(),
             progress = RunEvent.Progress("已加日程", 12, 36, "第 12 条"))
         val text = StopSummary.plain("添加整月日程", events, null, ::label, ::app)
-        assertTrue(text, text.contains("- 验收:36 条日程都已保存\n"))
-        assertTrue(text, text.contains("- 已确认进度:已加日程 · 12/36 · 第 12 条\n"))
+        assertTrue(text, text.contains("- Acceptance: 36 条日程都已保存\n"))
+        assertTrue(text, text.contains("- Confirmed progress: 已加日程 · 12/36 · 第 12 条\n"))
         val facts = StopSummary.facts("添加整月日程", events, null, ::label, ::app)
         assertTrue(facts, facts.contains("<acceptance>\n36 条日程都已保存\n</acceptance>"))
         assertTrue(facts, facts.contains("<progress>\n已加日程 · 12/36 · 第 12 条\n</progress>"))
@@ -53,13 +53,13 @@ class StopSummaryTest {
         val text = StopSummary.plain("把推荐里的岗位都打个招呼", greeting, null, ::label, ::app)
         assertEquals(
             listOf(
-                "已经停下,停止前做了这些:",
-                "- 去过:jobs.example.com",
-                "- 看过:jobs.example.com的推荐职位",
-                "- 做过:打开网页",
-                "- 对外发出了 3 次(jobs.example.com):给张三的产品经理岗位打招呼、给李四的运营岗位打招呼、给王五的设计岗位打招呼",
-                "- 有 1 步没成功",
-                "「把推荐里的岗位都打个招呼」还没做完的部分没有接着做。",
+                "Stopped. Before stopping, here is what was done:",
+                "- Visited: jobs.example.com",
+                "- Viewed: jobs.example.com · 推荐职位",
+                "- Done: 打开网页",
+                "- Sent externally 3 times (jobs.example.com): 给张三的产品经理岗位打招呼, 给李四的运营岗位打招呼, 给王五的设计岗位打招呼",
+                "- 1 step failed",
+                "The remaining parts of “把推荐里的岗位都打个招呼” were not continued.",
             ).joinToString("\n"),
             text,
         )
@@ -72,11 +72,11 @@ class StopSummaryTest {
             act(4, "phone_read", "com.android.settings", kind = "observe", title = "网络和互联网"),
         )
         val text = StopSummary.plain("看看设置里有什么", events, "网络页有 WLAN、热点", ::label, ::app)
-        assertTrue(text, text.contains("- 去过:设置\n"))
-        assertTrue(text, text.contains("- 看过:设置的网络和互联网\n"))
-        assertTrue(text, text.contains("- 做过:打开 App、点击 2 次\n"))
-        assertTrue(text, text.contains("- 停下时正在写:网络页有 WLAN、热点\n"))
-        assertFalse(text, text.contains("对外发出"))
+        assertTrue(text, text.contains("- Visited: 设置\n"))
+        assertTrue(text, text.contains("- Viewed: 设置 · 网络和互联网\n"))
+        assertTrue(text, text.contains("- Done: 打开 App, 点击 (2 times)\n"))
+        assertTrue(text, text.contains("- Drafting when stopped: 网络页有 WLAN、热点\n"))
+        assertFalse(text, text.contains("Sent externally"))
     }
 
     @Test fun nothingToSayWithoutActionsOrDraft() {
@@ -93,10 +93,10 @@ class StopSummaryTest {
         assertTrue(light.offeredTools.single().isEmpty())
         val input = (light.requests.single().single().parts.single() as Part.Text).text
         assertTrue(input, input.contains("<request>\n把推荐里的岗位都打个招呼\n</request>"))
-        assertTrue(input, input.contains("第 3 步 点击 · jobs.example.com(对外发出) —— 用意:给张三的产品经理岗位打招呼"))
-        assertTrue(input, input.contains("第 6 步 点击 · jobs.example.com(没成功) —— 用意:给赵六的测试岗位打招呼"))
+        assertTrue(input, input.contains("Step 3: 点击 · jobs.example.com (sent externally) — intent: 给张三的产品经理岗位打招呼"))
+        assertTrue(input, input.contains("Step 6: 点击 · jobs.example.com (failed) — intent: 给赵六的测试岗位打招呼"))
         // 连着读同一处只记一行
-        assertEquals(1, Regex("第 2 步 读网页").findAll(input).count())
+        assertEquals(1, Regex("Step 2: 读网页").findAll(input).count())
         assertTrue(input, input.contains("<last_read>\n推荐职位:张三"))
         assertTrue(input, input.contains("<draft>\n写到一半\n</draft>"))
         assertTrue(light.system!!.isNotBlank())
@@ -112,7 +112,7 @@ class StopSummaryTest {
         val many = (1..500).flatMap { listOf(said(it, "phone_tap", "第 $it 个".repeat(50)), act(it, "phone_tap", "com.a.b")) }
         val facts = StopSummary.facts("g", many, "x".repeat(10_000))
         assertTrue("${facts.length}", facts.length < 15_000)
-        assertTrue(facts.contains("中间省略"))
+        assertTrue(facts.contains("omitted in between"))
     }
 
     @Test fun fallsBackToMainModelThenToPlainText() = runTest {

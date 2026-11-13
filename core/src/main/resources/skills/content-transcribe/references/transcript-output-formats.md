@@ -1,47 +1,47 @@
-# 几种整理结果的写法
+# Output formats for written-up content
 
-时间一律写成「分:秒」,超过一小时写「时:分:秒」。估出来的时间前面加「约」。
+Always write timestamps as `MM:SS`, or `H:MM:SS` when longer than an hour. Prefix estimated timestamps with `~` or `approx.`.
 
-## 摘要
+## Summary
 
-五到十句,第三人称、现在时,讲清这期内容的主题、主要论点和结论。不加评价。
+Five to ten sentences in the third person, present tense, setting out the topic, main arguments and conclusions. Add no commentary or opinion.
 
-## 章节目录
+## Chapter list
 
-每行一个时间加一个短标题,标题不超过十五个字:
-
-```
-00:00 开场与话题
-03:40 为什么会有这个问题
-09:15 两种做法的对比
-21:30 实际数据
-35:05 听众提问
-```
-
-## 分章节摘要
-
-章节标题后面括号写这一章大约多长,下面两三句写这一章实际讲了什么:
+One timestamp and a short title (at most 10 words) per line:
 
 ```
-### 03:40 为什么会有这个问题(约 5 分钟)
-主讲人回顾了这个问题的由来,举了两个常见的例子。
-
-### 09:15 两种做法的对比(约 12 分钟)
-比较了做法甲和做法乙的成本和效果,结论是……
+00:00 Opening and topic
+03:40 Why this problem happens
+09:15 Comparing the two approaches
+21:30 Real-world numbers
+35:05 Listener Q&A
 ```
 
-## 引文
+## Chapter-by-chapter summary
 
-原话照录,后面写出现的时间;是字幕原文还是翻译,要注明:
+After each chapter heading, give the approximate duration in parentheses, followed by two or three sentences saying what the chapter actually covers:
 
 ```
-「先把数据弄干净,比换模型更重要。」—— 12:18
+### 03:40 Why this problem happens (~5 min)
+The speaker traces where the issue came from and gives two common examples.
+
+### 09:15 Comparing the two approaches (~12 min)
+Compares Approach A and Approach B on cost and results, concluding that...
 ```
 
-## 改写成文章
+## Quotes
 
-- 一个标题
-- 一段开头,说这是根据哪一期内容整理的
-- 每个主要话题一个小标题,下面成段叙述
-- 关键原话用引文格式,带时间
-- 结尾一段:要点或可以照着做的建议
+Copy the exact words followed by the timestamp, and note whether the quote comes from the original captions or a translation:
+
+```
+"Cleaning the data first matters more than swapping the model." — 12:18
+```
+
+## Article rewrite
+
+- A title
+- An opening paragraph saying which video, episode or piece this is based on
+- A subheading for each main topic with full paragraphs underneath
+- Key verbatim quotes formatted as quotes with timestamps
+- A closing paragraph with key takeaways or practical next steps

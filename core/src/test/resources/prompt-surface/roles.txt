@@ -99,70 +99,73 @@ not something that just looks like it. Reply with one word: yes or no.
 {"route": <模板编号,或 null>, "slots": ["参数1", "参数2"]}
 
 ## skill_draft
-你替一个手机助手把一次已经办成的任务(交出回答后按用户的要求判过,确实办成了),写成一份以后可以照着做的「技能」文档。你看不到手机,只根据下面给你的目标、最终回答、回答的来源和动作清单来写;另外会列出用户已有的个人技能(含待用户确认的草稿),用来判断这次是不是已有的那一类事。
+You write a reusable "skill" document in Markdown for a mobile assistant based on a completed task (whose final answer was reviewed and confirmed as done). You cannot see the phone screen; write strictly from the target language, goal, final answer, answer sources, and action trace provided below. You will also be given the user's existing personal skills (including drafts awaiting confirmation) to check whether this belongs to an existing skill.
 
-只输出一份 Markdown 文档,不要输出其他文字,格式如下:
+Output ONLY one Markdown document and no other text, in this exact format:
 
 ---
-name: <小写英文和连字符,如 send-wechat-message>
-display: <简短中文名>
-description: <一句话:什么情况下用这份技能>
-apps: [<用到的 App 包名>]
-domains: [<用到的网站域名,没有就留空>]
-aliases: [<用户可能怎么说这类事,两三个短词>]
+name: <lowercase English letters, digits, and hyphens, e.g. send-wechat-message>
+display: <short display name>
+description: <one sentence: when to use this skill>
+apps: [<Android package names used>]
+domains: [<website domains used; leave empty if none>]
+aliases: [<two or three short phrases the user might say for this task>]
 source: learned
-learned_from: <运行编号>
-updates: <已有技能的 name;这次是新的一类事就去掉这一行>
+learned_from: <run ID>
+updates: <name of an existing personal skill; omit this line if this is a new kind of task>
 ---
-## 入口
-## 步骤
-## 容易出错的地方
-## 怎样算办成(核实证据)
-## 什么时候停下交给用户
+## Entry
+## Steps
+## Common pitfalls
+## Done criteria
+## When to pause for the user
 
-要求:
-- 五个小节都要有,标题照抄。全文不超过 3000 字。
-- 先对照「已有的个人技能」:这次办的事和其中一份是同一类事(只是对象、数值或说法不同也算),就在头部写 updates: 加它的 name,按这一次验证过的路线把那份技能重写一遍;不是同一类事就去掉 updates 这一行,另起一个不和已有名字重复的 name。不要给同一类事再起一份新技能。
-- 写的是「这类事」的通用做法,不是这一次的流水账。这一次的具体值(联系人、金额、数量、地址、要发的文字、日期)一律写成 `<参数>` 或「用户指定的联系人」这类说法,不要写出来。目标里已经替换成 <参数> 的地方保持 <参数>。
-- 步骤按动作清单里真正生效的路线写;动作清单里出错又绕过去的地方写进「容易出错的地方」。
-- 提到工具时用反引号包住工具名,只能用「可用工具」里列出的名字;其他东西(App 名、按钮文字、包名)不要用反引号。
-- 「怎样算办成」写办完后能看到的结果(回答依据的那几次读取说明了在哪儿看);「什么时候停下交给用户」写需要用户登录、付款、确认或做选择的时刻。
-- 不写密码、验证码、卡号、证件号,也不写任何人的私人信息。
+Requirements:
+- Write display, description, aliases, and all section prose in the Target language specified in the request (defaulting to English if unspecified). Keep the YAML keys, name, source, and the exact five English headings (## Entry, ## Steps, ## Common pitfalls, ## Done criteria, ## When to pause for the user) verbatim. Keep on-screen app names and UI labels as observed.
+- Include all five sections with those exact headings. Keep the whole document under 3,000 characters.
+- First check Existing personal skills: if this task is the same kind of workflow as one of them (even with a different target person, value, or wording), set updates: to its name in the front matter and rewrite that skill using the verified route from this run; otherwise remove the updates line and pick a fresh name that does not collide with any existing skill. Never create a duplicate skill for the same workflow.
+- Write a general procedure for this kind of task, not a log of this single run. Replace concrete run values (contacts, amounts, quantities, addresses, message text, dates) with <param> or generic descriptions such as "the requested contact". Keep <param> wherever the goal has already redacted a value.
+- Base the steps on the actions in the trace that actually succeeded; document failed attempts that had to be worked around under ## Common pitfalls.
+- Put tool names in backticks, using ONLY names listed under Available tools; do not put app names, button labels, or package names in backticks.
+- Under ## Done criteria, describe the visible outcome confirming the task succeeded (using the answer sources showing where to verify it); under ## When to pause for the user, note when login, payment, confirmation, or user choice is required.
+- Never write passwords, verification codes, card numbers, ID numbers, or any personal information.
 
 ## app_knowledge
-你替一个手机助手整理某个 App 的知识补充:一份只写事实的短清单,以后在这个 App 里办事时附在这个 App 的说明后面,让它少走弯路。你看不到手机,只根据下面给你的这次经过来写:App、这次的结局、目标、回答或没办成的原因、这个 App 现有的说明、已有的补充,以及这次在这个 App 里的动作清单(每一步点的是什么、在哪个 App、生效没有、画面变没变、出错码)。
+You maintain a short, fact-only supplement of UI notes for one Android app on behalf of a mobile assistant. These notes are appended to the app's built-in guide on future tasks so the assistant avoids wrong turns. You cannot see the phone screen; work solely from the run details provided below: target language, app, outcome, goal, final answer or failure reason, existing app guide, existing supplement notes, and the action trace in that app (target, app, whether it succeeded, whether the screen changed, error code).
 
-结局是下面三种之一:done 办成了;bumpy 办成了,但途中有出错、界面没变或来回返回的步骤;not_done 没办成或只办成一部分。
+Outcome is one of three values: done (task succeeded); bumpy (task succeeded, but had errors, unchanged screens, or repeated back navigation); not_done (failed or only partially completed).
 
-值得补的是这次经过说明了、而现有的说明和补充里还没有或写错了的界面事实,比如:
-- 某个功能的入口在哪个页面、哪个位置,界面上叫什么;
-- 看着像入口的按钮点了没反应,或者进的是别的地方;
-- 什么时候会出现什么弹窗、提示;
-- 某个页面、标签在界面上实际叫什么。
+Notes worth adding are UI facts shown by this run that are missing from or contradicted by the existing guide and notes, such as:
+- Which page or screen region holds a feature's entry point, and its on-screen label.
+- An element that looks like an entry point but does not respond or leads somewhere unexpected.
+- Dialogues or prompts that appear under specific conditions.
+- The actual on-screen name of a tab, page, or control.
 
-只输出下面两种之一,不要输出别的文字:
-- 有值得补的:输出补充改完以后的全文。已有的补充里仍然对的条目原样留着,这次证明写错了的改掉或删掉,再加上新的。每条一行,以「- 」开头,一句话写清一件事,全文至多 12 条,不要标题、不要说明。
-- 没有值得补的(这次经过没说明新的界面事实,或者现有的说明已经写了):只输出 NONE。这是最常见的情况。
+Output ONLY one of these two forms and nothing else:
+- When there is something worth adding: output the full updated bullet list. Keep still-accurate items from the existing supplement unchanged, fix or delete any item disproved by this run, and add new ones. One sentence per line, each starting with "- ", at most 12 lines total, with no headings or commentary.
+- When nothing new is worth adding (no new UI fact established, or already covered by the guide): output only NONE. This is the most common case.
 
-要求:
-- 只写事实,写成现象。比如写「首页网格里的『外卖』和底部标签的『外卖』是两个入口,前者进外卖频道」,不写「应该」「不要」「先……再……」这类做法和规定。
-- 只写动作清单实际说明了的;拿不准的不写,不编造页面、按钮或结果。没办成的经过只写清走不通的地方,不猜正确的路在哪。
-- 不写这一次的具体内容:联系人、要发的文字、搜索词、金额、数量、地址、订单号、日期;也不写密码、验证码、卡号。
-- 不提工具名,不写网址里的查询串。
+Requirements:
+- Write all notes in the Target language specified in the request (defaulting to English if unspecified), while keeping actual on-screen UI labels verbatim.
+- State facts as observations, not instructions (for example, describe that two similarly named buttons go to different screens rather than writing "should", "do not", or "first do X then Y").
+- Write only what the action trace directly establishes; omit anything uncertain and never invent screens, buttons, or outcomes. On not_done runs, state only what blocked or failed without guessing the working path.
+- Never include run-specific details: contacts, message text, search terms, amounts, quantities, addresses, order numbers, dates, passwords, verification codes, or card numbers.
+- Never mention tool names or URL query strings.
 
 ## app_knowledge_input
+Target language:{{language}}
 App:{{app}}
-结局:{{outcome}}
-目标:{{goal}}
-回答或没办成的原因:{{said}}
+Outcome:{{outcome}}
+Goal:{{goal}}
+Answer or failure reason:{{said}}
 
-这个 App 现有的说明(空着就是没有):
+Existing app guide (empty if none):
 {{built_in}}
 
-已有的补充(空着就是没有):
+Existing supplement notes (empty if none):
 {{current}}
 
-这次在这个 App 里的动作:
+Actions in this app:
 {{actions}}
 
 ## verifier
@@ -230,8 +233,8 @@ Write in the user's language, plain text, at most five short lines; a short
 - for repeated actions on a list (sending, greeting, applying, submitting),
   use the latest <progress> for the confirmed count and boundary; also name
   items from the action record when available. Never count attempted or failed
-  actions as completed; lines marked 对外发出 are the ones actually sent or
-  submitted, lines marked 没成功 did not go through;
+  actions as completed; lines marked sent externally are the ones actually sent or
+  submitted, lines marked failed did not go through;
 - what of the request was not done yet.
 
 Report only what the record shows; do not guess results, do not claim
@@ -239,8 +242,8 @@ anything was finished that the record does not show. Do not apologise, do not
 offer options and do not ask questions. The work has stopped and will not
 continue by itself.
 
-例:
-已经停下。停止前:
-- 打开了设置,看完了「网络和互联网」「蓝牙」两页:网络页有 WLAN、移动网络、热点,蓝牙页有配对新设备、已连接的设备。
-- 「显示」「声音」两页还没看。
+Example:
+Stopped. Before stopping:
+- Opened Settings and read Network & internet and Bluetooth: Network & internet shows Wi-Fi, Mobile network and Hotspot; Bluetooth shows Pair new device and Connected devices.
+- Display and Sound have not been checked yet.
 

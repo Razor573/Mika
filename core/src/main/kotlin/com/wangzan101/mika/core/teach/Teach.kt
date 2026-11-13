@@ -242,36 +242,36 @@ private fun specificClass(className: String?): String? {
 
 /** 给模型和草稿用的一句中文，不含输入的原文，也不含坐标。 */
 fun teachLine(step: TeachStep): String {
-    val where = listOfNotNull(step.window, step.packageName).joinToString(" · ").ifBlank { "未知界面" }
+    val where = listOfNotNull(step.window, step.packageName).joinToString(" · ").ifBlank { "unknown screen" }
     val target = step.nodeName ?: step.viewId
     val observed = when (step.kind) {
-        TeachKind.Click -> if (target != null) "点了「$target」" else "点了一下，没有可靠的界面节点"
-        TeachKind.LongClick -> if (target != null) "长按了「$target」" else "长按了一下，没有可靠的界面节点"
+        TeachKind.Click -> if (target != null) "tapped \"$target\"" else "tapped once with no reliable UI element"
+        TeachKind.LongClick -> if (target != null) "long-pressed \"$target\"" else "long-pressed once with no reliable UI element"
         TeachKind.Type -> when {
-            step.sensitiveOmitted -> "在受保护的输入位置输入了内容（未保存）"
-            target != null -> "在「$target」输入了文字（文字未保存）"
-            else -> "在没有名字的输入位置输入了文字（文字未保存）"
+            step.sensitiveOmitted -> "typed in a protected field (text not saved)"
+            target != null -> "typed text in \"$target\" (text not saved)"
+            else -> "typed text in an unnamed field (text not saved)"
         }
-        TeachKind.Scroll -> "滚动"
-        TeachKind.Window -> if (step.window != null) "切到「${step.window}」" else "切换了界面，没有可靠的窗口信息"
+        TeachKind.Scroll -> "scrolled"
+        TeachKind.Window -> if (step.window != null) "switched to \"${step.window}\"" else "switched screens with no reliable window info"
     }
     val place = if (step.kind == TeachKind.Window) step.packageName.orEmpty() else where
     return buildString {
-        append("[观察到] ").append(observed)
-        if (place.isNotBlank() && step.kind != TeachKind.Window) append("（").append(place).append("）")
-        if (step.kind == TeachKind.Window && place.isNotBlank()) append("（").append(place).append("）")
-        if (step.insufficient) append("。信息不足，不能写成坐标操作")
-        step.correction?.let { append("。[你改成] ").append(it) }
-        step.explanation?.let { append("。[你说明的] ").append(it) }
+        append("[Observed] ").append(observed)
+        if (place.isNotBlank() && step.kind != TeachKind.Window) append(" (").append(place).append(")")
+        if (step.kind == TeachKind.Window && place.isNotBlank()) append(" (").append(place).append(")")
+        if (step.insufficient) append(". Insufficient info; do not turn into a coordinate action")
+        step.correction?.let { append(". [You changed] ").append(it) }
+        step.explanation?.let { append(". [You noted] ").append(it) }
     }
 }
 
 object TeachSkill {
     const val SOURCE = "demonstrated"
     const val PREFIX = "teach:"
-    const val NOT_TRIAL_RUN = "Mika 还没有试跑成功。"
-    const val NOT_ABSENT = "这次示范没走到的入口，不能据此认为那个入口不存在。"
-    const val STOP_IF_UNMATCHED = "当前界面看不出上面写的入口或前置条件时，停止套用这份技能，改用平常的查看和询问。"
+    const val NOT_TRIAL_RUN = "Mika has not yet successfully run this in a trial."
+    const val NOT_ABSENT = "An entry point not taken during this demonstration must not be treated as non-existent."
+    const val STOP_IF_UNMATCHED = "If the current screen does not show the entry or preconditions written above, stop following this skill and fall back to normal inspection and asking."
     /** 模型读到试用中的示范技能时加在正文前。 */
     const val USE_NOTE =
         "[Demonstrated, not trial-run. Mika has not successfully replayed this. " +
@@ -310,13 +310,14 @@ object TeachWatch {
 
 /** 发给模型的脱敏摘要，或本机直接整理出的草稿。 */
 object TeachDraft {
-    fun request(session: TeachSession): String = buildString {
-        appendLine("目标:${plain(session.goal)}")
-        appendLine("下面每一步都来自同一次人工示范。来源只有观察到的、你改成的、你说明的。没有写到的入口不能推断成不存在。")
-        appendLine("输入的文字没有保存。不要编造坐标、密码、验证码或支付内容。")
-        if (session.truncated) appendLine("步骤较多，只保留了前 ${session.steps.size} 步。")
+    fun request(session: TeachSession, targetLanguage: String = "English"): String = buildString {
+        appendLine("Target language: $targetLanguage")
+        appendLine("Goal: ${plain(session.goal)}")
+        appendLine("Each step below comes from the same human demonstration. Allowed sources are only observed, changed by you, or noted by you. Do not claim an unused entry point does not exist.")
+        appendLine("Typed text is not saved. Do not invent coordinates, passwords, verification codes, or payment details.")
+        if (session.truncated) appendLine("There were many steps; only the first ${session.steps.size} steps are kept.")
         session.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${teachLine(step)}") }
-        if (session.steps.none { it.needsClarification }) appendLine("没有需要用户另作说明的步骤。")
+        if (session.steps.none { it.needsClarification }) appendLine("No steps require extra explanation from the user.")
     }
 
     fun assemble(session: TeachSession, name: String): String {
@@ -324,36 +325,36 @@ object TeachDraft {
         val apps = packages.joinToString(", ") { "\"$it\"" }
         val explained = session.steps.mapNotNull { it.explanation }
         val body = buildString {
-            appendLine("## 入口")
-            appendLine("适用：${plain(session.goal)}")
+            appendLine("## Entry")
+            appendLine("Applies to: ${plain(session.goal)}")
             val first = session.steps.firstOrNull { it.kind == TeachKind.Window } ?: session.steps.firstOrNull()
-            if (first != null) appendLine("[观察到] 这次从 ${first.packageName.orEmpty()} ${first.window.orEmpty()} 一带开始。只把这次真正出现过的界面当前置条件。")
-            explained.forEach { appendLine("[你说明的] $it") }
-            appendLine("来源只分三种：观察到的、你说明的、以及标明为推测的。这份额由本机按步骤整理，没有另作推测。")
-            appendLine("## 步骤")
-            if (session.steps.isEmpty()) appendLine("（没有留下可看的步骤）")
+            if (first != null) appendLine("[Observed] Started around ${first.packageName.orEmpty()} ${first.window.orEmpty()}. Only treat screens actually seen this time as preconditions.")
+            explained.forEach { appendLine("[You noted] $it") }
+            appendLine("Sources are limited to three kinds: observed, noted by you, and explicitly marked as inferred. This draft was assembled locally from steps with no extra inference.")
+            appendLine("## Steps")
+            if (session.steps.isEmpty()) appendLine("(No viewable steps were recorded.)")
             session.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${teachLine(step)}") }
-            appendLine("这些是入口线索和操作策略，不是坐标宏。")
+            appendLine("These are entry cues and interaction strategies, not a coordinate macro.")
             appendLine(TeachSkill.NOT_ABSENT)
-            appendLine("## 容易出错的地方")
+            appendLine("## Common pitfalls")
             val thin = session.steps.filter { it.insufficient }
-            if (thin.isEmpty()) appendLine("这次留下的步骤都有界面名字或窗口。")
-            else appendLine("有 ${thin.size} 步信息不足，不能改写成点击某个坐标。")
-            if (session.truncated) appendLine("后面的操作没有逐条留下。")
+            if (thin.isEmpty()) appendLine("Every recorded step has a UI element label or window name.")
+            else appendLine("${thin.size} step(s) lack reliable details and must not be turned into coordinate taps.")
+            if (session.truncated) appendLine("Later actions were not recorded step by step.")
             appendLine(TeachSkill.NOT_ABSENT)
-            appendLine("## 怎样算办成(核实证据)")
+            appendLine("## Done criteria (Verification evidence)")
             val last = session.steps.lastOrNull()
-            if (last != null) appendLine("[观察到] 示范结束时停在 ${last.packageName.orEmpty()} ${last.window.orEmpty()}。")
+            if (last != null) appendLine("[Observed] Ended at ${last.packageName.orEmpty()} ${last.window.orEmpty()}.")
             appendLine(TeachSkill.NOT_TRIAL_RUN)
-            appendLine("## 什么时候停下交给用户")
+            appendLine("## When to pause for the user")
             appendLine(TeachSkill.STOP_IF_UNMATCHED)
-            appendLine("涉及付款、发送或下单时停下来交给用户。")
+            appendLine("Pause and hand over to the user for payment, sending, or placing an order.")
         }
         val md = buildString {
             appendLine("---")
             appendLine("name: $name")
-            appendLine("display: ${yaml(session.goal.ifBlank { "示范" }.take(24))}")
-            appendLine("description: ${yaml(session.goal.ifBlank { "从一次人工示范记下的入口和做法" }.take(80))}")
+            appendLine("display: ${yaml(session.goal.ifBlank { "Demonstration" }.take(24))}")
+            appendLine("description: ${yaml(session.goal.ifBlank { "Entry points and steps recorded from a demonstration" }.take(80))}")
             appendLine("apps: [$apps]")
             appendLine("aliases: []")
             appendLine("source: ${TeachSkill.SOURCE}")
@@ -367,15 +368,16 @@ object TeachDraft {
     /** 模型稿也补上这三句，并强制出处，避免把没走到的入口写成不存在或声称试跑成功。 */
     fun ensureCaveats(md: String): String {
         var text = md
-        if (TeachSkill.NOT_ABSENT !in text) text = insertBefore(text, "怎样算办成", TeachSkill.NOT_ABSENT)
-        if (TeachSkill.NOT_TRIAL_RUN !in text) text = insertBefore(text, "什么时候停下交给用户", TeachSkill.NOT_TRIAL_RUN)
+        if (TeachSkill.NOT_ABSENT !in text) text = insertBefore(text, listOf("Done criteria", "怎样算办成"), TeachSkill.NOT_ABSENT)
+        if (TeachSkill.NOT_TRIAL_RUN !in text) text = insertBefore(text, listOf("When to pause for the user", "什么时候停下交给用户"), TeachSkill.NOT_TRIAL_RUN)
         if (TeachSkill.STOP_IF_UNMATCHED !in text) text = text.trimEnd() + "\n" + TeachSkill.STOP_IF_UNMATCHED
         return text
     }
 
     fun acceptsModel(md: String): Boolean {
-        if ("[观察到]" !in md && "观察到" !in md) return false
-        if ("试跑成功" in md && TeachSkill.NOT_TRIAL_RUN !in md) return false
+        val lower = md.lowercase()
+        if ("[Observed]" !in md && "Observed" !in md && "[观察到]" !in md && "观察到" !in md) return false
+        if (("trial-run succeeded" in lower || "trial run succeeded" in lower || "试跑成功" in md) && TeachSkill.NOT_TRIAL_RUN !in md) return false
         if (SensitiveFilter.hit(md) != null) return false
         return true
     }
@@ -392,9 +394,10 @@ object TeachDraft {
         runnableScripts: Set<String>,
         nameTaken: (String) -> Boolean,
         nowMs: Long,
+        targetLanguage: String = "English",
     ): PersonalSkill? {
         if (session.steps.isEmpty() || !teachGoalAccepted(session.goal)) return null
-        val fromModel = model?.let { ask(it, session) }?.let { raw ->
+        val fromModel = model?.let { ask(it, session, targetLanguage) }?.let { raw ->
             val caveated = ensureCaveats(PersonalSkills.withoutField(SkillDrafter.stripFence(raw), "updates"))
             caveated.takeIf { acceptsModel(it) && SkillDrafter.validate(it, toolNames, scriptTool, runnableScripts) == null }
         }
@@ -420,10 +423,10 @@ object TeachDraft {
         )
     }
 
-    private suspend fun ask(model: ChatModel, session: TeachSession): String? = try {
+    private suspend fun ask(model: ChatModel, session: TeachSession, targetLanguage: String = "English"): String? = try {
         val reply = model.complete(
             Prompts.role("teach_skill"),
-            listOf(Message(Role.User, listOf(Part.Text(request(session))), Author.Mika)),
+            listOf(Message(Role.User, listOf(Part.Text(request(session, targetLanguage))), Author.Mika)),
             emptyList(),
         )
         reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim().takeIf { it.isNotEmpty() }
@@ -441,9 +444,12 @@ object TeachDraft {
         return "$stem-$n"
     }
 
-    private fun insertBefore(md: String, headingPrefix: String, line: String): String {
+    private fun insertBefore(md: String, headingPrefixes: List<String>, line: String): String {
         val lines = md.replace("\r\n", "\n").split("\n").toMutableList()
-        val at = lines.indexOfFirst { it.trimStart().startsWith("## $headingPrefix") || it.trimStart().startsWith("##$headingPrefix") }
+        val at = lines.indexOfFirst { l ->
+            val t = l.trimStart()
+            headingPrefixes.any { p -> t.startsWith("## $p", ignoreCase = true) || t.startsWith("##$p", ignoreCase = true) }
+        }
         if (at < 0) return md.trimEnd() + "\n" + line
         lines.add(at, line)
         return lines.joinToString("\n")

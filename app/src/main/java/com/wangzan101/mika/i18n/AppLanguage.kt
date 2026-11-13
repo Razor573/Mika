@@ -37,9 +37,37 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
     /** 语言代码(不带文字体系和地区);跟随系统时为 null。 */
     val language: String? get() = tag?.let { Locale.forLanguageTag(it).language.let(::modernCode) }
 
+    /** Returns the English language name for prompts, resolving [System] against the default locale. */
+    fun promptLanguageName(): String = promptLanguageName(Locale.getDefault())
+
+    /** Returns the English language name for prompts, resolving [System] against [system]. */
+    fun promptLanguageName(system: Locale): String = promptLanguageName(system) { safeLikelyScript(it) }
+
+    internal fun promptLanguageName(system: Locale, likelyScript: (String) -> String): String {
+        val resolved = if (this == System) {
+            fromTag(system.toLanguageTag(), likelyScript).takeUnless { it == System } ?: English
+        } else {
+            this
+        }
+        return when (resolved) {
+            System, English -> "English"
+            SimplifiedChinese -> "Simplified Chinese"
+            TraditionalChinese -> "Traditional Chinese"
+            Arabic -> "Arabic"
+            Persian -> "Persian"
+            Japanese -> "Japanese"
+            Korean -> "Korean"
+            Spanish -> "Spanish"
+            Portuguese -> "Portuguese"
+            Russian -> "Russian"
+            Indonesian -> "Indonesian"
+        }
+    }
+
     companion object {
         private const val PREFS = "app_language"
         private const val KEY_TAG = "tag"
+        private const val KEY_INITIALIZED = "default_initialized"
 
         /** 安卓 12 及以前选定的语言;null 表示跟随系统。进程里读一次,换的时候更新。 */
         @Volatile
@@ -84,14 +112,82 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
             else -> language
         }
 
+        /** Returns the English prompt language name for the current app language. */
+        fun promptLanguageName(context: Context): String {
+            val lang = current(context)
+            return if (lang == System) {
+                val locale = resources(context).configuration.locales.let { if (it.isEmpty) Locale.getDefault() else it[0] }
+                lang.promptLanguageName(locale)
+            } else {
+                lang.promptLanguageName()
+            }
+        }
+
+        /** Ensures first-run launches default to [English] when no user preference has been saved yet. */
+        fun ensureDefaultLanguage(context: Context) {
+            val prefs = context.appPrefs()
+            if (prefs.getBoolean(KEY_INITIALIZED, false)) return
+            val applied = ensureDefaultLanguage(
+                initialized = false,
+                systemManaged = systemManaged,
+                hasSavedLegacyTag = { prefs.contains(KEY_TAG) },
+                hasSystemLocales = { !context.getSystemService(LocaleManager::class.java).applicationLocales.isEmpty },
+                saveLegacyDefault = { tag ->
+                    prefs.edit().putString(KEY_TAG, tag).putBoolean(KEY_INITIALIZED, true).commit()
+                    legacyTag = tag
+                    legacyLoaded = true
+                    cached = null
+                },
+                setSystemDefault = { tag ->
+                    context.getSystemService(LocaleManager::class.java).applicationLocales =
+                        LocaleList.forLanguageTags(tag)
+                },
+                markInitialized = {
+                    prefs.edit().putBoolean(KEY_INITIALIZED, true).commit()
+                },
+            )
+            if (applied && !systemManaged) {
+                Locale.setDefault(LocaleList.forLanguageTags(English.tag!!)[0])
+            }
+        }
+
+        internal fun ensureDefaultLanguage(
+            initialized: Boolean,
+            systemManaged: Boolean,
+            hasSavedLegacyTag: () -> Boolean,
+            hasSystemLocales: () -> Boolean,
+            saveLegacyDefault: (String) -> Unit,
+            setSystemDefault: (String) -> Unit,
+            markInitialized: () -> Unit,
+        ): Boolean {
+            if (initialized) return false
+            if (systemManaged) {
+                val shouldApply = !hasSystemLocales() && !hasSavedLegacyTag()
+                if (shouldApply) setSystemDefault(English.tag!!)
+                markInitialized()
+                return shouldApply
+            }
+            val shouldApply = !hasSavedLegacyTag()
+            if (shouldApply) {
+                saveLegacyDefault(English.tag!!)
+            } else {
+                markInitialized()
+            }
+            return shouldApply
+        }
+
         /** 换语言并重建界面。安卓 13 起交给系统(系统自己重建);之前记在本地,重建 [context] 所在的界面。 */
         fun set(context: Context, language: AppLanguage) {
             if (systemManaged) {
+                context.appPrefs().edit().putBoolean(KEY_INITIALIZED, true).commit()
                 context.getSystemService(LocaleManager::class.java).applicationLocales =
                     language.tag?.let(LocaleList::forLanguageTags) ?: LocaleList.getEmptyLocaleList()
                 return
             }
-            context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_TAG, language.tag).commit()
+            context.appPrefs().edit()
+                .putBoolean(KEY_INITIALIZED, true)
+                .putString(KEY_TAG, language.tag)
+                .commit()
             legacyTag = language.tag
             legacyLoaded = true
             cached = null
@@ -101,6 +197,7 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
 
         /** App 启动时调:安卓 12 及以前选了语言时,把进程的默认 Locale(日期、数字的格式)也换成它。 */
         fun applyDefaultLocale(context: Context) {
+            ensureDefaultLanguage(context)
             if (systemManaged) return
             val locales = legacyLocales(context) ?: Resources.getSystem().configuration.locales
             Locale.setDefault(locales[0])
@@ -108,6 +205,7 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
 
         /** 套上 App 语言的 Context:在 Activity 的 attachBaseContext 和非 Activity 建界面的地方用。安卓 13 起原样返回。 */
         fun wrap(base: Context): Context {
+            ensureDefaultLanguage(base)
             val locales = legacyLocales(base) ?: return base
             return base.createConfigurationContext(Configuration().apply { setLocales(locales) })
         }
@@ -134,10 +232,21 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
 
         private fun legacy(context: Context): String? {
             if (!legacyLoaded) {
-                legacyTag = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_TAG, null)
+                legacyTag = context.appPrefs().getString(KEY_TAG, null)
                 legacyLoaded = true
             }
             return legacyTag
+        }
+
+        private fun Context.appPrefs() = (applicationContext ?: this).getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+        private fun safeLikelyScript(tag: String): String = try {
+            ULocale.addLikelySubtags(ULocale.forLanguageTag(tag)).script
+        } catch (_: RuntimeException) {
+            when (Locale.forLanguageTag(tag).country.uppercase(Locale.ROOT)) {
+                "TW", "HK", "MO" -> "Hant"
+                else -> "Hans"
+            }
         }
 
         private fun Context.activity(): Activity? {

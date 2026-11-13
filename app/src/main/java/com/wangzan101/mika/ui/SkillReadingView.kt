@@ -44,13 +44,14 @@ internal fun SkillReadingView(markdown: String) {
             Spacer(Modifier.fillMaxWidth().height(1.dp).background(c.hair))
             for ((title, contents) in remember(blocks) { readingSections(blocks) }) {
                 val label = title?.text?.text.orEmpty()
-                val caution = label.startsWith("容易出错的地方")
+                val caution = label.startsWith("Common pitfalls", ignoreCase = true) || label.startsWith("容易出错的地方")
+                val isSteps = label.startsWith("Steps", ignoreCase = true) || label.startsWith("步骤")
                 val icon = when {
-                    label.startsWith("入口") -> MikaIcons.Pin
-                    label.startsWith("步骤") -> MikaIcons.Route
+                    label.startsWith("Entry", ignoreCase = true) || label.startsWith("入口") -> MikaIcons.Pin
+                    isSteps -> MikaIcons.Route
                     caution -> MikaIcons.Info
-                    label.startsWith("怎样算办成") -> MikaIcons.Check
-                    label.startsWith("什么时候停下交给用户") -> MikaIcons.Hand
+                    label.startsWith("Done criteria", ignoreCase = true) || label.startsWith("怎样算办成") -> MikaIcons.Check
+                    label.startsWith("When to pause for the user", ignoreCase = true) || label.startsWith("什么时候停下交给用户") -> MikaIcons.Hand
                     else -> null
                 }
                 val panel = if (caution) Modifier.background(c.warnSoft, RoundedCornerShape(10.dp)).padding(12.dp) else Modifier
@@ -61,7 +62,7 @@ internal fun SkillReadingView(markdown: String) {
                         Text(title.text, Modifier.semantics { heading() }, style = MikaType.BodyStrong, color = c.ink)
                     }
                     for (block in contents) {
-                        if (block is MdBlock.ListBlock && block.start != null && label.startsWith("步骤")) {
+                        if (block is MdBlock.ListBlock && block.start != null && isSteps) {
                             StepList(block, block.start, body)
                         } else {
                             MarkdownBlocks(listOf(block), body)

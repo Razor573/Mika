@@ -143,4 +143,5 @@
     <string name="calls_notification_connecting_audio">Подключение звука звонка</string>
     <string name="calls_notification_connected_waiting">ИИ подключён. Ожидание речи собеседника. Вы можете перехватить звонок в любой момент.</string>
     <string name="calls_notification_connected">ИИ подключён. Вы можете перехватить звонок в любой момент.</string>
+    <string name="calls_summary_updated">Сводка обновлена</string>
 </resources>

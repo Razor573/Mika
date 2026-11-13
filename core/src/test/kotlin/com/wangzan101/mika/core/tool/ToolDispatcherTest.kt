@@ -395,7 +395,7 @@ class ToolDispatcherTest {
         val sites = d.execute(call("knowledge_search", """{"query":"知乎","kind":"site"}""")).content["matches"]!!.jsonArray
         assertTrue(sites.isNotEmpty() && sites.all { it.jsonObject.s("kind") == "site" })
         assertEquals("invalid_arguments", d.execute(call("knowledge_search", """{"query":"x","kind":"skill"}""")).content.s("error"))
-        val skills = d.execute(call("skill_search", """{"query":"文档"}""")).content["matches"]!!.jsonArray
+        val skills = d.execute(call("skill_search", """{"query":"document"}""")).content["matches"]!!.jsonArray
         assertTrue(skills.isNotEmpty() && skills.all { it.jsonObject.s("kind") in setOf("skill", "personal") })
         val view = d.execute(call("knowledge_read", """{"name":"app:xianyu"}""")).content
         assertTrue(view["ok"]!!.jsonPrimitive.boolean)

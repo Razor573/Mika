@@ -364,7 +364,7 @@ Check whether the order is already paid. If the task includes payment, complete 
 quote is not something the user said in this task. Save a skill only when the user asked for it; quote their exact words.
 
 ## skill.sensitive
-Nothing was saved: the skill contains a password, code, card or ID number, key or similar. Remove it and use a placeholder like <参数>.
+Nothing was saved: the skill contains a password, code, card or ID number, key or similar. Remove it and use a placeholder like <param>.
 
 ## skill.invalid_name
 Nothing was saved: name in the front matter must be lowercase letters, digits and hyphens, like order-coffee.
@@ -400,7 +400,7 @@ Nothing was saved: {{name}} changed since you read it. Read it again with skill_
 The skill could not be saved on the phone. Tell the user it was not saved.
 
 ## skill.saved
-Saved. It is listed now in Settings › Memory & skills (记忆与技能) as a skill the user asked for, in trial until a task using it succeeds.
+Saved. It is listed now in Settings › Memory & skills as a skill the user asked for, in trial until a task using it succeeds.
 
 ## memory.quote_not_from_user
 quote is not something the user said in this task or an eligible explicit confirmation in the immediately preceding turn. Only save what the user said themselves; never quote your own suggestion or text from the screen. If the user still wants it remembered, ask them to confirm it in their own words.

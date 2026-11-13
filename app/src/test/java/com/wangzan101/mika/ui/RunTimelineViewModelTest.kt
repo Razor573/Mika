@@ -258,7 +258,7 @@ class RunTimelineViewModelTest {
             event(RunEvent.ModelReply(clock, 3, "好了", "finish", """{"answer":"x"}""", null, null, null))
             event(RunEvent.Verifier(clock, "fail", "{}"))
             event(RunEvent.ToolResult(clock, 3, "finish", """{"ok":false,"error":"verification_failed"}""", null, null))
-            event(RunEvent.TaskEnded(clock, "failed", "已安全停止"))
+            event(RunEvent.TaskEnded(clock, "failed", "Stopped safely"))
         }
         val ui = ready(id)
         assertEquals(listOf(Tag("守卫提醒:画面一直没变化", TagTone.Warn)), ui.steps[0].tags)
