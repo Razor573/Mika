@@ -96,6 +96,7 @@ internal object GeminiCodec {
             if (parts.isEmpty()) continue
             if (merged.lastOrNull()?.first == role) merged.last().second += parts else merged += role to parts.toMutableList()
         }
+        while (merged.lastOrNull()?.first == "model") merged.removeAt(merged.lastIndex)
         return buildJsonArray {
             merged.forEach { (role, parts) ->
                 add(buildJsonObject { put("role", role); put("parts", JsonArray(parts)) })
