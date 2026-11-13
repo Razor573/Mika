@@ -29,7 +29,7 @@ import android.os.Build
  * via `ACTION_VIEW` ([ApkUpdater.installIntent]), which then becomes the
  * installer of record.
  *
- * The legitimate routes are therefore outside the app:
+ * The legitimate routes are:
  * - `adb install -r -i com.android.vending <apk>` (see
  * `tools/install-mika2.ps1` / `tools/install-mika2.sh`) sets the
  * installing package to Play. It only sets the *installing* package: the
@@ -38,6 +38,13 @@ import android.os.Build
  * packageSource 0), so it helps only banks that check the installing
  * package. It must also be repeated for every update - any update via the
  * in-app updater or a browser download replaces the record again.
+ * - Since v46, the in-app updater itself can do the same thing when the
+ * phone helper is paired: [ShellApkInstaller] runs `pm install -r -i
+ * com.android.vending` as the shell helper (uid 2000, the same identity
+ * `adb shell` runs as), so the record it writes is identical to the ADB
+ * script's. It can also repair the record afterwards with
+ * `pm set-installer` without reinstalling. The app still cannot do this
+ * through its own PackageInstaller session - only the shell helper can.
  * - A Google Play listing is the only permanent fix: then Play itself is
  * the installer, including for updates. See
  * `docs/installer-source-and-banking-apps.md`.

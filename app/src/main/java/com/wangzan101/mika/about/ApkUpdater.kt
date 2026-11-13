@@ -10,6 +10,8 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.wangzan101.mika.core.net.NetProxy
+import com.wangzan101.mika.core.shell.PermissionCommands
+import com.wangzan101.mika.core.shell.ShellCommandRunner
 import okhttp3.OkHttpClient
 import java.io.File
 import java.net.Proxy
@@ -31,7 +33,12 @@ data class ApkDownloadState(
  * 文件放在本应用的外部专属目录(别的 App 读写不到),同一时间只留一个;换版本、删除、装好后都清掉。
  * 自动下载和经代理的手动下载由 Mika 在进程里执行,以便绑定 Wi-Fi 或使用应用代理([ProxiedApkDownload])。
  */
-class ApkUpdater(private val context: Context, private val net: NetProxy = NetProxy.shared) {
+class ApkUpdater(
+    private val context: Context,
+    private val net: NetProxy = NetProxy.shared,
+    /** Phone-helper shell runner, when the app was given one (see [com.wangzan101.mika.MikaApp]); null means no shell install. */
+    private val shellRunner: ShellCommandRunner? = null,
+) {
     private val manager = context.getSystemService(DownloadManager::class.java)
     private val prefs = context.getSharedPreferences("apk-update", Context.MODE_PRIVATE)
     private val directory: File get() = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -124,6 +131,57 @@ class ApkUpdater(private val context: Context, private val net: NetProxy = NetPr
      */
     @Synchronized
     fun installIntent(release: ReleaseInfo): Intent {
+        val target = verifyReady(release)
+        val uri = if (viaApp) FileProvider.getUriForFile(context, "${context.packageName}.updatefiles", target)
+            else manager.getUriForDownloadedFile(prefs.getLong("id", -1)) ?: error("missing APK")
+        return Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    /** The detached `pm install` log, if one was started; see [ShellApkInstaller]. */
+    fun shellInstallLogFile(): File = File(directory, ShellApkInstaller.INSTALL_LOG_NAME)
+
+    /** The detached `pm install` log text, if the log file exists. */
+    fun readShellInstallLog(): String? = shellInstallLogFile().takeIf { it.isFile }?.readText()
+
+    /**
+     * Install the downloaded update through the phone helper instead of
+     * the system package installer, so Google Play stays the installer of
+     * record (see [ShellApkInstaller]). Returns false when no shell
+     * runner was given or the install could not be launched; the caller
+     * should then fall back to [installIntent]. Returns true once the
+     * background install is away - not when it finishes: the app is
+     * killed by its own update, so completion is read from the log file
+     * afterwards ([readShellInstallLog]) or from Diagnostics.
+     */
+    suspend fun installViaShell(release: ReleaseInfo): Boolean {
+        val runner = shellRunner ?: return false
+        val target = verifyReady(release)
+        val log = shellInstallLogFile()
+        runCatching { log.delete() }
+        val output = runCatching {
+            runner.exec(ShellApkInstaller.installCommand(target.absolutePath, log.absolutePath))
+        }.getOrNull() ?: return false
+        return ShellApkInstaller.installStarted(output)
+    }
+
+    /**
+     * Repair the installer record after a normal in-app update: run
+     * `pm set-installer` through the phone helper so Google Play is the
+     * installer of record again. Returns false when no shell runner was
+     * given, the helper is not reachable, or the command failed.
+     */
+    suspend fun repairInstallerRecord(): Boolean {
+        val runner = shellRunner ?: return false
+        val output = runCatching {
+            runner.exec(PermissionCommands.checked(ShellApkInstaller.setInstallerCommand(context.packageName)))
+        }.getOrNull() ?: return false
+        return ShellApkInstaller.setInstallerSucceeded(output)
+    }
+
+    /** Shared by [installIntent] and [installViaShell]: size, digest, version and signer checks. */
+    @Synchronized
+    private fun verifyReady(release: ReleaseInfo): File {
         check(state(release).phase == DownloadPhase.Ready)
         ApkIntegrity.requireOfficialUrl(requireNotNull(release.apkUrl))
         val target = requireNotNull(file)
@@ -139,10 +197,7 @@ class ApkUpdater(private val context: Context, private val net: NetProxy = NetPr
             cancel()
             throw e
         }
-        val uri = if (viaApp) FileProvider.getUriForFile(context, "${context.packageName}.updatefiles", target)
-            else manager.getUriForDownloadedFile(prefs.getLong("id", -1)) ?: error("missing APK")
-        return Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        return target
     }
 
     @Suppress("DEPRECATION")

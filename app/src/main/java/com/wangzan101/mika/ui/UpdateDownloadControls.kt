@@ -46,6 +46,8 @@ internal fun UpdateDownloadControls(release: ReleaseInfo) {
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<Int?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
+    var shellStarted by remember { mutableStateOf(false) }
+    var repairResult by remember { mutableStateOf<Boolean?>(null) }
 
     fun run(action: suspend () -> Unit) {
         if (busy) return
@@ -77,6 +79,17 @@ internal fun UpdateDownloadControls(release: ReleaseInfo) {
         context.startActivity(intent)
     }
 
+    /** Install through the phone helper so Google Play stays the installer of record; the app restarts when it is done. */
+    fun installViaShell() = run {
+        val ok = withContext(Dispatchers.IO) { updater.installViaShell(release) }
+        if (ok) shellStarted = true else error = R.string.about_update_error
+    }
+
+    /** Repair the installer record after a normal in-app update, without reinstalling. */
+    fun repairInstaller() = run {
+        repairResult = withContext(Dispatchers.IO) { updater.repairInstallerRecord() }
+    }
+
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (context.packageManager.canRequestPackageInstalls()) install()
     }
@@ -96,15 +109,24 @@ internal fun UpdateDownloadControls(release: ReleaseInfo) {
     }
 
     // If this copy was installed from Google Play, installing an update
-    // in the app hands the APK to the system package installer, which then
-    // becomes the installer of record - and banking apps that check the
-    // install source (e.g. HSBC UK) may flag Mika again. Warn, so the user
-    // can install the update via scripts/install-mika2.ps1 instead. See
-    // InstallSource: the app itself cannot keep or claim the Play record.
+    // with the system installer hands the APK to it, which then becomes
+    // the installer of record - and banking apps that check the install
+    // source (e.g. HSBC UK) may flag Mika again. Warn, and offer the
+    // phone-helper install instead when the helper is paired: it runs
+    // `pm install -i com.android.vending` as shell (see ShellApkInstaller)
+    // and keeps Google Play as the installer. The app itself still cannot
+    // keep or claim the Play record through its own PackageInstaller
+    // session; only the shell helper (or adb from a computer) can.
     val playInstalled = remember { com.wangzan101.mika.about.InstallSource.isPlayInstalled(context) }
+    val shellPaired = remember { app.phone.shellControl.paired }
 
     UpdateDownloadActions(state, busy, error,
         playInstalled = playInstalled,
+        shellPaired = shellPaired,
+        shellStarted = shellStarted,
+        repairResult = repairResult,
+        onInstallViaShell = { installViaShell() },
+        onRepairInstaller = { repairInstaller() },
         onDownload = { run { withContext(Dispatchers.IO) { updater.download(release) } } },
         onCancel = {
             run {
@@ -129,9 +151,17 @@ internal fun UpdateDownloadActions(
     error: Int?,
     /** This copy was installed from Google Play; kept as a defaulted parameter so existing callers still compile. */
     playInstalled: Boolean = false,
+    /** The phone helper is paired, so a shell install / installer repair is available. */
+    shellPaired: Boolean = false,
+    /** A phone-helper install was started; the app will restart when it is done. */
+    shellStarted: Boolean = false,
+    /** Result of the last "set installer to Google Play" tap, if any. */
+    repairResult: Boolean? = null,
     onDownload: () -> Unit,
     onInstall: () -> Unit,
     onCancel: () -> Unit,
+    onInstallViaShell: () -> Unit = {},
+    onRepairInstaller: () -> Unit = {},
 ) {
     val active = state.phase == DownloadPhase.Downloading || state.phase == DownloadPhase.Paused
     val text = when {
@@ -144,16 +174,33 @@ internal fun UpdateDownloadActions(
         else -> stringResource(R.string.about_update_download_in_app)
     }
     MikaButton(text, if (state.phase == DownloadPhase.Ready) onInstall else onDownload,
-        Modifier.fillMaxWidth().padding(top = 14.dp), enabled = !busy && !active)
+        Modifier.fillMaxWidth().padding(top = 14.dp), enabled = !busy && !active && !shellStarted)
+    if (state.phase == DownloadPhase.Ready && shellPaired && !shellStarted) {
+        MikaButton(stringResource(R.string.about_update_install_via_helper), onInstallViaShell,
+            Modifier.fillMaxWidth().padding(top = 10.dp), kind = ButtonKind.Tonal, enabled = !busy)
+    }
     if (active || state.phase == DownloadPhase.Ready) {
         MikaButton(stringResource(R.string.about_update_cancel), onCancel,
             Modifier.fillMaxWidth().padding(top = 10.dp), kind = ButtonKind.Tonal, enabled = !busy)
     }
-    val note = error ?: if (state.phase == DownloadPhase.Failed) R.string.about_update_error else R.string.about_update_install_hint
+    val note = when {
+        shellStarted -> R.string.about_update_shell_install_started
+        repairResult == true -> R.string.about_update_set_installer_done
+        repairResult == false -> R.string.about_update_set_installer_failed
+        error != null -> error
+        state.phase == DownloadPhase.Failed -> R.string.about_update_error
+        else -> R.string.about_update_install_hint
+    }
     Text(stringResource(note),
         Modifier.padding(top = 8.dp), style = MikaType.Caption, color = MikaTheme.colors.ink3)
-    if (playInstalled && error == null) {
+    if (playInstalled && error == null && !shellStarted) {
         Text(stringResource(R.string.about_update_play_installer_warning),
             Modifier.padding(top = 8.dp), style = MikaType.Caption, color = MikaTheme.colors.ink3)
+    }
+    // Already lost the Play record to a normal in-app update? The helper
+    // can set it back without reinstalling, when it is paired.
+    if (!playInstalled && shellPaired && repairResult != true && !shellStarted) {
+        MikaButton(stringResource(R.string.about_update_set_installer), onRepairInstaller,
+            Modifier.fillMaxWidth().padding(top = 10.dp), kind = ButtonKind.Tonal, enabled = !busy)
     }
 }

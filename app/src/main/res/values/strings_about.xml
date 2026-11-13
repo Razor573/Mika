@@ -46,7 +46,13 @@
     <string name="about_update_working">Working…</string>
     <string name="about_update_install_hint">When downloaded, tap “Install update” and confirm in the system installer. You may first need to allow Mika to install unknown apps.</string>
     <!-- English-only for now: banking/installer warning, pending translation. Installing an update in the app replaces the installer of record, so a copy installed from Google Play loses that record; see InstallSource.kt. -->
-    <string name="about_update_play_installer_warning" translatable="false">This copy was installed from Google Play. Installing this update in the app will change the installer, and banking apps that check the install source (for example HSBC UK) may flag Mika again. To keep Google Play as the installer, install the update from a computer with tools/install-mika2.ps1 (adb install -r -i com.android.vending).</string>
+    <string name="about_update_play_installer_warning" translatable="false">This copy was installed from Google Play. Installing this update with the system installer will change the installer, and banking apps that check the install source (for example HSBC UK) may flag Mika again. To keep Google Play as the installer, use “Install via phone helper” below if the phone helper is paired, or install the update from a computer with tools/install-mika2.ps1 (adb install -r -i com.android.vending).</string>
+    <!-- English-only for now: phone-helper install / installer repair strings, pending translation. -->
+    <string name="about_update_install_via_helper" translatable="false">Install via phone helper (keeps Google Play as installer)</string>
+    <string name="about_update_shell_install_started" translatable="false">Installing via the phone helper. The app will close and restart when the update is done. Afterwards, check Diagnostics: the installer should read com.android.vending.</string>
+    <string name="about_update_set_installer" translatable="false">Set installer to Google Play</string>
+    <string name="about_update_set_installer_done" translatable="false">Installer set to Google Play. Open HSBC UK to check it is no longer flagged.</string>
+    <string name="about_update_set_installer_failed" translatable="false">Could not set the installer. Check the phone helper is paired, then try again, or install from a computer with tools/install-mika2.ps1.</string>
     <string name="about_update_error">Download or installation did not complete. Please try again later.</string>
     <string name="about_update_bad_file">The downloaded package is incomplete or does not match the release. It was deleted; please download again.</string>
     <string name="about_update_not_newer">The downloaded package is not newer than the installed Mika. It was deleted.</string>

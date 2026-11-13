@@ -307,7 +307,9 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
             deviceAbis = android.os.Build.SUPPORTED_ABIS.toList())
     }
 
-    internal val apkUpdater by lazy { com.wangzan101.mika.about.ApkUpdater(this) }
+    internal val apkUpdater by lazy {
+        com.wangzan101.mika.about.ApkUpdater(this, shellRunner = phone.shellManager.commandRunner)
+    }
     internal val automaticUpdates by lazy { com.wangzan101.mika.about.AutomaticUpdates(this, apkUpdater) }
 
     /** 浮在别的 App 上的悬浮胶囊。 */

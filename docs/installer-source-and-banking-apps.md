@@ -66,12 +66,59 @@ installer:
 - Claiming to be Play when the app was not installed by Play would be
   spoofing the very check banks rely on. This repo does not do that.
 
-So there is **no in-app fix**. What the app does instead, since v45,
-is warn: if the installed copy came from Google Play, the update sheet
-shows a note that installing the update in the app will change the
-installer and banking apps may flag Mika again, and points at the
-install script below. The current installer is also already shown in
-Diagnostics ("copy diagnostics").
+So there is **no in-app fix through the app's own installer session**.
+What the app does instead, since v45, is warn: if the installed copy
+came from Google Play, the update sheet shows a note that installing
+the update with the system installer will change the installer and
+banking apps may flag Mika again, and points at the install script
+below. The current installer is also already shown in Diagnostics
+("copy diagnostics"). Since v46 there is a second in-app route that
+does not go through the app's own installer session at all - the phone
+helper, below.
+
+## In-app update via the phone helper (v46 and later)
+
+If the phone helper is paired (wireless debugging, the same helper
+Mika uses for its on-phone tasks), the update sheet offers a second
+install button next to the normal one: "Install via phone helper
+(keeps Google Play as installer)".
+
+What it does: the helper runs as shell (uid 2000), the same identity
+`adb shell` runs as, so it can run the same command the ADB script
+runs - `pm install -r -i com.android.vending` on the downloaded APK.
+The record it writes is therefore identical to the ADB script's:
+installing package Google Play, initiating package the shell,
+packageSource 1. The install runs detached in the background, because
+the helper cuts a command off after 10 seconds and installing a large
+APK can take longer; the app closes and restarts when the update is
+done, so there is no result to wait for on screen. Afterwards, check
+Diagnostics: the installer should read `com.android.vending`. If the
+install failed, its log is in the updates folder next to the APK.
+
+The update sheet also offers "Set installer to Google Play" when the
+helper is paired and the current copy was not installed from Play.
+That runs `pm set-installer` through the helper, which sets the
+installer record back to Google Play without reinstalling anything -
+useful if a previous update was installed with the system installer
+and lost the record. It is instant, unlike a reinstall.
+
+Limits, stated honestly:
+
+- The helper must be paired. If it is not, the button is not shown
+  and the ADB script below is the route.
+- The record is the same as the ADB script's, with the same limits:
+  only the installing package is Google Play; the initiating package
+  stays the shell and packageSource stays 1. A bank that checks those
+  will still not accept it, and whether HSBC checks only the
+  installing package is still unproven - the user has to try it and see.
+- A later update with the system installer replaces the record again,
+  so every update has to go through the phone helper (or the ADB
+  script). After such an update, use "Set installer to Google Play"
+  to repair the record instead of reinstalling.
+- Nothing here is spoofing: the record is written by the shell helper
+  that actually performed the install, with Play named as the
+  installing package, exactly as the ADB script does it. The app's own
+  PackageInstaller session still cannot do this.
 
 ## The fix that works (with limits): install via ADB
 
