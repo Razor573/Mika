@@ -130,7 +130,7 @@ data class AddForm(
     val location: String = VertexEndpoints.DEFAULT_LOCATION,
     val saSummary: String = "",
     val saError: String? = null,
-    private val autoProjectId: String = "",
+    internal val autoProjectId: String = "",
 ) {
     /** 显示「模型名」一栏:没列出模型,或用户要手填。 */
     val showModel: Boolean get() = noList || manual
