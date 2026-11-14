@@ -211,7 +211,7 @@ class BackupEngine(
     }
 
     /** Read and validate a backup without writing anything. Throws [BackupException] when invalid. */
-    fun inspect(input: InputStream): BackupManifest = readBackup(input).manifest
+    fun inspect(input: InputStream): BackupManifest = readBackup(input).first
 
     /**
      * Restore a backup. Validates the whole ZIP (manifest, version, entry list, paths) before
