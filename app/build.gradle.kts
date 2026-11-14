@@ -18,8 +18,8 @@ android {
         applicationId = "com.wangzan101.mika2"
         minSdk = 29
         targetSdk = 35
-        versionCode = 46
-        versionName = "0.1.41"
+        versionCode = 47
+        versionName = "0.1.42"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         // 关于页版本号后的 Beta 标记;出正式版时改成 false
@@ -37,7 +37,7 @@ android {
     // 所以只在这次构建要出 perf/release 包时打开,单独构建调试包时产物仍是 app-debug.apk。
     splits {
         abi {
-            isEnable = gradle.startParameter.taskNames.any { Regex("(?i)(perf|release)").containsMatchIn(it) }
+            isEnable = gradle.startParameter.taskNames.any { it.startsWith("assemble") && Regex("(?i)(perf|release)").containsMatchIn(it) }
             reset()
             include("arm64-v8a")
             isUniversalApk = true
