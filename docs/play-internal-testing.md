@@ -117,3 +117,5 @@ last remaining explanation for HSBC flagging it. It is not a
 guarantee: HSBC could also be flagging the accessibility service
 itself, or Play Integrity. Do not claim HSBC passes until it is
 tested live on the phone after a Play install.
+
+<!-- trigger check: 2026-11-14T12:30:59Z -->
