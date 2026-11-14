@@ -115,6 +115,47 @@ class BuiltinShellEngine(
     private var discoveryJob: Job? = null
     private var started = false
 
+    /**
+     * 银行模式:用户亲手暂停时为 true。暂停时看门狗不重起助手,[status] 是
+     * [BuiltinShellStatus.Paused];配对、钥匙和端口缓存都不动,恢复时直接重连。
+     * 只由 [pause]/[resume] 改,进程重启后由 App 层按持久化的银行模式开关重设。
+     */
+    @Volatile
+    private var _paused = false
+    override val paused: Boolean get() = _paused
+
+    /**
+     * 暂停:取消排着的重试,停掉正在跑的助手,看门狗不再把它起回来。
+     * 不调用 [platform.forget]:配对钥匙、端口缓存和「已配对」标记都留着,
+     * [resume] 直接用已配对的连接重连,不用重新配对。
+     */
+    override fun pause() {
+        synchronized(this) {
+            retryJob?.cancel()
+            retryJob = null
+            _paused = true
+        }
+        runCatching { platform.stopHelper() }
+        _status.value = BuiltinShellStatus.Paused
+    }
+
+    /**
+     * 恢复:取消暂停,按已有配对重新连接并启动助手。没有配对过(也不能经 root 起)
+     * 时不强行起,状态回到没设置的样子,由界面引导配对。
+     */
+    override fun resume() {
+        synchronized(this) {
+            if (!_paused) return
+            _paused = false
+            failures = 0
+        }
+        if (helper.value != null) {
+            _status.value = BuiltinShellStatus.Running
+            return
+        }
+        if (selfStart()) schedule(0) else _status.value = idleStatus()
+    }
+
     override val paired: Boolean get() = platform.paired()
 
     override val restart: HelperRestart get() = when {
@@ -153,6 +194,11 @@ class BuiltinShellEngine(
         var first = true
         scope.launch {
             helper.collect { h ->
+                // 银行模式暂停着:助手断开是用户要的,不重起,状态就停在 Paused。
+                if (_paused) {
+                    _status.value = BuiltinShellStatus.Paused
+                    return@collect
+                }
                 if (h != null) {
                     synchronized(this@BuiltinShellEngine) { failures = 0; retryJob?.cancel() }
                     autoOn?.reset()
@@ -177,8 +223,9 @@ class BuiltinShellEngine(
         }
     }
 
-    /** 有人要用助手却没有:没在起、也没排着重试就马上起一次。 */
+    /** 有人要用助手却没有:没在起、也没排着重试就马上起一次。银行模式暂停时不做:用户要的就是助手停着。 */
     fun need() {
+        if (_paused) return
         if (helper.value != null || !selfStart()) return
         synchronized(this) { if (retryJob?.isActive == true) return }
         if (launchLock.isLocked) return
@@ -190,6 +237,7 @@ class BuiltinShellEngine(
      * Mika 自己起不来了就照实改状态。
      */
     fun rootChanged() {
+        if (_paused) return
         if (helper.value != null) return
         synchronized(this) {
             failures = 0
@@ -203,6 +251,8 @@ class BuiltinShellEngine(
      * Mika 自己正在写这个开关时不跟着动:系统可能马上拨回去,由写的那一边判断。
      */
     fun wirelessDebuggingChanged() {
+        // 银行模式暂停时开关的变化是用户要的(暂停时关掉、恢复时打开),不跟着动。
+        if (_paused) return
         // 经 su 起助手不看无线调试
         if (helper.value != null || !platform.paired() || rootStart) return
         if (autoOn?.writing == true) return
@@ -220,6 +270,7 @@ class BuiltinShellEngine(
      * 卡在无线调试关着(包括上一个网络不允许)也马上再试。换了网络,上一个网络上的拒绝不再算数。
      */
     fun wifiAvailable() {
+        if (_paused) return
         autoOn?.reset()
         val s = _status.value
         val off = s == BuiltinShellStatus.WirelessDebuggingOff || s == BuiltinShellStatus.Failed(BuiltinShellFailure.WifiNotAllowed)
@@ -264,6 +315,11 @@ class BuiltinShellEngine(
     }
 
     private suspend fun launchOnce(): Unit = launchLock.withLock {
+        // 暂停和启动几乎同时发生时:已经排上的这一次也不起,状态停在 Paused。
+        if (_paused) {
+            _status.value = BuiltinShellStatus.Paused
+            return@withLock
+        }
         if (helper.value != null) return@withLock
         // 先走 root:不用配对、不用 Wi-Fi;不行时配过对就接着走无线调试
         if (rootStart) {
@@ -402,6 +458,8 @@ class BuiltinShellEngine(
     }
 
     override suspend fun retry() {
+        // 银行模式暂停时重试也不起助手:要恢复请调 resume()。
+        if (_paused) return
         synchronized(this) {
             failures = 0
             retryJob?.cancel()

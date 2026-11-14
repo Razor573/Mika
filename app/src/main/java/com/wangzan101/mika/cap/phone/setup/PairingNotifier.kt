@@ -44,6 +44,8 @@ sealed interface PairingNotice {
             return when (status) {
                 BuiltinShellStatus.Running -> Done
                 BuiltinShellStatus.Connecting -> Working
+                // 银行模式暂停着:用户亲手停的,不要弹配对码通知打扰他。
+                BuiltinShellStatus.Paused -> null
                 is BuiltinShellStatus.Failed -> when {
                     status.reason.duringPairing -> EnterCode(port, PhoneSetupCopy.notifyRetry(status.reason))
                     status.fix == BuiltinShellFix.RePair && port != null -> EnterCode(port)

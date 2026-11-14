@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** 设置里能进入的子页面;[Home] 是设置首页,[Advanced] 集中放置连接、维护和工程能力。 */
-private enum class SettingsPage { Home, Advanced, AppAccess, PhoneOps, Calls, Wechat, DuringWork, Capsule, Language, Notifications, Recommendations, Sandbox, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, RunStats, Proactive, Backup }
+private enum class SettingsPage { Home, Advanced, AppAccess, PhoneOps, Calls, Wechat, DuringWork, Capsule, Language, Notifications, Recommendations, Sandbox, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, RunStats, Proactive, Backup, Banking }
 
 /**
  * 设置页:总状态卡 + 常用 / 我的数据 / 其他。高级与其他只增加一层,各子页返回来时的页面。
@@ -205,6 +205,8 @@ fun SettingsScreen(
             onOpenAutoArchive = { editingAutoArchive = true },
             onOpenMemory = onOpenMemory,
             onOpenBackup = { page = SettingsPage.Backup },
+            onOpenBanking = { page = SettingsPage.Banking },
+            bankingPaused = com.wangzan101.mika.settings.BankingMode.isPaused(context),
             onOpenRecommendations = { page = SettingsPage.Recommendations },
             onOpenAdvanced = { page = SettingsPage.Advanced },
             versionName = BuildConfig.VERSION_NAME, updateVersion = updateVersion, onOpenAbout = onOpenAbout,
@@ -270,6 +272,7 @@ fun SettingsScreen(
         SettingsPage.RunStats -> RunStatsScreen(remember { RunStore(context).metrics }, onBack = back)
         SettingsPage.Proactive -> com.wangzan101.mika.proactive.ProactiveScreen(onBack = back)
         SettingsPage.Backup -> BackupScreen(onBack = toHome)
+        SettingsPage.Banking -> BankingScreen(onBack = toHome, onFix = ::fix)
     }
 
     if (editingProxy) NetProxyDialog(
@@ -378,6 +381,9 @@ fun SettingsContent(
     onOpenLanguage: () -> Unit = {},
     onOpenMemory: (() -> Unit)? = null,
     onOpenBackup: (() -> Unit)? = null,
+    /** 银行模式(暂停 Mika 让银行 App 打开)的入口;暂停着时首页这一行写「已暂停」。 */
+    onOpenBanking: (() -> Unit)? = null,
+    bankingPaused: Boolean = false,
     onOpenRecommendations: () -> Unit = {},
     onOpenAdvanced: () -> Unit = {},
     versionName: String = "",
@@ -402,6 +408,19 @@ fun SettingsContent(
             ListRow(MikaIcons.Phone, stringResource(R.string.settings_phone_ops), onClick = onOpenPhoneOps) {
                 PhoneOpsPill(status)
                 RowChevron()
+            }
+            onOpenBanking?.let {
+                ListRow(
+                    MikaIcons.Shield, stringResource(R.string.banking_title),
+                    stringResource(if (bankingPaused) R.string.banking_paused_row_sub else R.string.banking_active_row_sub),
+                    onClick = it,
+                ) {
+                    RowValue(
+                        stringResource(if (bankingPaused) R.string.banking_helper_paused else R.string.banking_active),
+                        if (bankingPaused) ValueTone.Plain else ValueTone.Ok,
+                    )
+                    RowChevron()
+                }
             }
             ListRow(MikaIcons.Phone, stringResource(R.string.calls_title), stringResource(R.string.calls_entry_sub), onClick = onOpenCalls) { RowChevron() }
             ListRow(MikaIcons.Chats, stringResource(R.string.wechat_title), stringResource(R.string.wechat_settings_sub), onClick = onOpenWechat) {

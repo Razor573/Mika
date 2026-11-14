@@ -103,7 +103,10 @@ class AccessibilityRepair(
     }
 
     private fun eligible(s: A11yObservation, h: BuiltinShellStatus, unlocked: Boolean) =
-        allowed() && s.stuck && unlocked && (direct() || h == BuiltinShellStatus.Running) && consent().wants(RecoveryCapability.Accessibility)
+        // 银行模式暂停时绝不自动把无障碍打开:用户亲手关掉它就是为了让银行 App 通过,
+        // 修好它等于把暂停取消了。恢复时用户自己在系统设置里打开。
+        allowed() && s.stuck && unlocked && h != BuiltinShellStatus.Paused &&
+            (direct() || h == BuiltinShellStatus.Running) && consent().wants(RecoveryCapability.Accessibility)
 
     private suspend fun repair(
         service: StateFlow<A11yObservation>,

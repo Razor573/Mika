@@ -274,6 +274,19 @@ class AccessibilityRepairTest {
         assertNull(wait.await())
     }
 
+    /**
+     * 银行模式暂停时绝不自动把无障碍打开:即使 App 自己拿着修改系统设置的授权
+     * (direct),助手状态是 Paused 也不能修。用户恢复时自己在系统设置里打开。
+     */
+    @Test
+    fun bankingModePausedNeverRepairs() = runTest {
+        val rig = Rig(helperStatus = BuiltinShellStatus.Paused, direct = true).also { it.start(this) }
+        advanceTimeBy(AccessibilityRepair.GRACE_MS + 20_000)
+        runCurrent()
+        assertTrue(rig.restarts.isEmpty())
+        assertEquals(A11yObservation(enabled = true, connected = false), rig.service.value)
+    }
+
     @Test
     fun awaitWithTheRealRepairEndToEnd() = runTest {
         val rig = Rig(connectAfterMs = 3_000).also { it.start(this) }

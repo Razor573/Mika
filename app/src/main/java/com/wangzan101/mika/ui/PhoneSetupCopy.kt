@@ -231,6 +231,8 @@ object PhoneSetupCopy {
         BuiltinShellStatus.NotPaired -> tr(R.string.settings_not_set) to ValueTone.Bad
         BuiltinShellStatus.WirelessDebuggingOff -> tr(R.string.phone_wireless_off) to ValueTone.Bad
         BuiltinShellStatus.Connecting -> tr(R.string.phone_connecting) to ValueTone.Plain
+        // 银行模式暂停着:不是故障,用户亲手停的。
+        BuiltinShellStatus.Paused -> tr(R.string.banking_helper_paused) to ValueTone.Plain
         is BuiltinShellStatus.Failed -> tr(R.string.phone_error) to ValueTone.Bad
     }
 
@@ -244,6 +246,8 @@ object PhoneSetupCopy {
         BuiltinShellStatus.NotPaired -> tr(R.string.phone_line_not_paired)
         BuiltinShellStatus.WirelessDebuggingOff -> tr(R.string.phone_line_wireless_off)
         BuiltinShellStatus.Connecting -> if (rootStart) ROOT_STARTING_LINE else tr(R.string.phone_connecting)
+        // 银行模式暂停着:说清是用户亲手停的、银行 App 现在应该能打开。
+        BuiltinShellStatus.Paused -> tr(R.string.banking_paused_body)
         is BuiltinShellStatus.Failed -> when (s.reason) {
             BuiltinShellFailure.NoWifi -> NO_WIFI_LINE
             BuiltinShellFailure.WifiNotAllowed -> tr(R.string.phone_line_joined, failure(s.reason).title, WIFI_NOT_ALLOWED_LINE)

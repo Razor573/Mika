@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Banking mode (Settings > Banking mode). English only, like the backup strings in strings_backup.xml. -->
+    <string name="banking_title" translatable="false">Banking mode</string>
+    <string name="banking_sub" translatable="false">Pause Mika so your bank app opens</string>
+    <string name="banking_explain" translatable="false">Banking apps block Mika while its accessibility service or wireless debugging is on. Banking mode turns both off and stops the phone helper. Nothing is uninstalled, nothing is deleted, and the wireless-debugging pairing stays saved.</string>
+    <string name="banking_paused_title" translatable="false">Mika paused</string>
+    <string name="banking_paused_body" translatable="false">Accessibility off, helper disconnected. HSBC should now open.</string>
+    <string name="banking_active" translatable="false">Active</string>
+    <string name="banking_active_title" translatable="false">Mika active</string>
+    <string name="banking_active_body" translatable="false">Accessibility and the helper are running. Turn on Banking mode before opening your bank app.</string>
+    <string name="banking_pause" translatable="false">Pause Mika</string>
+    <string name="banking_pause_sub" translatable="false">Turn off accessibility and wireless debugging, stop the helper</string>
+    <string name="banking_resume" translatable="false">Resume Mika</string>
+    <string name="banking_resume_sub" translatable="false">Reconnect the helper using the saved pairing</string>
+    <string name="banking_resumed" translatable="false">Mika is back on.</string>
+    <string name="banking_resume_note" translatable="false">Android does not let an app turn its own accessibility service back on. After resuming, open Accessibility settings and turn Mika back on yourself. No new pairing code is needed: the helper reconnects with the pairing that is already saved.</string>
+    <string name="banking_a11y_label" translatable="false">Accessibility service</string>
+    <string name="banking_wireless_label" translatable="false">Wireless debugging</string>
+    <string name="banking_helper_label" translatable="false">Phone helper</string>
+    <string name="banking_helper_running" translatable="false">Running</string>
+    <string name="banking_helper_paused" translatable="false">Paused</string>
+    <string name="banking_helper_not_running" translatable="false">Not running</string>
+    <string name="banking_helper_connecting" translatable="false">Connecting…</string>
+    <string name="banking_task_stopped" translatable="false">A running task was stopped first.</string>
+    <string name="banking_a11y_manual" translatable="false">Could not turn the accessibility service off from here. Open Accessibility settings and turn Mika off.</string>
+    <string name="banking_wireless_manual" translatable="false">Could not turn wireless debugging off from here. Open Developer options and turn it off.</string>
+    <string name="banking_step_a11y" translatable="false">Turn Mika back on in Accessibility settings</string>
+    <string name="banking_step_wireless" translatable="false">Turn wireless debugging back on in Developer options</string>
+    <string name="banking_step_repair" translatable="false">Pair the phone helper again</string>
+    <string name="banking_reconnect" translatable="false">Reconnect helper now</string>
+    <string name="banking_paused_row_sub" translatable="false">Paused - your bank app should open</string>
+    <string name="banking_active_row_sub" translatable="false">Active - Mika is running</string>
+</resources>

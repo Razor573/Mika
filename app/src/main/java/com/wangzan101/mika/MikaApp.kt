@@ -435,6 +435,9 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         capsule.start()
         // 内置助手的真实现,并开始看着助手(Mika 进程起来后,还活着的助手会自己交接 Binder)
         phone.shellManager.start()
+        // 银行模式暂停着:进程重启后把暂停重设上,看门狗不再把助手起回来,
+        // 无障碍自动修复也不会把它打开。用户在设置 › 银行模式里恢复之前一直停着。
+        if (com.wangzan101.mika.settings.BankingMode.isPaused(this)) phone.shellControl.pause()
         // 连接一可用就补上默认打开的几项能力
         phone.recovery.start()
         // 告诉内置助手:Mika 被杀后要不要把它拉起来(胶囊一直显示或有任务在跑时才要;退出期间都不要)

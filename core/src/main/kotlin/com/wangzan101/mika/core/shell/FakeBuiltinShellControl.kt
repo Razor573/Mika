@@ -34,6 +34,18 @@ class FakeBuiltinShellControl(
         status.value = retryResult
     }
 
+    override val paused: Boolean get() = status.value == BuiltinShellStatus.Paused
+
+    override fun pause() {
+        calls += "pause"
+        status.value = BuiltinShellStatus.Paused
+    }
+
+    override fun resume() {
+        calls += "resume"
+        status.value = retryResult
+    }
+
     override suspend fun unpair() {
         calls += "unpair"
         status.value = BuiltinShellStatus.NotPaired

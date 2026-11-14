@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -749,5 +750,78 @@ class BuiltinShellEngineTest {
         advanceUntilIdle()
         assertEquals(BuiltinShellStatus.NotPaired, e.status.value)
         assertEquals(1, suCalls())
+    }
+
+    // ---- 银行模式:暂停助手,不断配对 ----
+
+    @Test
+    fun pauseStopsHelperAndWatchdogWithoutForgetting() = runTest {
+        platform.pairedFlag = true
+        helper.value = "first"
+        val e = engine()
+        e.start()
+        runCurrent()
+        assertEquals(BuiltinShellStatus.Running, e.status.value)
+        e.pause()
+        assertEquals(BuiltinShellStatus.Paused, e.status.value)
+        assertTrue(e.paused)
+        assertTrue(e.paired)
+        assertEquals(listOf("stop"), platform.calls.filter { it == "stop" })
+        assertFalse(platform.calls.any { it == "forget" })
+        // 看门狗不再重起:助手断开、Wi-Fi 变化、开关变化都只停在 Paused。
+        advanceUntilIdle()
+        assertEquals(0, launches())
+        assertEquals(BuiltinShellStatus.Paused, e.status.value)
+        e.need()
+        e.retry()
+        e.wifiAvailable()
+        e.wirelessDebuggingChanged()
+        advanceUntilIdle()
+        assertEquals(0, launches())
+        assertEquals(BuiltinShellStatus.Paused, e.status.value)
+    }
+
+    @Test
+    fun resumeReconnectsWithSavedPairing() = runTest {
+        platform.pairedFlag = true
+        helper.value = "first"
+        val e = engine()
+        e.start()
+        runCurrent()
+        assertEquals(BuiltinShellStatus.Running, e.status.value)
+        e.pause()
+        assertEquals(BuiltinShellStatus.Paused, e.status.value)
+        e.resume()
+        assertEquals(false, e.paused)
+        advanceUntilIdle()
+        assertEquals(1, launches())
+        assertEquals(BuiltinShellStatus.Running, e.status.value)
+        // 恢复不走配对:没有配对码,没有换钥匙。
+        assertFalse(platform.calls.any { it.startsWith("pair ") })
+    }
+
+    @Test
+    fun pauseBeforeStartKeepsHelperStopped() = runTest {
+        platform.pairedFlag = true
+        val e = engine()
+        e.pause()
+        e.start()
+        advanceUntilIdle()
+        assertEquals(BuiltinShellStatus.Paused, e.status.value)
+        assertEquals(0, launches())
+        e.resume()
+        advanceUntilIdle()
+        assertEquals(1, launches())
+        assertEquals(BuiltinShellStatus.Running, e.status.value)
+    }
+
+    @Test
+    fun resumeWithoutPairingDoesNotLaunch() = runTest {
+        val e = engine()
+        e.pause()
+        e.resume()
+        advanceUntilIdle()
+        assertEquals(0, launches())
+        assertEquals(BuiltinShellStatus.NotPaired, e.status.value)
     }
 }

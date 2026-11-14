@@ -42,7 +42,7 @@ install. Keep the keystore backup offline; never commit it.
 
 ## Build
 
-- `app/build.gradle.kts`: versionCode 48, versionName 0.1.43
+- `app/build.gradle.kts`: versionCode 49, versionName 0.1.44
   (versionName was also bumped because the in-app updater compares
   versionName/tag, and 0.1.42 is already the versionName of v47).
 - `.github/workflows/build-apk.yml`: after the release APK step, runs
