@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** 设置里能进入的子页面;[Home] 是设置首页,[Advanced] 集中放置连接、维护和工程能力。 */
-private enum class SettingsPage { Home, Advanced, AppAccess, PhoneOps, Calls, Wechat, DuringWork, Capsule, Language, Notifications, Recommendations, Sandbox, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, RunStats, Proactive }
+private enum class SettingsPage { Home, Advanced, AppAccess, PhoneOps, Calls, Wechat, DuringWork, Capsule, Language, Notifications, Recommendations, Sandbox, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, RunStats, Proactive, Backup }
 
 /**
  * 设置页:总状态卡 + 常用 / 我的数据 / 其他。高级与其他只增加一层,各子页返回来时的页面。
@@ -204,6 +204,7 @@ fun SettingsScreen(
             autoArchiveDays = autoArchiveDays,
             onOpenAutoArchive = { editingAutoArchive = true },
             onOpenMemory = onOpenMemory,
+            onOpenBackup = { page = SettingsPage.Backup },
             onOpenRecommendations = { page = SettingsPage.Recommendations },
             onOpenAdvanced = { page = SettingsPage.Advanced },
             versionName = BuildConfig.VERSION_NAME, updateVersion = updateVersion, onOpenAbout = onOpenAbout,
@@ -268,6 +269,7 @@ fun SettingsScreen(
         )
         SettingsPage.RunStats -> RunStatsScreen(remember { RunStore(context).metrics }, onBack = back)
         SettingsPage.Proactive -> com.wangzan101.mika.proactive.ProactiveScreen(onBack = back)
+        SettingsPage.Backup -> BackupScreen(onBack = toHome)
     }
 
     if (editingProxy) NetProxyDialog(
@@ -375,6 +377,7 @@ fun SettingsContent(
     language: AppLanguage = AppLanguage.System,
     onOpenLanguage: () -> Unit = {},
     onOpenMemory: (() -> Unit)? = null,
+    onOpenBackup: (() -> Unit)? = null,
     onOpenRecommendations: () -> Unit = {},
     onOpenAdvanced: () -> Unit = {},
     versionName: String = "",
@@ -432,11 +435,14 @@ fun SettingsContent(
             onOpenMemory?.let {
                 ListRow(MikaIcons.Heart, stringResource(R.string.settings_memory_data), stringResource(R.string.settings_memory_sub), first = true, onClick = it) { RowChevron() }
             }
+            onOpenBackup?.let {
+                ListRow(MikaIcons.Archive, stringResource(R.string.backup_title), stringResource(R.string.backup_sub), first = onOpenMemory == null, onClick = it) { RowChevron() }
+            }
             ListRow(
                 MikaIcons.Archive,
                 stringResource(R.string.settings_auto_archive),
                 stringResource(R.string.settings_auto_archive_sub),
-                first = onOpenMemory == null,
+                first = onOpenMemory == null && onOpenBackup == null,
                 onClick = onOpenAutoArchive,
             ) {
                 RowValue(

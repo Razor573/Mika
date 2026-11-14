@@ -42,9 +42,9 @@ install. Keep the keystore backup offline; never commit it.
 
 ## Build
 
-- `app/build.gradle.kts`: versionCode 47, versionName 0.1.42
+- `app/build.gradle.kts`: versionCode 48, versionName 0.1.43
   (versionName was also bumped because the in-app updater compares
-  versionName/tag, and tag v0.1.41 already exists for v46).
+  versionName/tag, and 0.1.42 is already the versionName of v47).
 - `.github/workflows/build-apk.yml`: after the release APK step, runs
   `:app:bundleRelease` with the same keystore and uploads
   `mika2-release-aab` (14-day retention, same as the APK).
