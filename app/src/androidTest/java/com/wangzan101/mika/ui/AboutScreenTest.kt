@@ -203,7 +203,7 @@ class AboutScreenTest {
             MikaTheme {
                 androidx.compose.foundation.layout.Column {
                     UpdateDownloadActions(com.wangzan101.mika.about.ApkDownloadState(com.wangzan101.mika.about.DownloadPhase.Ready),
-                        false, null, {}, { installs++ }, { deletes++ })
+                        false, null, onDownload = {}, onInstall = { installs++ }, onCancel = { deletes++ })
                 }
             }
         }
@@ -220,7 +220,7 @@ class AboutScreenTest {
             MikaTheme {
                 androidx.compose.foundation.layout.Column {
                     UpdateDownloadActions(com.wangzan101.mika.about.ApkDownloadState(com.wangzan101.mika.about.DownloadPhase.Downloading, 50, 100),
-                        false, null, {}, {}, { deletes++ })
+                        false, null, onDownload = {}, onInstall = {}, onCancel = { deletes++ })
                 }
             }
         }
@@ -236,7 +236,7 @@ class AboutScreenTest {
             MikaTheme {
                 androidx.compose.foundation.layout.Column {
                     UpdateDownloadActions(com.wangzan101.mika.about.ApkDownloadState(com.wangzan101.mika.about.DownloadPhase.Failed),
-                        false, null, { retries++ }, {}, {})
+                        false, null, onDownload = { retries++ }, onInstall = {}, onCancel = {})
                 }
             }
         }
