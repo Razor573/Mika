@@ -183,7 +183,7 @@ object VertexEndpoints {
             .toString()
     }
 
-    internal fun requireHttpsUrl(raw: String, label: String = "URL"): HttpUrl {
+    fun requireHttpsUrl(raw: String, label: String = "URL"): HttpUrl {
         val parsed = raw.trim().toHttpUrlOrNull()
             ?: throw IllegalArgumentException("$label must be a valid HTTPS URL.")
         if (!parsed.isHttps || parsed.username.isNotEmpty() || parsed.password.isNotEmpty() || parsed.host.isBlank()) {
@@ -192,7 +192,7 @@ object VertexEndpoints {
         return parsed
     }
 
-    internal fun requireHttpsOrLoopbackUrl(raw: String, label: String = "URL"): HttpUrl {
+    fun requireHttpsOrLoopbackUrl(raw: String, label: String = "URL"): HttpUrl {
         val parsed = raw.trim().toHttpUrlOrNull()
             ?: throw IllegalArgumentException("$label must be a valid URL.")
         val isLoopbackHttp = parsed.scheme == "http" &&
