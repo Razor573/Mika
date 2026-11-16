@@ -22,6 +22,7 @@ class GeminiModel(
     private val maxOutputTokens: Int? = null,
     /** 用户选的思考档位;null 不发,`none` 尽量关掉思考,其余作为 `thinkingConfig.thinkingLevel` 发出。 */
     private val reasoningEffort: String? = null,
+    private val googleSearch: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:generateContent"
@@ -50,10 +51,11 @@ class GeminiModel(
             vision = capabilities.vision,
             maxOutputTokens = maxOutputTokens,
             reasoningEffort = reasoningEffort,
+            googleSearch = googleSearch && tools.isEmpty(),
         )
         return Request.Builder().url(if (stream) streamEndpoint else endpoint)
             .withHeaders(headers)
-            .header("x-goog-api-key", apiKey)
+            .headerOrReject("x-goog-api-key", apiKey)
             .postInference(InferenceProtocol.Gemini, payload)
             .build()
     }

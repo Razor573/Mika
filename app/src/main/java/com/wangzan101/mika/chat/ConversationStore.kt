@@ -496,6 +496,7 @@ class ConversationStore(
             // 损坏的文件挪到一边留着,不拿新内容覆盖掉
             f.renameTo(File(dir, "${f.name}.corrupt-${System.currentTimeMillis()}"))
         }
+        // 新的一轮记下存进来的时刻;带时间戳的(分支复制、恢复)照原样保留
         val stored = if (turn.atMs == null) turn.copy(atMs = clock()) else turn
         write(conversationId, prior.orEmpty() + (stored to files))
     }

@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wangzan101.mika.core.chatgpt.SignInFailure
+import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.settings.ModelOption
 import com.wangzan101.mika.settings.ModelOptions
@@ -76,6 +77,7 @@ import com.wangzan101.mika.ui.components.ButtonKind
 import com.wangzan101.mika.ui.components.ButtonSize
 import com.wangzan101.mika.ui.components.MikaButton
 import com.wangzan101.mika.ui.components.MikaSwitch
+import com.wangzan101.mika.ui.components.FieldClearButton
 import com.wangzan101.mika.ui.components.FooterNote
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.GroupLabel
@@ -201,14 +203,19 @@ internal fun fixedChoices(role: ModelRole): List<RoleChoice> = when (role) {
  * 标签只作参考,不按能力过滤或置灰;每家下面都能手动填模型名(列表里没有、或这家不提供列表),手填的标「手填」。点一下就生效并返回。
  */
 @Composable
-fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActions, onBack: () -> Unit) {
+fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActions, onBack: () -> Unit,
+    titleOverride: String? = null, hintOverride: String? = null,
+    pickedOverride: ((String, String) -> Boolean)? = null,
+    exclude: ((String, String) -> Boolean)? = null,
+    clearAction: (() -> Unit)? = null, clearSelected: Boolean = false,
+) {
     val c = MikaTheme.colors
     var filter by rememberSaveable { mutableStateOf("") }
     val groups = ui.providers.map { it to ui.options(it) }
     val total = groups.sumOf { it.second.size }
     val q = filter.trim()
-    Page(ModelsCopy.roleName(role), onBack) {
-        Text(ModelsCopy.roleHint(role), Modifier.padding(top = 4.dp, bottom = 12.dp), fontSize = 14.5.sp, lineHeight = 22.sp, color = c.ink2)
+    Page(titleOverride ?: ModelsCopy.roleName(role), onBack) {
+        Text(hintOverride ?: ModelsCopy.roleHint(role), Modifier.padding(top = 4.dp, bottom = 12.dp), fontSize = 14.5.sp, lineHeight = 22.sp, color = c.ink2)
         val fixed = fixedChoices(role)
         if (fixed.isNotEmpty()) {
             GroupCard {
@@ -220,6 +227,11 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
                 }
             }
         }
+        if (clearAction != null) {
+            GroupCard {
+                RadioRow(ModelsCopy.FALLBACK_CLEAR, selected = clearSelected, onClick = clearAction, first = true)
+            }
+        }
         if (total > FILTER_FROM) {
             GroupLabel(ModelsCopy.PICK_FROM, Modifier.padding(top = 8.dp))
             Box(Modifier.padding(bottom = 4.dp)) {
@@ -228,7 +240,10 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
         }
         var anyShown = false
         groups.forEach { (p, options) ->
-            val shown = options.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) || it.displayName.contains(q, ignoreCase = true) }
+            val shown = options.filter {
+                (q.isEmpty() || it.id.contains(q, ignoreCase = true) || it.displayName.contains(q, ignoreCase = true)) &&
+                    exclude?.invoke(p.id, it.id) != true
+            }
             // 这家列不出模型:手填是唯一的选法
             val noList = p.models?.isEmpty() == true
             if (q.isNotEmpty() && shown.isEmpty()) return@forEach
@@ -238,7 +253,7 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
             GroupCard {
                 shown.take(PICK_AT_MOST).forEachIndexed { i, o ->
                     RadioRow(
-                        displayModelName(p, o), selected = ui.picked(role, p.id, o.id), onClick = { actions.pick(p.id, o.id) }, first = i == 0,
+                        displayModelName(p, o), selected = pickedOverride?.invoke(p.id, o.id) ?: ui.picked(role, p.id, o.id), onClick = { actions.pick(p.id, o.id) }, first = i == 0,
                         titleStyle = ModelIdStyle, below = { Tags(o, forVision = role == ModelRole.Vision) },
                     )
                 }
@@ -491,26 +506,58 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
         )
     } else if (changingKey) {
         var key by remember { mutableStateOf("") }
+        var notice by remember { mutableStateOf(ApiKeyText.Notice.None) }
+        val blocked = notice == ApiKeyText.Notice.IllegalCharacters
         MikaDialog(
             onDismissRequest = { changingKey = false },
             title = { Text(ModelsCopy.CHANGE_KEY) },
             text = {
                 KeyboardDismissArea {
-                    Box(Modifier.fillMaxWidth().keepsKeyboard().background(c.fill, MikaShapes.Button).padding(12.dp)) {
-                        if (key.isEmpty()) Text(ModelsCopy.NEW_KEY_HINT, style = MikaType.Body, color = c.ink3)
-                        BasicTextField(
-                            key, { key = it }, Modifier.fillMaxWidth().testTag("new-key"), singleLine = true,
-                            textStyle = MikaType.Body.copy(color = c.ink), cursorBrush = SolidColor(c.accent),
-                            visualTransformation = PasswordVisualTransformation(),
-                        )
+                    Column(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().keepsKeyboard().background(c.fill, MikaShapes.Button)
+                                .padding(start = 12.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.weight(1f)) {
+                                if (key.isEmpty()) Text(ModelsCopy.NEW_KEY_HINT, style = MikaType.Body, color = c.ink3)
+                                BasicTextField(
+                                    key,
+                                    { raw ->
+                                        val accepted = ApiKeyText.accept(raw)
+                                        key = accepted.text
+                                        notice = accepted.notice
+                                    },
+                                    Modifier.fillMaxWidth().testTag("new-key"), singleLine = true,
+                                    textStyle = MikaType.Body.copy(color = c.ink), cursorBrush = SolidColor(c.accent),
+                                    visualTransformation = PasswordVisualTransformation(),
+                                )
+                            }
+                            if (key.isNotEmpty()) {
+                                FieldClearButton(
+                                    stringResource(R.string.model_key_clear),
+                                    {
+                                        val cleared = ApiKeyText.accept("")
+                                        key = cleared.text
+                                        notice = cleared.notice
+                                    },
+                                    Modifier.testTag("new-key-clear"),
+                                )
+                            }
+                        }
+                        ApiKeyNoticeNote(notice, tag = "new-key-notice")
                     }
                 }
             },
             confirmButton = {
-                TextButton({
-                    changingKey = false
-                    if (key.isNotBlank()) actions.changeKey(key)
-                }) { Text(ModelsCopy.SAVE) }
+                TextButton(
+                    onClick = {
+                        if (blocked || key.isBlank() || !ApiKeyText.isHeaderLegal(key.trim())) return@TextButton
+                        changingKey = false
+                        actions.changeKey(key)
+                    },
+                    enabled = key.isNotBlank() && !blocked,
+                ) { Text(ModelsCopy.SAVE) }
             },
             dismissButton = { TextButton({ changingKey = false }) { Text(ModelSetupCopy.CANCEL) } },
         )
@@ -978,6 +1025,18 @@ object ModelsCopy {
         val s = SpeechOptions.summary(ui.speech, ui.systemSpeech, ui.providers)
         val unset = s.title == UNSET
         return RoleLine(s.title, s.sub.orEmpty(), isModel = !unset && (ui.speech is SpeechChoice.Provider || ui.speech is SpeechChoice.Doubao || ui.speech is SpeechChoice.FunAsr || ui.speech is SpeechChoice.Bailian), unset = unset, subtitleOk = s.subOk)
+    }
+
+    /** 主模型备援(项目 3)的卡片图标、名字和右边两行:和用途卡同一套说法。 */
+    val FALLBACK_ICON: ImageVector get() = MikaIcons.Refresh
+    val FALLBACK_CLEAR: String get() = tr(R.string.main_fallback_clear)
+
+    fun fallbackLabel(slot: Int) = "${tr(R.string.main_fallback_name, slot + 1)} · ${tr(R.string.main_fallback_what)}"
+
+    fun fallbackLine(ui: ModelSetupUi, slot: Int): RoleLine {
+        val cfg = ui.roles.mainFallbacks.getOrNull(slot)?.let { id -> ui.configs.firstOrNull { it.id == id } }
+        return if (cfg != null) RoleLine(displayModelName(ui, cfg), ui.providerOf(cfg)?.let(::providerName) ?: cfg.name, isModel = true)
+        else RoleLine(UNSET, tr(R.string.main_fallback_pick), unset = true)
     }
 
     fun roleIcon(role: ModelRole): ImageVector = when (role) {

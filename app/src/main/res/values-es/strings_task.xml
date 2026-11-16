@@ -6,7 +6,7 @@
     <string name="parallel_second_display_failed">No se pudo crear una segunda pantalla virtual, así que por ahora solo se ejecuta una tarea a la vez</string>
     <string name="parallel_needs_14">Ejecutar varias tareas a la vez requiere Android 14 o posterior</string>
     <string name="parallel_low_ram">Este teléfono tiene poca memoria, así que se ejecuta una tarea a la vez</string>
-    <string name="skill_suspended">Esta habilidad no ha funcionado bien últimamente, así que está en pausa</string>
+    <string name="skill_suspended">Esta habilidad no ha funcionado bien últimamente, así que está en pausa: %1$s</string>
     <string name="skill_verified">La habilidad funcionó y ahora está en uso normal: %1$s</string>
     <string name="skill_learned">Mika aprendió una habilidad: %1$s</string>
     <string name="skill_app_draft">Mika anotó algunos datos sobre %1$s para que los revises</string>
@@ -84,4 +84,7 @@
     <string name="screens_waiting">En espera</string>
     <string name="screens_needs_you">Te necesita</string>
     <string name="screens_zoom">Ampliar esta pantalla</string>
+    <string name="task_trigger_time_limit">La tarea programada duró más de %1$d minutos, así que se detuvo.</string>
+    <string name="trigger_failed_streak">La tarea programada falló %1$d veces seguidas</string>
+    <string name="trigger_failed_streak_hint">Puedes pausar o cambiar este plan en la página de tareas programadas.</string>
 </resources>

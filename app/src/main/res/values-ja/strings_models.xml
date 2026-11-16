@@ -192,7 +192,6 @@
     <string name="models_daily_token_budget">プロバイダーの1日の Token 予算</string>
     <string name="models_daily_token_budget_sub">ローカル暦日で、このプロバイダーの全モデル・全用途について報告された入力・出力 Token を集計します。予算に達すると次のリクエストを止めます。実行中のリクエストで超過する場合があり、未報告の使用量は 0 です。ローカル日付が変わると再開します。</string>
     <string name="models_daily_token_budget_save_failed">予算を保存できませんでした。以前の設定が引き続き使われます。</string>
-
     <!-- Vertex AI & Antigravity -->
     <string name="model_example_vertex">例: gemini-4-argon</string>
     <string name="vertex_sa_label">サービス アカウント JSON</string>
@@ -220,4 +219,12 @@
     <string name="signin_antigravity_waiting">ブラウザで Google ログインを完了してから Mika に戻ってください。</string>
     <string name="account_signed_in_note_antigravity">Google (Antigravity) アカウントを使用しています。更新トークンとプロジェクト ID はこの端末のみに暗号化保存されます。</string>
     <string name="account_signed_out_note_antigravity">この端末からログアウトしました。モデルの選択は保持されており、再ログインで再開できます。</string>
+
+    <string name="main_fallback_name">Fallback model %1$d</string>
+    <string name="main_fallback_what">Takes over when the main model is unavailable</string>
+    <string name="main_fallback_pick">Pick a fallback model</string>
+    <string name="main_fallback_clear">No fallback</string>
+    <string name="main_fallback_hint">The main model runs first. If it runs out of quota or fails, the fallback takes over automatically.</string>
+    <string name="main_fallback_failed">Could not set the fallback model</string>
+    <string name="main_fallback_is_main">This is the current main model, so it cannot also be its fallback</string>
 </resources>

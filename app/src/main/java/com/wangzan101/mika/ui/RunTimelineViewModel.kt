@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.io.File
 import com.wangzan101.mika.core.assembly.knownTools
+import com.wangzan101.mika.ui.components.TileTone
 
 enum class TagTone { Ok, Warn, Bad }
 
@@ -58,6 +59,8 @@ data class TimelineHeader(
     val goal: String,
     val criteria: List<String>,
     val outcome: String,
+    /** 结局的基调:已办成(绿)、没办成(红)、只办成一部分(黄)、其余(灰)。 */
+    val outcomeTone: TileTone = TileTone.Neutral,
     /** 这次运行还没结束:结局、核查、统计都还没写齐,页面按秒接着读(见 [RunTimelineScreen])。 */
     val running: Boolean = false,
     val verdict: String,
@@ -113,6 +116,9 @@ class RunTimelineViewModel(
                 ?: events.filterIsInstance<RunEvent.Criteria>().lastOrNull()?.criteria.orEmpty(),
             outcome = outcomeLabel(summary?.outcome ?: ended?.outcome,
                 summary?.judged ?: events.filterIsInstance<RunEvent.OutcomeJudged>().lastOrNull()?.outcome),
+            outcomeTone = outcomeTone(summary?.outcome ?: ended?.outcome,
+                summary?.judged ?: events.filterIsInstance<RunEvent.OutcomeJudged>().lastOrNull()?.outcome,
+                running = ended == null && summary?.endedAtMs == null && alive(runId)),
             // 结束事件或结束时间只要有一个就算跑完了;都没有时还要任务真在跑,界面据此决定要不要按秒重读
             running = ended == null && summary?.endedAtMs == null && alive(runId),
             verdict = verdictLabel(summary?.verdict ?: events.filterIsInstance<RunEvent.Verifier>().lastOrNull()?.verdict),
@@ -235,6 +241,19 @@ class RunTimelineViewModel(
         private val NOT_COUNTED = Regex(""""counts_as_failure"\s*:\s*false""")
         private val ERROR = Regex(""""error"\s*:\s*"([a-z_]+)"""")
 
+        /** 回放按实际调用匹配结果后复用同一份错误译名，不从轮次或模型计划猜失败原因。 */
+        internal fun failureLabel(json: String): String? {
+            val parsed = parse(json)
+            if (parsed != null && parsed["ok"] != JsonPrimitive(false)) return null
+            if (parsed == null && !NOT_OK.containsMatchIn(json)) return null
+            val code = (parsed?.get("error") as? JsonPrimitive)?.contentOrNull
+                ?: ERROR.find(json)?.groupValues?.get(1)
+            val message = (parsed?.get("message") as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+            val reason = ERROR_LABELS[code] ?: message?.let { com.wangzan101.mika.core.record.Redactor.text(it).take(240) }
+                ?: code?.takeIf { it.isNotBlank() }?.take(100)
+            return reason?.let { tr(R.string.result_error_detail, it) }
+        }
+
         private fun resultLabel(json: String, changed: Boolean?): String = when {
             // 按规矩没收、结果里写明不计入失败的(写记忆时)不是出错:只说没收和原因,不带「出错」,这一步也就不标成失败。
             // 同样的错误码别的工具(存技能、改资料)照旧算失败,照旧说出错
@@ -326,6 +345,15 @@ class RunTimelineViewModel(
         }
 
         private fun verdictLabel(verdict: String?) = if (verdict == null) tr(R.string.verify_none) else verifierTag(verdict).text
+
+        /** 结局的基调:已办成绿、没办成红、只办成一部分/做不了黄、进行中或没核实的灰。 */
+        private fun outcomeTone(outcome: String?, judged: String?, running: Boolean): TileTone = when {
+            running -> TileTone.Neutral
+            outcome == "failed" || outcome == "error" -> TileTone.Bad
+            judged == "partial" || judged == "not_possible" -> TileTone.Warn
+            outcome == "succeeded" -> TileTone.Ok
+            else -> TileTone.Neutral
+        }
 
         /** [judged]:交出回答后判的结局;回答如实说没办成、只办了一部分的按它写。 */
         private fun outcomeLabel(outcome: String?, judged: String?) = when {

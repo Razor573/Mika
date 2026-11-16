@@ -65,6 +65,7 @@ internal object StopRules {
 
 internal fun userReason(e: ModelError): String = when (e) {
     is ModelError.Auth -> "The model service rejected the request: invalid API key or missing permission. Check in Settings that your API key is correct and authorised for this model."
+    is ModelError.IllegalHeader -> "API key contains unusable characters. In Settings › Models, paste only the key itself without labels, line breaks, or emoji."
     is ModelError.QuotaExceeded -> "Model account quota exhausted. Check your provider account balance or plan."
     is ModelError.TaskBudgetExceeded -> "Reached this task's budget limit of ${e.limit} tokens; the task is not finished."
     is ModelError.DailyBudgetExceeded ->
@@ -109,6 +110,21 @@ internal fun userReason(e: ModelError): String = when (e) {
     is ModelError.SignInExpired -> "${e.account} sign-in expired. Please sign in with ${e.account} again in Settings › Models."
     is ModelError.AccountPlanNotAllowed ->
         "Your ${e.account} plan cannot use this endpoint (HTTP 403).${if (e.detail.isEmpty()) "" else " Server message: ${quoted(e.detail)}."} Use an API key for ${e.account} instead, or switch to another model in Settings › Models."
+    is ModelError.ChainFailed -> {
+        // 主消息是主模型最初的错误(上面按它的类型生成),后面附整条链每个模型的状态码与一行摘要(MK-1 第 2 批)
+        val trail = e.entries.joinToString("; ") { (name, err) ->
+            "「$name」${chainErrorTag(err)}: ${err.message.orEmpty().lineSequence().firstOrNull().orEmpty().take(80)}"
+        }
+        userReason(e.primary) + " Tried the entire fallback chain for this task, and all failed: $trail."
+    }
+}
+
+/** 链失败记录里每个错误的短标签:认得出的写 HTTP 状态码,其余写故障名。 */
+private fun chainErrorTag(e: ModelError): String = when (e) {
+    is ModelError.Server -> " HTTP ${e.status}"
+    is ModelError.RateLimited -> " HTTP 429"
+    is ModelError.Auth -> " " + RetryPolicy.label(e)
+    else -> " ${RetryPolicy.label(e)}"
 }
 
 /** 引在句中的服务端原话:去掉末尾一个句号(原话自带的),由引它的句子补上自己的「。」;省略号(截短的「…」、「...」)不动。 */

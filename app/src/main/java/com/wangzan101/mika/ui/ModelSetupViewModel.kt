@@ -2,6 +2,7 @@ package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
+import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.ListFailure
 import com.wangzan101.mika.core.net.ProxyFailure
 import com.wangzan101.mika.core.model.Capabilities
@@ -121,6 +122,11 @@ data class AddForm(
     val kind: ProviderConfig.Kind,
     val baseUrl: String,
     val apiKey: String,
+    /**
+     * 最近一次改 Key 的提示:零宽被去掉,或还留着放不进请求头的字符(含换行)。
+     * [ApiKeyText.Notice.IllegalCharacters] 时不能测试、也不能保存。
+     */
+    val keyNotice: ApiKeyText.Notice = ApiKeyText.Notice.None,
     val test: ListState = ListState.Idle,
     val model: String = "",
     val noList: Boolean = false,
@@ -179,14 +185,17 @@ data class AddForm(
     /** 自己跑的服务和自定义的 OpenAI 兼容接口(多半是本地服务)可以不填 Key,其余都要。 */
     val keyRequired: Boolean get() = !isSelfHosted && !(isCustom && kind == ProviderConfig.Kind.OpenAiCompat)
 
+    /** Key 里还有放不进请求头的字符:两个保存动作都不能发请求、也不能把 Key 存下来（Vertex 使用多行 Service Account JSON）。 */
+    val keyRejected: Boolean get() = !isVertex && keyNotice == ApiKeyText.Notice.IllegalCharacters
+
     val canTest: Boolean get() =
-        urlProblem == null && (!keyRequired || apiKey.isNotBlank()) &&
+        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) &&
             (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
             test != ListState.Running && (!noList || model.isNotBlank())
 
-    /** 不测试也能存:地址格式对、该有 Key 的有 Key。和 [canTest] 不同,不看测试进度,也不要求填模型名。 */
+    /** 不测试也能存:地址格式对、该有 Key 的有 Key、Key 放得进请求头。和 [canTest] 不同,不看测试进度,也不要求填模型名。 */
     val canSaveUntested: Boolean get() =
-        urlProblem == null && (!keyRequired || apiKey.isNotBlank()) &&
+        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) &&
             (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
             test != ListState.Running
 
@@ -475,7 +484,7 @@ class ModelSetupViewModel(
         val keepKey = prev.isVertex == (p.kind == ProviderConfig.Kind.Vertex)
         edit {
             val next = AddForm.of(p)
-            if (keepKey) next.copy(apiKey = prev.apiKey) else next
+            if (keepKey) next.copy(apiKey = prev.apiKey, keyNotice = prev.keyNotice) else next
         }
     }
 
@@ -483,7 +492,7 @@ class ModelSetupViewModel(
     fun setKind(kind: ProviderConfig.Kind) = edit {
         if (it.isVertex != (kind == ProviderConfig.Kind.Vertex)) {
             it.copy(
-                kind = kind, noList = false, apiKey = "", projectId = "",
+                kind = kind, noList = false, apiKey = "", keyNotice = ApiKeyText.Notice.None, projectId = "",
                 location = VertexEndpoints.DEFAULT_LOCATION, saSummary = "", saError = null, autoProjectId = "",
             )
         } else {
@@ -491,7 +500,15 @@ class ModelSetupViewModel(
         }
     }
     fun setBaseUrl(url: String) = edit { it.copy(baseUrl = url, noList = false) }
-    fun setApiKey(key: String) = edit { it.copy(apiKey = key) }
+    /** 粘贴或逐字改 Key:去掉零宽;换行和其它放不进请求头的字符原样留下并立刻标出来（Vertex 走 Service Account JSON，不按请求头检查）。 */
+    fun setApiKey(key: String) {
+        if (_state.value.form.isVertex) {
+            setServiceAccountJson(key)
+            return
+        }
+        val accepted = ApiKeyText.accept(key)
+        edit { it.copy(apiKey = accepted.text, keyNotice = accepted.notice) }
+    }
     fun setModel(model: String) = edit { it.copy(model = model) }
 
     /**
@@ -500,16 +517,17 @@ class ModelSetupViewModel(
     fun setServiceAccountJson(raw: String) = edit {
         if (raw.isBlank()) {
             val resetProject = if (it.projectId == it.autoProjectId) "" else it.projectId
-            return@edit it.copy(apiKey = raw, saSummary = "", saError = null, projectId = resetProject, autoProjectId = "")
+            return@edit it.copy(apiKey = raw, keyNotice = ApiKeyText.Notice.None, saSummary = "", saError = null, projectId = resetProject, autoProjectId = "")
         }
         val parsed = runCatching { VertexServiceAccount.parse(raw) }.getOrNull()
         if (parsed == null) {
-            it.copy(apiKey = raw, saSummary = "", saError = tr(R.string.vertex_sa_invalid))
+            it.copy(apiKey = raw, keyNotice = ApiKeyText.Notice.None, saSummary = "", saError = tr(R.string.vertex_sa_invalid))
         } else {
             val keepTypedProject = it.projectId.isNotBlank() && it.projectId != it.autoProjectId
             val nextProject = if (keepTypedProject) it.projectId else parsed.projectId
             it.copy(
                 apiKey = raw,
+                keyNotice = ApiKeyText.Notice.None,
                 saSummary = parsed.displaySummary,
                 saError = null,
                 projectId = nextProject,
@@ -565,19 +583,19 @@ class ModelSetupViewModel(
     fun testAndSave() {
         val f = _state.value.form
         if (!f.canTest) return
+        val key = if (f.isVertex) f.apiKey.trim() else (headerKey(f.apiKey) ?: return rejectKey())
         testJob?.cancel()
         _state.update { it.copy(form = it.form.copy(test = ListState.Running), probeNote = null, pickToProbe = null) }
         testJob = scope.launch {
-            val key = f.apiKey.trim()
             val baseUrl = f.baseUrl.trim()
             val typed = f.typedModel
             val projectId = if (f.isVertex) f.projectId.trim() else ""
             val location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else ""
-            val models = when (val r = withContext(io) { store.listModels(f.kind, baseUrl, key.ifEmpty { null }, f.sessionHeader, projectId, location) }) {
+            val models = when (val r = listSafely { store.listModels(f.kind, baseUrl, key.ifEmpty { null }, f.sessionHeader, projectId, location) }) {
                 is ModelListResult.Ok -> r.models
                 is ModelListResult.Failed -> {
                     if (r.reason != ListFailure.NotSupported && typed.isEmpty()) {
-                        _state.update { it.copy(form = it.form.copy(test = ListState.Failed(r.message), manual = true)) }
+                        _state.update { it.copy(form = it.form.copy(test = ListState.Failed(listMessage(r)), manual = true)) }
                         return@launch
                     }
                     emptyList()
@@ -657,19 +675,26 @@ class ModelSetupViewModel(
     fun saveWithoutTest() {
         val f = _state.value.form
         if (!f.canSaveUntested) return
+        val key = if (f.isVertex) f.apiKey.trim() else (headerKey(f.apiKey) ?: return rejectKey())
         testJob?.cancel()
         _state.update { it.copy(form = it.form.copy(test = ListState.Running), probeNote = null, pickToProbe = null) }
         testJob = scope.launch {
-            val key = f.apiKey.trim()
             val baseUrl = f.baseUrl.trim()
             val typed = f.typedModel
             val projectId = if (f.isVertex) f.projectId.trim() else ""
             val location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else ""
-            val saved = withContext(io) {
-                store.connect(
-                    f.providerName, f.kind, baseUrl, key.ifEmpty { null }, emptyList(), f.sessionHeader,
-                    untested = true, projectId = projectId, location = location,
-                ).also { p -> if (typed.isNotEmpty()) store.markTyped(p.id, typed) }
+            val saved = try {
+                withContext(io) {
+                    store.connect(
+                        f.providerName, f.kind, baseUrl, key.ifEmpty { null }, emptyList(), f.sessionHeader,
+                        untested = true, projectId = projectId, location = location,
+                    ).also { p -> if (typed.isNotEmpty()) store.markTyped(p.id, typed) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(form = it.form.copy(test = ListState.Failed(listFailureText(e)))) }
+                return@launch
             }
             _state.update {
                 snapshot(it.copy(
@@ -680,6 +705,45 @@ class ModelSetupViewModel(
                 ))
             }
         }
+    }
+
+    /**
+     * 拿去放进请求头的 Key:再收一次(零宽去掉),首尾空白去掉。换行算放不进头。
+     * 还含有放不进头的字符时为 null,调用方不能发请求、也不能保存。
+     */
+    private fun headerKey(raw: String): String? {
+        val accepted = ApiKeyText.accept(raw)
+        if (accepted.notice == ApiKeyText.Notice.IllegalCharacters) return null
+        val key = accepted.text.trim()
+        return if (ApiKeyText.isHeaderLegal(key)) key else null
+    }
+
+    /** 表单上的 Key 放不进请求头:标红,停在表单上,不发请求。 */
+    private fun rejectKey() {
+        _state.update { it.copy(form = it.form.copy(keyNotice = ApiKeyText.Notice.IllegalCharacters, test = ListState.Idle)) }
+    }
+
+    /** 列模型。头值仍让 OkHttp 抛时收成失败结果,不让异常逃出协程把进程打掉。消息里不带头的原文。 */
+    private suspend fun listSafely(block: suspend () -> ModelListResult): ModelListResult = try {
+        withContext(io) { block() }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        listFailure(e)
+    }
+
+    private fun listFailure(e: Exception): ModelListResult.Failed = when (e) {
+        is ModelError.IllegalHeader, is IllegalArgumentException -> ModelListResult.Failed(ListFailure.IllegalKey)
+        else -> ModelListResult.Failed(ListFailure.of(e), e.message.orEmpty())
+    }
+
+    private fun listMessage(r: ModelListResult.Failed): String =
+        if (r.reason == ListFailure.IllegalKey) tr(R.string.model_key_illegal_chars) else r.message
+
+    /** 列模型以外的失败给人看的一句。头值不合法时不把异常原文(可能含 Key)露出去。 */
+    private fun listFailureText(e: Exception): String = when (e) {
+        is ModelError.IllegalHeader, is IllegalArgumentException -> tr(R.string.model_key_illegal_chars)
+        else -> e.message.orEmpty()
     }
 
     /**
@@ -846,6 +910,7 @@ class ModelSetupViewModel(
                 )
                 // 代理那一段的问题:说是代理,不说成模型或服务商不行
                 is ModelError.Proxy -> ProbeOutcome.Failed(tr(R.string.model_probe_failed, model, proxyReason(e)))
+                is ModelError.IllegalHeader -> ProbeOutcome.Failed(tr(R.string.model_key_illegal_chars))
                 else -> ProbeOutcome.Failed(tr(R.string.model_probe_failed, model, e.message.orEmpty()))
             }
         }
@@ -1089,6 +1154,68 @@ class ModelSetupViewModel(
         }
     }
 
+    /** 把 [providerId] 下的 [model] 设为第 [slot] 位主模型备援(项目 3):备好配置再记位子,和选主模型同一条建配置的路。记不上位就不清提示,让用户知道没设成。 */
+    fun pickFallback(slot: Int, providerId: String, model: String) {
+        val m = model.trim()
+        if (m.isEmpty()) return
+        scope.launch {
+            var ok = false
+            withContext(io) {
+                val p = store.provider(providerId) ?: return@withContext
+                val caps = ModelOptions.ofProvider(p, store.list()).firstOrNull { it.id == m }?.capabilities ?: ModelOptions.baseOf(p)
+                ok = store.ensureConfigId(p.id, m, caps)?.let { store.setMainFallback(slot, it) } == true
+            }
+            _state.update { snapshot(if (ok) it.copy(probeNote = null, pickToProbe = null) else it.copy(probeNote = tr(R.string.main_fallback_failed))) }
+        }
+    }
+
+    /** 备援手填(或在没试通过的那家选):先试调用,通了才设上;规矩和主模型手填一样(还要会调用工具)。 */
+    fun pickFallbackManual(slot: Int, providerId: String, model: String, onPicked: () -> Unit = {}) {
+        val m = model.trim()
+        if (m.isEmpty() || _state.value.manualPick[providerId] == ListState.Running) return
+        val p = store.provider(providerId) ?: return
+        if (store.isMainModel(providerId, m)) {
+            _state.update { it.copy(manualPick = it.manualPick + (providerId to ListState.Failed(tr(R.string.main_fallback_is_main)))) }
+            return
+        }
+        _state.update { it.copy(manualPick = it.manualPick + (providerId to ListState.Running)) }
+        scope.launch {
+            val outcome = probeSaved(p, m)
+            val problem = when {
+                outcome is ProbeOutcome.Failed -> outcome.message
+                outcome is ProbeOutcome.NoToolCall -> tr(R.string.model_probe_no_tools_pick, m)
+                else -> null
+            }
+            if (problem != null) {
+                _state.update { it.copy(manualPick = it.manualPick + (providerId to ListState.Failed(problem))) }
+                return@launch
+            }
+            var ok = false
+            withContext(io) {
+                store.markVerified(p.id, m)
+                if (p.models.orEmpty().none { it.id == m }) store.markTyped(p.id, m)
+                store.provider(p.id)?.let { fresh ->
+                    val caps = ModelOptions.ofProvider(fresh, store.list()).firstOrNull { it.id == m }?.capabilities ?: ModelOptions.baseOf(fresh)
+                    ok = store.ensureConfigId(fresh.id, m, caps)?.let { store.setMainFallback(slot, it) } == true
+                }
+            }
+            if (!ok) {
+                _state.update { it.copy(manualPick = it.manualPick + (providerId to ListState.Failed(tr(R.string.main_fallback_failed)))) }
+                return@launch
+            }
+            _state.update { snapshot(it.copy(manualPick = it.manualPick - providerId, probeNote = null, pickToProbe = null)) }
+            onPicked()
+        }
+    }
+
+    /** 撤掉第 [slot] 位主模型备援(项目 3)。 */
+    fun clearFallback(slot: Int) {
+        scope.launch {
+            withContext(io) { store.setMainFallback(slot, null) }
+            sync()
+        }
+    }
+
     /** 看图、轻量的固定选项:「用主模型」或(只有看图)「不用」。 */
     fun choose(role: ModelRole, choice: RoleChoice) {
         scope.launch {
@@ -1229,13 +1356,13 @@ class ModelSetupViewModel(
         if (refreshJobs[providerId]?.isActive == true) return
         _state.update { it.copy(listing = it.listing + (providerId to ListState.Running)) }
         refreshJobs[providerId] = scope.launch {
-            val r = withContext(io) { store.listModels(p) }
+            val r = listSafely { store.listModels(p) }
             val models: List<ListedModel>? = when (r) {
                 is ModelListResult.Ok -> r.models
                 is ModelListResult.Failed -> if (r.reason == ListFailure.NotSupported) emptyList() else null
             }
             if (models != null) withContext(io) { store.rememberModels(p.id, models) }
-            val after = if (r is ModelListResult.Failed && models == null) ListState.Failed(r.message) else ListState.Idle
+            val after = if (r is ModelListResult.Failed && models == null) ListState.Failed(listMessage(r)) else ListState.Idle
             _state.update { snapshot(it.copy(listing = it.listing + (providerId to after))) }
         }
     }
@@ -1252,23 +1379,34 @@ class ModelSetupViewModel(
         else -> true
     }
 
-    /** 换 Key（Vertex 会先校验 Service Account JSON）,然后用新凭证重新列一次模型。 */
+    /**
+     * 换 Key（Vertex 会先校验 Service Account JSON，不走请求头字符限制），然后用新凭证重新列一次模型。
+     * 非 Vertex 渠道先去掉零宽字符；换行和其它放不进请求头的字符不保存、不列模型。
+     */
     fun changeKey(providerId: String, apiKey: String) {
-        val k = apiKey.trim()
+        val isVertex = store.provider(providerId)?.kind == ProviderConfig.Kind.Vertex
+        val k = if (isVertex) apiKey.trim() else (headerKey(apiKey) ?: return)
         if (k.isEmpty()) return
         scope.launch {
-            val updated = withContext(io) {
-                val p = store.provider(providerId) ?: return@withContext false
-                if (p.kind == ProviderConfig.Kind.Vertex) {
-                    val sa = runCatching { VertexServiceAccount.parse(k) }.getOrNull() ?: return@withContext false
-                    store.updateProviderKey(providerId, k)
-                    if (p.projectId.isBlank() && sa.projectId.isNotBlank()) {
-                        store.updateVertexSettings(providerId, sa.projectId, p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION })
+            val updated = try {
+                withContext(io) {
+                    val p = store.provider(providerId) ?: return@withContext false
+                    if (p.kind == ProviderConfig.Kind.Vertex) {
+                        val sa = runCatching { VertexServiceAccount.parse(k) }.getOrNull() ?: return@withContext false
+                        store.updateProviderKey(providerId, k)
+                        if (p.projectId.isBlank() && sa.projectId.isNotBlank()) {
+                            store.updateVertexSettings(providerId, sa.projectId, p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION })
+                        }
+                    } else {
+                        store.updateProviderKey(providerId, k)
                     }
-                } else {
-                    store.updateProviderKey(providerId, k)
+                    true
                 }
-                true
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(listing = it.listing + (providerId to ListState.Failed(listFailureText(e)))) }
+                return@launch
             }
             if (!updated) return@launch
             sync()

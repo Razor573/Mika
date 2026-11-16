@@ -71,6 +71,12 @@ object MikaIcons {
     /** 柱状图:Token 用量。 */
     val Chart = stroke("chart", "M4 20 h16", "M7 16 v-4 M12 16 V6 M17 16 v-7")
     val Clock = stroke("clock", "M3 12 a9 9 0 1 0 18 0 a9 9 0 1 0 -18 0", "M12 7 v5 l3 2")
+    /** 日历:选日期。 */
+    val Calendar = stroke(
+        "calendar",
+        "M5 5.5 h14 a2 2 0 0 1 2 2 v12 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 v-12 a2 2 0 0 1 2 -2 z",
+        "M3 10.5 h18 M8 3.5 v4 M16 3.5 v4",
+    )
     val Alarm = stroke(
         "alarm", "M5 13 a7 7 0 1 0 14 0 a7 7 0 1 0 -14 0", "M12 10 v3 l2 1.5 M5 4 L2.5 6.5 M19 4 l2.5 2.5",
     )
@@ -116,6 +122,12 @@ object MikaIcons {
         "M11 18.5 h2",
     )
     val Moon = stroke("moon", "M20 14.5 A8 8 0 0 1 9.5 4 a8 8 0 1 0 10.5 10.5 z")
+    /** 一个点和两圈波纹:留意着周围的动静(主动能力)。 */
+    val Ripple = stroke(
+        "ripple", "M11.4 12 a0.6 0.6 0 1 0 1.2 0 a0.6 0.6 0 1 0 -1.2 0",
+        "M8.6 8.6 a4.8 4.8 0 0 0 0 6.8 M15.4 8.6 a4.8 4.8 0 0 1 0 6.8",
+        "M5.6 5.6 a9 9 0 0 0 0 12.8 M18.4 5.6 a9 9 0 0 1 0 12.8",
+    )
     val Bell = stroke("bell", "M18 16 V11 a6 6 0 1 0 -12 0 v5 l-2 2 h16 z M10 20.5 a2 2 0 0 0 4 0")
     val Key = stroke("key", "M4 15 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0", "M10.8 12.2 L20 3 M17 6 l3 3 M14.5 8.5 l2 2")
     val Terminal = stroke(
@@ -188,6 +200,8 @@ object MikaIcons {
     )
     /** 引用:往回指的箭头(接着前面那条说)。 */
     val Quote = stroke("quote", "M9.5 6.5 L4.5 11.5 l5 5", "M4.5 11.5 h9 a5.5 5.5 0 0 1 5.5 5.5 v1")
+    /** 引导当前任务:向右转入的弯箭头。 */
+    val Steer = stroke("steer", "M15 4 l5 5 -5 5", "M20 9 H10 a6 6 0 0 0 -6 6 v5")
     /** 选择文字:文字光标。 */
     val SelectText = stroke("select-text", "M9 4.5 h6 M9 19.5 h6 M12 4.5 v15")
     /** 图钉:置顶了的对话。 */

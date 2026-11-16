@@ -34,6 +34,7 @@ internal object GeminiCodec {
         vision: Boolean,
         maxOutputTokens: Int? = null,
         reasoningEffort: String? = null,
+        googleSearch: Boolean = false,
     ): JsonObject {
         val systemText = (listOf(system) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
@@ -42,9 +43,12 @@ internal object GeminiCodec {
             if (systemText.isNotBlank()) putJsonObject("systemInstruction") {
                 putJsonArray("parts") { add(buildJsonObject { put("text", systemText) }) }
             }
-            if (tools.isNotEmpty()) put("tools", buildJsonArray {
-                add(buildJsonObject {
+            if (tools.isNotEmpty() || googleSearch) put("tools", buildJsonArray {
+                if (tools.isNotEmpty()) add(buildJsonObject {
                     put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it)) } })
+                })
+                if (googleSearch) add(buildJsonObject {
+                    putJsonObject("googleSearch") {}
                 })
             })
             put("contents", buildContents(messages, vision))

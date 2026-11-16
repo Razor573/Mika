@@ -3,6 +3,7 @@ package com.wangzan101.mika.voice
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelHttp
+import com.wangzan101.mika.core.model.headerOrReject
 import com.wangzan101.mika.settings.Provider
 import com.wangzan101.mika.settings.ProviderConfig
 import kotlinx.serialization.json.Json
@@ -121,11 +122,15 @@ class Transcriber(
     }
 
     /** 只有「这个接口不是这么用的」(找不到路径、方法不对、请求不合、回的不是这个格式)才换下一种。 */
-    private fun triesNext(e: ModelError): Boolean = e is ModelError.ModelNotFound || e is ModelError.BadResponse
+    // 4xx 是服务商拒收这次送法(MK-1 第 2 批起未映射 4xx 归 Server),换种送法再试;5xx 是服务商出问题,不连着试。
+    private fun triesNext(e: ModelError): Boolean = e is ModelError.ModelNotFound || e is ModelError.BadResponse ||
+        (e is ModelError.Server && e.status in 400..499)
 
     private fun builder(url: String, key: String?, gemini: Boolean): Request.Builder = Request.Builder().url(url).apply {
-        headers.forEach { (k, v) -> header(k, v) }
-        if (!key.isNullOrEmpty()) { if (gemini) header("x-goog-api-key", key) else header("Authorization", "Bearer $key") }
+        headers.forEach { (k, v) -> headerOrReject(k, v) }
+        if (!key.isNullOrEmpty()) {
+            if (gemini) headerOrReject("x-goog-api-key", key) else headerOrReject("Authorization", "Bearer $key")
+        }
     }
 
     private fun parse(method: TranscribeMethod, body: String): String {

@@ -70,6 +70,16 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         prefs.edit().putInt(TASK_STEP_LIMIT, (limit ?: 0).coerceIn(0, MAX_TASK_STEP_LIMIT)).commit()
     }
 
+    /**
+     * 定时任务一次最多跑多少分钟(无人在场,卡住了没人停);null 表示不限制。默认不限制,和步数上限一样,下次触发起生效。
+     * 只认 [TRIGGER_RUN_MINUTES] 里的几档,存了别的值按不限制算。
+     */
+    fun triggerRunMinutes(): Int? = prefs.getInt(TRIGGER_RUN_LIMIT, 0).takeIf { it in TRIGGER_RUN_MINUTES }
+
+    fun setTriggerRunMinutes(minutes: Int?) {
+        prefs.edit().putInt(TRIGGER_RUN_LIMIT, minutes?.takeIf { it in TRIGGER_RUN_MINUTES } ?: 0).commit()
+    }
+
     /** 每个任务允许已报告的输入加输出 Token 总量;null 表示不限制,下次任务起生效。 */
     fun taskTokenBudget(): Long? = prefs.getLong(TASK_TOKEN_BUDGET, 0L).takeIf(TokenBudgetLimits::valid)
 
@@ -92,6 +102,21 @@ class FeatureFlags(private val prefs: SharedPreferences) {
     fun setKeepScreenOn(on: Boolean) {
         prefs.edit().putBoolean(KEEP_SCREEN_ON, on).commit()
     }
+
+    fun showTaskCost(): Boolean = prefs.getBoolean(SHOW_TASK_COST, false)
+
+    fun setShowTaskCost(on: Boolean) {
+        prefs.edit().putBoolean(SHOW_TASK_COST, on).apply()
+    }
+
+    fun showTaskCostChanges(): Flow<Boolean> = callbackFlow {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == null || key == SHOW_TASK_COST) trySend(showTaskCost())
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        send(showTaskCost())
+        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }.distinctUntilChanged()
 
     /** 干活时把被操作的 App 静音;默认开,用户可以关。 */
     fun muteTarget(): Boolean = prefs.getBoolean(MUTE_TARGET, true)
@@ -211,6 +236,13 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(EXTERNAL_SCHEDULE, on).commit()
     }
 
+    /** 设备文件导入是实验功能,默认关闭,下次任务生效。 */
+    fun deviceFiles(): Boolean = prefs.getBoolean(DEVICE_FILES, false)
+
+    fun setDeviceFiles(on: Boolean) {
+        prefs.edit().putBoolean(DEVICE_FILES, on).commit()
+    }
+
     /** 自动归档:多久没有新消息的对话自动归档;0 表示关闭(默认)。 */
     fun autoArchiveDays(): Int = prefs.getInt(AUTO_ARCHIVE_DAYS, 0).takeIf { it in AutoArchive.DAYS } ?: 0
 
@@ -218,7 +250,7 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         prefs.edit().putInt(AUTO_ARCHIVE_DAYS, days.takeIf { it in AutoArchive.DAYS } ?: 0).commit()
     }
 
-    /** 主动能力(实验,见 [com.wangzan101.mika.proactive.ProactiveRuntime]):读所选 App 的通知;默认关。 */
+    /** 主动能力(见 [com.wangzan101.mika.proactive.ProactiveRuntime]):读所选 App 的通知;默认关。 */
     fun proactive(): Boolean = prefs.getBoolean(PROACTIVE, false)
 
     fun setProactive(on: Boolean) {
@@ -357,6 +389,8 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         private const val SCHEDULED_QUIET_HOURS = "scheduled_quiet_hours"
         /** 每个任务步数上限能设的最大值;0/null 表示不限制。 */
         const val MAX_TASK_STEP_LIMIT = 500
+        /** 定时任务最长运行时间可选的几档(分钟)。 */
+        val TRIGGER_RUN_MINUTES = listOf(15, 30, 60, 120)
         private const val SPEED_FLAGS = "speed_flags"
         /**
          * 提速开关默认值的升级,按先后各做一次(键记下做过没有):v2 打开分级读屏、连续操作、按需看图;
@@ -368,14 +402,17 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         )
         private const val PARALLEL_MAX = "parallel_max"
         private const val TASK_STEP_LIMIT = "task_step_limit"
+        private const val TRIGGER_RUN_LIMIT = "trigger_run_limit_minutes"
         private const val TASK_TOKEN_BUDGET = "task_token_budget"
         private const val PROACTIVE_DAILY_TOKEN_BUDGET = "proactive_daily_token_budget"
         private const val KEEP_SCREEN_ON = "keep_screen_on"
+        private const val SHOW_TASK_COST = "show_task_cost"
         private const val MUTE_TARGET = "mute_target"
         private const val OPERATING_PACE = "operating_pace"
         private const val AUTO_ARCHIVE_DAYS = "auto_archive_days"
         private const val SELF_CONFIG = "self_config"
         private const val SELF_OPERATE = "self_operate"
+        private const val DEVICE_FILES = "device_files"
         private const val PIP_OPERATE = "pip_operate"
         private const val EXTERNAL_SCHEDULE = "external_schedule"
         private const val PROACTIVE = "proactive"

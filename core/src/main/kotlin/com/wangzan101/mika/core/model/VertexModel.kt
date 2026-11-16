@@ -16,6 +16,7 @@ class VertexModel(
     private val maxOutputTokens: Int? = null,
     private val reasoningEffort: String? = null,
     baseUrl: String? = null,
+    private val googleSearch: Boolean = false,
 ) : StreamingChatModel {
     private val cleanProjectId = VertexEndpoints.validateProjectId(projectId)
     private val cleanLocation = VertexEndpoints.normalizeLocation(location)
@@ -47,6 +48,7 @@ class VertexModel(
             vision = capabilities.vision,
             maxOutputTokens = maxOutputTokens,
             reasoningEffort = reasoningEffort,
+            googleSearch = googleSearch && tools.isEmpty(),
         )
         var fresh = false
         while (true) {
@@ -74,6 +76,7 @@ class VertexModel(
             vision = capabilities.vision,
             maxOutputTokens = maxOutputTokens,
             reasoningEffort = reasoningEffort,
+            googleSearch = googleSearch && tools.isEmpty(),
         )
         var fresh = false
         while (true) {
@@ -96,8 +99,8 @@ class VertexModel(
             .url(if (stream) streamEndpoint else endpoint)
             .withHeaders(headers)
             .removeHeader("x-goog-api-key")
-            .header("Authorization", "Bearer $accessToken")
-            .header("x-goog-user-project", cleanProjectId)
+            .headerOrReject("Authorization", "Bearer $accessToken")
+            .headerOrReject("x-goog-user-project", cleanProjectId)
             .apply { if (stream) header("Accept", "text/event-stream") }
             .postInference(InferenceProtocol.Gemini, payload)
             .build()

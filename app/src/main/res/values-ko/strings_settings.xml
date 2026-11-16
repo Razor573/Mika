@@ -5,7 +5,6 @@
     <string name="language_title">언어</string>
     <string name="language_system">시스템 설정 따르기</string>
     <string name="language_system_detail">Mika가 지원하는 시스템 언어면 그 언어를, 아니면 영어를 사용해요</string>
-    <string name="settings_basic">자주 사용</string>
     <string name="settings_language_appearance">언어 및 화면</string>
     <string name="settings_model">모델</string>
     <string name="settings_model_sub">모델, 제공업체, Token 사용량</string>
@@ -14,7 +13,6 @@
     <string name="settings_during_work">작업 실행</string>
     <string name="settings_during_work_sub">자율 모드, 조작 속도, 단계 제한, 소리</string>
     <string name="settings_notif_sub">팝업 표시 여부는 시스템 설정에서 바꿔요</string>
-    <string name="settings_privacy">내 데이터</string>
     <string name="settings_memory_data">메모리 및 데이터</string>
     <string name="settings_memory_sub">메모리, 스킬, 저장된 경로, 웹사이트 로그인</string>
     <string name="settings_saved_data">저장된 데이터</string>
@@ -22,10 +20,8 @@
     <plurals name="settings_count_sites">
         <item quantity="other">사이트 %1$d개</item>
     </plurals>
-    <string name="settings_other">기타</string>
-    <string name="settings_advanced">고급 및 기타</string>
-    <string name="settings_advanced_sub">프록시, 컴퓨팅 환경, 연결, 복구</string>
-    <string name="settings_connections">네트워크 및 연결</string>
+    <string name="settings_advanced">고급</string>
+    <string name="settings_advanced_sub">확장, 네트워크, 런타임 및 유지보수</string>
     <string name="settings_maintenance">유지 관리</string>
     <string name="settings_sandbox">파일 및 컴퓨팅 환경</string>
     <string name="settings_routes">저장된 경로</string>
@@ -192,6 +188,8 @@
     <string name="mcp_servers_status_fail">연결 실패: %1$s</string>
     <string name="mcp_servers_refresh_all">모두 테스트</string>
     <string name="mcp_servers_allowlist">허용할 도구(쉼표로 구분, 비우면 전체)</string>
+    <string name="settings_show_task_cost">작업 비용 표시</string>
+    <string name="settings_show_task_cost_sub">새 작업의 DeepSeek API 비용을 위안화로 추정합니다.</string>
     <string name="quit_title">Mika 완전히 종료</string>
     <string name="quit_row_sub">백그라운드 작업을 중지하고 플로팅 캡슐을 숨깁니다</string>
     <string name="quit_confirm_body">실행 중인 작업이 중지되고 플로팅 캡슐과 알림이 사라집니다. Mika를 다시 열면 모두 돌아옵니다.</string>
@@ -213,4 +211,15 @@
     <string name="settings_scheduled_quiet_start">시작 시간</string>
     <string name="settings_scheduled_quiet_end">종료 시간</string>
     <string name="settings_scheduled_quiet_equal">알림을 조용히 표시하려면 시작 시간과 종료 시간을 다르게 선택하세요.</string>
+    <string name="settings_capabilities">기능</string>
+    <string name="settings_preferences">환경설정</string>
+    <string name="settings_data">데이터</string>
+    <string name="settings_extensions">확장 및 연결</string>
+    <string name="settings_network">네트워크</string>
+    <string name="settings_runtime">런타임</string>
+    <string name="settings_trigger_run_limit">예약 작업 최대 실행 시간</string>
+    <string name="settings_trigger_run_limit_sub">예약 작업은 지켜보지 않을 때 실행돼요. 끄면 제한이 없고, 시간이 다 되면 작업이 멈추고 시간 초과라고 알려 줘요.</string>
+    <plurals name="settings_trigger_run_minutes_n">
+        <item quantity="other">%1$d분</item>
+    </plurals>
 </resources>

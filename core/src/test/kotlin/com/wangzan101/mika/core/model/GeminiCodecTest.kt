@@ -1,9 +1,11 @@
 package com.wangzan101.mika.core.model
 
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -115,5 +117,41 @@ class GeminiCodecTest {
         )
         assertEquals(1, contents.size)
         assertEquals("user", contents[0].jsonObject["role"]?.jsonPrimitive?.content)
+    }
+
+    @Test fun buildPayloadEmitsGoogleSearchToolWhenRequested() {
+        val messages = listOf(Message(Role.User, listOf(Part.Text("latest kotlin release")), Author.User))
+        val grounded = GeminiCodec.buildPayload(
+            system = "Search carefully.",
+            messages = messages,
+            tools = emptyList(),
+            vision = false,
+            googleSearch = true,
+        )
+        val tools = grounded["tools"]!!.jsonArray
+        assertEquals(1, tools.size)
+        assertEquals(JsonObject(emptyMap()), tools[0].jsonObject["googleSearch"]!!.jsonObject)
+        assertFalse(tools[0].jsonObject.containsKey("functionDeclarations"))
+
+        val plain = GeminiCodec.buildPayload(
+            system = "Search carefully.",
+            messages = messages,
+            tools = emptyList(),
+            vision = false,
+            googleSearch = false,
+        )
+        assertFalse(plain.containsKey("tools"))
+
+        val both = GeminiCodec.buildPayload(
+            system = "Search carefully.",
+            messages = messages,
+            tools = listOf(ToolSpec("wait", "wait briefly", """{"type":"object"}""")),
+            vision = false,
+            googleSearch = true,
+        )
+        val bothTools = both["tools"]!!.jsonArray
+        assertEquals(2, bothTools.size)
+        assertTrue(bothTools[0].jsonObject.containsKey("functionDeclarations"))
+        assertEquals(JsonObject(emptyMap()), bothTools[1].jsonObject["googleSearch"]!!.jsonObject)
     }
 }

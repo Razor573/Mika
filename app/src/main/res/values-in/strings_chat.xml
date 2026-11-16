@@ -247,6 +247,9 @@
     <string name="pip_closed_hint">Ditutup untuk tugas ini. Ketuk “Tampilkan layar” di kanan bawah, atau buka “Layar latar belakang” di menu samping.</string>
     <string name="chat_conversation_tokens">Percakapan ini: %1$s</string>
     <string name="chat_conversation_tokens_partial">Percakapan ini: setidaknya %1$s</string>
+    <string name="chat_task_cost_estimate">Perkiraan %1$s</string>
+    <string name="chat_task_cost_partial">%1$s (sebagian)</string>
+    <string name="chat_task_cost_unavailable">Biaya tidak tersedia</string>
     <string name="follow_up_steer">Arahkan</string>
     <string name="follow_up_queue">Antrekan</string>
     <string name="follow_up_steer_hint">Langkah berikutnya akan menyesuaikan tugas saat ini</string>
@@ -268,4 +271,13 @@
     <plurals name="drawer_archive_many_skipped">
         <item quantity="other">%1$d tidak diarsipkan</item>
     </plurals>
+    <string name="chat_example_github_star_title">Beri bintang pada proyek GitHub</string>
+    <string name="chat_example_follow_title">Ikuti seorang kreator</string>
+    <string name="chat_example_group_summary_title">Ringkas obrolan grup</string>
+    <string name="chat_example_alarms_title">Atur beberapa alarm</string>
+    <string name="chat_example_pdf_title">Ringkas PDF</string>
+    <string name="chat_example_schedule_title">Atur pengingat harian</string>
+    <string name="chat_example_pdf">Ringkas PDF yang saya kirim menjadi intisari singkat.</string>
+    <string name="chat_example_schedule">Setiap pagi jam 8, ingatkan saya untuk memeriksa cuaca.</string>
+    <string name="chat_empty_value">Katakan dalam satu kalimat, dan saya akan menjalankan aplikasi, menjelajah web, dan menyelesaikannya.</string>
 </resources>
