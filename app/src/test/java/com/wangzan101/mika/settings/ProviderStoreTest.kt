@@ -1669,7 +1669,8 @@ class ProviderStoreTest {
                     """{"candidates":[{"content":{"parts":[{"text":"Sunny in Tokyo."}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com/wx","title":"Tokyo Weather"}}],"groundingSupports":[{"segment":{"text":"Sunny in Tokyo."},"groundingChunkIndices":[0]}]}}]}""",
                 ),
             )
-            val result = s.googleGroundingSearch(ModelSession.of("conv-g"))!!.search("tokyo weather", 3)
+            val session = ModelSession.of("conv-g")
+            val result = s.googleGroundingSearch(session)!!.search("tokyo weather", 3)
             val success = result as WebSearchResult.Success
             assertEquals(1, success.hits.size)
             assertEquals("Tokyo Weather", success.hits[0].title)
@@ -1679,7 +1680,7 @@ class ProviderStoreTest {
             assertEquals("/v1beta/models/gemini-2.5-flash:generateContent", req.path)
             assertEquals("gem-secret", req.getHeader("x-goog-api-key"))
             assertEquals("Mika/1.2.3", req.getHeader("User-Agent"))
-            assertEquals("conv-g", req.getHeader("x-test-session"))
+            assertEquals(session.id, req.getHeader("x-test-session"))
             assertTrue(req.body.readUtf8().contains("googleSearch"))
         } finally {
             server.shutdown()
