@@ -49,6 +49,14 @@ interface BuiltinShellPlatform {
     fun setRootAnswer(answer: SuAnswer?) {}
     /** 用户明确点了 Root 失败后的重试。返回 true 表示平台已发起异步授权,完成后会通知引擎。 */
     fun requestRootStart(): Boolean = false
+    /** 当前选择的启动通道;默认 [ShellTransport.Auto]。 */
+    fun transport(): ShellTransport = ShellTransport.Auto
+    /** 持久化并更新启动通道选择。 */
+    fun setTransport(transport: ShellTransport) {}
+    /** 此刻 Shizuku 的安装、运行和授权状态;默认不可用。 */
+    fun shizukuState(): ShizukuPlatformState = ShizukuPlatformState.Unavailable
+    /** 经 Shizuku 调起助手(不等交接);成功返回 null,失败返回具体原因。 */
+    suspend fun launchHelperViaShizuku(): BuiltinShellFailure? = BuiltinShellFailure.ShizukuNotRunning
 }
 
 /** 看门狗重起助手的间隔:第 n 次失败后等 base·2^(n-1),封顶 [maxMs];连续失败 [maxAttempts] 次后停下等人或等开关变化。 */
@@ -76,9 +84,10 @@ object BuiltinShellFailures {
         AdbConnectionException.Reason.PROTOCOL -> BuiltinShellFailure.ConnectFailed
     }
 
-    /** 看门狗自己再试有没有用:钥匙被撤销、地址不合法、没 Wi-Fi 要等用户或开关变化。 */
+    /** 看门狗自己再试有没有用:钥匙被撤销、地址不合法、没 Wi-Fi、缺 Shizuku/授权要等用户或开关变化。 */
     fun retryable(f: BuiltinShellFailure) = f == BuiltinShellFailure.ConnectFailed ||
-        f == BuiltinShellFailure.HelperStartFailed || f == BuiltinShellFailure.Unknown
+        f == BuiltinShellFailure.HelperStartFailed || f == BuiltinShellFailure.ShizukuBindFailed ||
+        f == BuiltinShellFailure.Unknown
 }
 
 /**
@@ -113,6 +122,7 @@ class BuiltinShellEngine(
     private var failures = 0
     private var retryJob: Job? = null
     private var discoveryJob: Job? = null
+    private var pendingImmediate = false
     private var started = false
 
     /**
@@ -133,6 +143,7 @@ class BuiltinShellEngine(
         synchronized(this) {
             retryJob?.cancel()
             retryJob = null
+            pendingImmediate = false
             _paused = true
         }
         runCatching { platform.stopHelper() }
@@ -158,7 +169,15 @@ class BuiltinShellEngine(
 
     override val paired: Boolean get() = platform.paired()
 
+    override val transport: ShellTransport get() = platform.transport()
+
+    override val shizukuStart: Boolean
+        get() = platform.transport() != ShellTransport.WirelessDebugging && platform.shizukuState().ready
+
     override val restart: HelperRestart get() = when {
+        platform.transport() == ShellTransport.Shizuku ||
+            (platform.transport() == ShellTransport.Auto &&
+                (platform.shizukuState().ready || (!platform.paired() && platform.shizukuState().installed))) -> HelperRestart.Shizuku
         platform.paired() -> HelperRestart.Wireless
         platform.usbStarted() -> HelperRestart.UsbCommand
         else -> HelperRestart.None
@@ -166,22 +185,38 @@ class BuiltinShellEngine(
 
     override val rootStart: Boolean get() = platform.rootStart() == RootStart.Ready
 
-    /** Mika 自己起得来助手:经 su(打开了且能用)或经已配对的无线调试。 */
-    private fun selfStart(): Boolean = rootStart || platform.paired()
+    /** Mika 自己起得来助手:按当前通道看 Shizuku、su 或已配对的无线调试。 */
+    private fun selfStart(): Boolean = when (platform.transport()) {
+        ShellTransport.Shizuku -> platform.shizukuState().ready
+        ShellTransport.WirelessDebugging -> rootStart || platform.paired()
+        ShellTransport.Auto -> platform.shizukuState().ready || rootStart || platform.paired()
+    }
 
     private fun initialStatus(): BuiltinShellStatus = when {
         helper.value != null -> BuiltinShellStatus.Running
         selfStart() -> BuiltinShellStatus.Connecting
         // 电脑起过的助手可能还活着,等它来交接
-        platform.usbStarted() -> BuiltinShellStatus.Connecting
+        platform.transport() != ShellTransport.Shizuku && platform.usbStarted() -> BuiltinShellStatus.Connecting
         else -> idleStatus()
     }
 
     /**
-     * Mika 自己起不来、手里也没有助手时的状态:打开了「用 root 启动」却用不了就说为什么;
-     * 电脑起过的助手停了就照实说;否则就是还没设置。
+     * Mika 自己起不来、手里也没有助手时的状态:Shizuku 模式下报 Shizuku 缺哪一步;
+     * 自动模式下若未配对且已装 Shizuku 也如实提示;否则看 root、电脑启动或未配对。
      */
-    private fun idleStatus(): BuiltinShellStatus {
+    private fun idleStatus(): BuiltinShellStatus = when (platform.transport()) {
+        ShellTransport.Shizuku -> BuiltinShellStatus.Failed(platform.shizukuState().failure())
+        ShellTransport.WirelessDebugging -> wirelessOrRootIdleStatus()
+        ShellTransport.Auto -> {
+            if (!platform.paired() && platform.rootStart() == RootStart.Off && !platform.usbStarted() && platform.shizukuState().installed) {
+                BuiltinShellStatus.Failed(platform.shizukuState().failure())
+            } else {
+                wirelessOrRootIdleStatus()
+            }
+        }
+    }
+
+    private fun wirelessOrRootIdleStatus(): BuiltinShellStatus {
         platform.rootStart().failure?.let { return BuiltinShellStatus.Failed(it) }
         return if (platform.usbStarted()) BuiltinShellStatus.Failed(BuiltinShellFailure.UsbHelperStopped) else BuiltinShellStatus.NotPaired
     }
@@ -200,15 +235,18 @@ class BuiltinShellEngine(
                     return@collect
                 }
                 if (h != null) {
-                    synchronized(this@BuiltinShellEngine) { failures = 0; retryJob?.cancel() }
+                    synchronized(this@BuiltinShellEngine) { failures = 0; retryJob?.cancel(); pendingImmediate = false }
+                    lastError = null
                     autoOn?.reset()
-                    // 没配对、也没用 root 就来了:是电脑经 USB 起的。记下来,它停了才知道该怎么提示
-                    if (!platform.paired() && platform.rootStart() == RootStart.Off) platform.setUsbStarted(true)
+                    // 没配对、也没用 root 或 Shizuku 就来了:是电脑经 USB 起的。记下来,它停了才知道该怎么提示
+                    if (!platform.paired() && platform.rootStart() == RootStart.Off && !shizukuStart && platform.transport() != ShellTransport.Shizuku) {
+                        platform.setUsbStarted(true)
+                    }
                     _status.value = BuiltinShellStatus.Running
                 } else if (!selfStart()) {
                     // App 刚起来时还活着的助手会自己来交接;用着用着断了也可能是正在换一个新的来交接:
                     // 都先等一会儿再说它停了,免得界面一闪「已停止」
-                    if (platform.usbStarted()) {
+                    if (platform.transport() != ShellTransport.Shizuku && platform.usbStarted()) {
                         _status.value = BuiltinShellStatus.Connecting
                         schedule(graceMs)
                     } else {
@@ -216,7 +254,10 @@ class BuiltinShellEngine(
                     }
                 } else {
                     if (_status.value == BuiltinShellStatus.Running) _status.value = BuiltinShellStatus.Connecting
-                    schedule(if (first) graceMs else backoff.baseMs)
+                    val alreadyImmediate = synchronized(this@BuiltinShellEngine) { pendingImmediate && retryJob?.isActive == true }
+                    if (!alreadyImmediate) {
+                        schedule(if (first) (if (shizukuStart) 0L else graceMs) else backoff.baseMs)
+                    }
                 }
                 first = false
             }
@@ -237,12 +278,47 @@ class BuiltinShellEngine(
      * Mika 自己起不来了就照实改状态。
      */
     fun rootChanged() {
-        if (_paused) return
+        if (_paused || platform.transport() == ShellTransport.Shizuku) return
         if (helper.value != null) return
         synchronized(this) {
             failures = 0
             retryJob?.cancel()
+            retryJob = null
+            pendingImmediate = false
         }
+        if (selfStart()) schedule(0) else _status.value = idleStatus()
+    }
+
+    /** 切换启动通道:停掉旧通道上的助手并按新通道重新连接或更新状态。 */
+    override fun selectTransport(transport: ShellTransport) {
+        if (platform.transport() == transport) return
+        platform.setTransport(transport)
+        if (_paused) return
+        runCatching { platform.stopHelper() }
+        synchronized(this) {
+            failures = 0
+            retryJob?.cancel()
+            retryJob = null
+            pendingImmediate = false
+        }
+        if (selfStart()) {
+            _status.value = BuiltinShellStatus.Connecting
+            schedule(0)
+        } else {
+            _status.value = idleStatus()
+        }
+    }
+
+    /** Shizuku 状态或授权变了:仅无线调试模式不动;有助手就保持运行;否则按新状态马上试或照实改状态。 */
+    fun shizukuChanged() {
+        if (_paused || platform.transport() == ShellTransport.WirelessDebugging) return
+        synchronized(this) {
+            failures = 0
+            retryJob?.cancel()
+            retryJob = null
+            pendingImmediate = false
+        }
+        if (helper.value != null) return
         if (selfStart()) schedule(0) else _status.value = idleStatus()
     }
 
@@ -253,11 +329,11 @@ class BuiltinShellEngine(
     fun wirelessDebuggingChanged() {
         // 银行模式暂停时开关的变化是用户要的(暂停时关掉、恢复时打开),不跟着动。
         if (_paused) return
-        // 经 su 起助手不看无线调试
-        if (helper.value != null || !platform.paired() || rootStart) return
+        // 经 su 或纯 Shizuku 起助手不看无线调试
+        if (helper.value != null || !platform.paired() || rootStart || platform.transport() == ShellTransport.Shizuku) return
         if (autoOn?.writing == true) return
         if (platform.wirelessDebugging() == false) {
-            _status.value = offStatus()
+            if (!shizukuStart) _status.value = offStatus()
             return
         }
         autoOn?.reset()
@@ -270,7 +346,7 @@ class BuiltinShellEngine(
      * 卡在无线调试关着(包括上一个网络不允许)也马上再试。换了网络,上一个网络上的拒绝不再算数。
      */
     fun wifiAvailable() {
-        if (_paused) return
+        if (_paused || platform.transport() == ShellTransport.Shizuku) return
         autoOn?.reset()
         val s = _status.value
         val off = s == BuiltinShellStatus.WirelessDebuggingOff || s == BuiltinShellStatus.Failed(BuiltinShellFailure.WifiNotAllowed)
@@ -307,6 +383,7 @@ class BuiltinShellEngine(
 
     @Synchronized
     private fun schedule(delayMs: Long) {
+        pendingImmediate = delayMs == 0L
         retryJob?.cancel()
         retryJob = scope.launch {
             delay(delayMs)
@@ -315,12 +392,47 @@ class BuiltinShellEngine(
     }
 
     private suspend fun launchOnce(): Unit = launchLock.withLock {
+        synchronized(this) { pendingImmediate = false }
         // 暂停和启动几乎同时发生时:已经排上的这一次也不起,状态停在 Paused。
         if (_paused) {
             _status.value = BuiltinShellStatus.Paused
             return@withLock
         }
         if (helper.value != null) return@withLock
+        when (platform.transport()) {
+            ShellTransport.Shizuku -> {
+                val shizuku = platform.shizukuState()
+                if (!shizuku.ready) {
+                    failed(shizuku.failure())
+                    return@withLock
+                }
+                _status.value = BuiltinShellStatus.Connecting
+                val failure = attemptShizuku()
+                if (failure == null) {
+                    lastError = null
+                    _status.value = BuiltinShellStatus.Running
+                } else {
+                    failed(failure)
+                }
+                return@withLock
+            }
+            ShellTransport.Auto -> {
+                if (platform.shizukuState().ready) {
+                    _status.value = BuiltinShellStatus.Connecting
+                    val failure = attemptShizuku()
+                    if (failure == null) {
+                        lastError = null
+                        _status.value = BuiltinShellStatus.Running
+                        return@withLock
+                    }
+                    if (!rootStart && !platform.paired()) {
+                        failed(failure)
+                        return@withLock
+                    }
+                }
+            }
+            ShellTransport.WirelessDebugging -> Unit
+        }
         // 先走 root:不用配对、不用 Wi-Fi;不行时配过对就接着走无线调试
         if (rootStart) {
             _status.value = BuiltinShellStatus.Connecting
@@ -362,6 +474,24 @@ class BuiltinShellEngine(
                 }
             }
         }
+    }
+
+    /** 经 Shizuku 起一次助手并等交接。 */
+    private suspend fun attemptShizuku(): BuiltinShellFailure? {
+        val failure = try {
+            withContext(io) { platform.launchHelperViaShizuku() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            lastError = describe(e)
+            return BuiltinShellFailure.ShizukuBindFailed
+        }
+        if (failure != null) {
+            lastError = "shizuku: ${failure.name}"
+            return failure
+        }
+        return if (withTimeoutOrNull(handoffTimeoutMs) { helper.first { it != null } } != null) null
+        else BuiltinShellFailure.ShizukuBindFailed.also { lastError = "helper handoff timed out (shizuku)" }
     }
 
     /** 经 su 起一次助手并等交接;su 的答复记下来(拒绝、不回话之后就不再自己去问)。 */
@@ -463,10 +593,12 @@ class BuiltinShellEngine(
         synchronized(this) {
             failures = 0
             retryJob?.cancel()
+            retryJob = null
+            pendingImmediate = false
         }
         // 用户看着 su 拒绝、没回话的提示点了重试:由平台明确再请求一次,未授权状态不会自动问 su
         val s = _status.value
-        if (s is BuiltinShellStatus.Failed && s.reason in ROOT_ASKABLE) {
+        if (platform.transport() != ShellTransport.Shizuku && s is BuiltinShellStatus.Failed && s.reason in ROOT_ASKABLE) {
             if (platform.requestRootStart()) {
                 _status.value = BuiltinShellStatus.Connecting
                 return
@@ -483,7 +615,11 @@ class BuiltinShellEngine(
     }
 
     override suspend fun unpair() {
-        synchronized(this) { retryJob?.cancel() }
+        synchronized(this) {
+            retryJob?.cancel()
+            retryJob = null
+            pendingImmediate = false
+        }
         launchLock.withLock {
             withContext(io) {
                 // 先忘掉「电脑起过」:助手停下时状态就是没设置,不提示再跑命令

@@ -35,6 +35,13 @@ class FakeBuiltinShellControl(
     }
 
     override val paused: Boolean get() = status.value == BuiltinShellStatus.Paused
+    override var shizukuStart: Boolean = false
+    override var transport: ShellTransport = ShellTransport.Auto
+
+    override fun selectTransport(transport: ShellTransport) {
+        calls += "transport=$transport"
+        this.transport = transport
+    }
 
     override fun pause() {
         calls += "pause"
