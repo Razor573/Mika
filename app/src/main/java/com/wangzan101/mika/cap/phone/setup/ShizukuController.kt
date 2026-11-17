@@ -67,6 +67,7 @@ class ShizukuController internal constructor(
     private val lock = Any()
     private var started = false
     private var bindRequested = false
+    private var bindGeneration = 0L
     private var boundShell: IMikaShell? = null
 
     private val _state = MutableStateFlow(ShizukuPlatformState.Unavailable)
@@ -96,24 +97,28 @@ class ShizukuController internal constructor(
                 onChanged()
                 return
             }
-            val active = synchronized(lock) { bindRequested }
-            if (!active) {
+            val activeGeneration = synchronized(lock) {
+                if (bindRequested) bindGeneration else null
+            }
+            if (activeGeneration == null) {
                 runCatching { bridge.unbindUserService(this, remove = true) }
                 return
             }
             val attached = attach(binder)
             var rejectLate = false
             synchronized(lock) {
-                if (bindRequested && attached != null) {
+                if (!bindRequested || bindGeneration != activeGeneration) {
+                    rejectLate = true
+                } else if (attached != null) {
                     boundShell = attached
                 } else {
-                    if (!bindRequested && attached != null) rejectLate = true
-                    if (attached == null) bindRequested = false
+                    bindRequested = false
                 }
             }
-            if (rejectLate && attached != null) {
-                detach(attached)
-                runCatching { bridge.unbindUserService(this, remove = true) }
+            if (rejectLate) {
+                if (attached != null) {
+                    detach(attached)
+                }
             } else if (attached == null) {
                 runCatching { bridge.unbindUserService(this, remove = true) }
                 onChanged()
@@ -164,7 +169,10 @@ class ShizukuController internal constructor(
     suspend fun launchHelper(): BuiltinShellFailure? {
         val current = refresh()
         if (!current.ready) return current.failure()
-        synchronized(lock) { bindRequested = true }
+        val generation = synchronized(lock) {
+            bindRequested = true
+            ++bindGeneration
+        }
         return try {
             bridge.bindUserService(connection)
             null
@@ -172,7 +180,11 @@ class ShizukuController internal constructor(
             throw e
         } catch (e: Exception) {
             runCatching { Log.w(TAG, "Shizuku bindUserService failed", e) }
-            synchronized(lock) { bindRequested = false }
+            synchronized(lock) {
+                if (bindGeneration == generation) {
+                    bindRequested = false
+                }
+            }
             val refreshed = refresh()
             when {
                 !refreshed.running -> BuiltinShellFailure.ShizukuNotRunning
@@ -186,6 +198,9 @@ class ShizukuController internal constructor(
         val (prev, shouldUnbind) = synchronized(lock) {
             val wasActive = bindRequested || boundShell != null
             bindRequested = false
+            if (wasActive) {
+                bindGeneration++
+            }
             val current = boundShell
             boundShell = null
             current to wasActive

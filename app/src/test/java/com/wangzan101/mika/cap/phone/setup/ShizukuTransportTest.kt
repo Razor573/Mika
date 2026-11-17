@@ -8,6 +8,7 @@ import com.wangzan101.mika.core.shell.BuiltinShellFailure
 import com.wangzan101.mika.core.shell.ShizukuPlatformState
 import com.wangzan101.mika.shell.IMikaShell
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -82,12 +83,12 @@ class ShizukuTransportTest {
     private fun fakeBinder(): IBinder = Proxy.newProxyInstance(
         IBinder::class.java.classLoader,
         arrayOf(IBinder::class.java),
-    ) { _, method, _ ->
+    ) { proxy, method, args ->
         when (method.name) {
             "isBinderAlive", "pingBinder" -> true
             "toString" -> "FakeIBinder"
-            "hashCode" -> 1
-            "equals" -> false
+            "hashCode" -> System.identityHashCode(proxy)
+            "equals" -> args?.firstOrNull() === proxy
             else -> null
         }
     } as IBinder
@@ -95,11 +96,11 @@ class ShizukuTransportTest {
     private fun fakeShell(): IMikaShell = Proxy.newProxyInstance(
         IMikaShell::class.java.classLoader,
         arrayOf(IMikaShell::class.java),
-    ) { _, method, _ ->
+    ) { proxy, method, args ->
         when (method.name) {
             "toString" -> "FakeIMikaShell"
-            "hashCode" -> 2
-            "equals" -> false
+            "hashCode" -> System.identityHashCode(proxy)
+            "equals" -> args?.firstOrNull() === proxy
             else -> null
         }
     } as IMikaShell
@@ -218,6 +219,47 @@ class ShizukuTransportTest {
         raceController.connection.onServiceConnected(null, fakeBinder())
         assertEquals(listOf<IMikaShell?>(shell), detached)
         assertEquals(listOf(true), bridge.unbindRemoveFlags)
+
+        // Stopping and relaunching during attach() detaches the stale shell without clobbering the new bind or unbinding twice.
+        detached.clear()
+        bridge.bindCalls = 0
+        bridge.unbindCalls = 0
+        bridge.unbindRemoveFlags.clear()
+        val staleShell = fakeShell()
+        val freshShell = fakeShell()
+        var nextShell = staleShell
+        var stopAndRelaunchDuringAttach = false
+        lateinit var relaunchController: ShizukuController
+        relaunchController = ShizukuController(
+            scope = this,
+            bridge = bridge,
+            attach = { b ->
+                attached += b
+                if (stopAndRelaunchDuringAttach) {
+                    stopAndRelaunchDuringAttach = false
+                    relaunchController.stopHelper()
+                    assertNull(runBlocking { relaunchController.launchHelper() })
+                }
+                nextShell
+            },
+            detach = { detached += it },
+            onChanged = {},
+        )
+        assertNull(relaunchController.launchHelper())
+        stopAndRelaunchDuringAttach = true
+        relaunchController.connection.onServiceConnected(null, fakeBinder())
+        assertEquals(listOf<IMikaShell?>(staleShell), detached)
+        assertEquals(1, bridge.unbindCalls)
+        assertEquals(listOf(true), bridge.unbindRemoveFlags)
+        assertEquals(2, bridge.bindCalls)
+
+        nextShell = freshShell
+        relaunchController.connection.onServiceConnected(null, fakeBinder())
+        assertEquals(listOf<IMikaShell?>(staleShell), detached)
+        relaunchController.stopHelper()
+        assertEquals(listOf<IMikaShell?>(staleShell, freshShell), detached)
+        assertEquals(2, bridge.unbindCalls)
+        assertEquals(listOf(true, true), bridge.unbindRemoveFlags)
 
         // Happy path connect + stopHelper() detaches cleanly and removes bound service.
         detached.clear()
