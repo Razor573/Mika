@@ -31,4 +31,5 @@
     <string name="banking_reconnect" translatable="false">Reconnect helper now</string>
     <string name="banking_paused_row_sub" translatable="false">Paused - your bank app should open</string>
     <string name="banking_active_row_sub" translatable="false">Active - Mika is running</string>
+    <string name="banking_shizuku_note" translatable="false">Shizuku is active without Wireless debugging; pause and resume use Shizuku directly.</string>
 </resources>

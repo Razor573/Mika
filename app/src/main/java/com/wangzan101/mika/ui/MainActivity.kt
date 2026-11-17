@@ -282,7 +282,7 @@ class MainActivity : ComponentActivity() {
             Fix.OpenPairingChannel -> openChannelSettings(PairingNotifier.ensureChannel(this).id)
             Fix.AddModel -> Unit // 设置页自己处理
             // 换页由 MikaRoot 处理
-            Fix.OpenPhoneSetup, Fix.RepairPhoneHelper, Fix.OpenBankingMode -> Unit
+            Fix.OpenPhoneSetup, Fix.OpenPhoneOps, Fix.RepairPhoneHelper, Fix.OpenBankingMode -> Unit
             Fix.RetryPhoneHelper -> phone.pairing.scope.launch {
                 phone.sharedShell.reconnect()
                 phone.shellControl.retry()
@@ -387,12 +387,17 @@ private fun MikaRoot(
     var setupRepair by rememberSaveable { mutableStateOf(false) }
     // 首次上手正在走哪一步;为空时不在上手流程里。配置模型页从哪儿来就回哪儿去
     var onboarding by rememberSaveable { mutableStateOf<OnboardingStep?>(null) }
+    var openPhoneOps by rememberSaveable { mutableStateOf(false) }
     val onFix: (Fix) -> Unit = { fix ->
         when (fix) {
             Fix.AddModel -> nav.push(Route.Models)
             Fix.OpenPhoneSetup, Fix.RepairPhoneHelper -> {
                 setupRepair = fix == Fix.RepairPhoneHelper
                 nav.push(Route.PhoneSetup)
+            }
+            Fix.OpenPhoneOps -> {
+                openPhoneOps = true
+                nav.push(Route.Settings)
             }
             // 银行模式住在设置页里:打开设置首页,那一行就在最上面。
             Fix.OpenBankingMode -> nav.push(Route.Settings)
@@ -627,7 +632,8 @@ private fun MikaRoot(
                 onOpenPlans = { nav.push(Route.Plans) },
                 autonomous = autonomous, onAutonomous = app.approvalControl::setAutonomous,
                 updateVersion = updateState.update?.version, onOpenAbout = { nav.push(Route.About) },
-                mcpServers = app.mcpServers)
+                mcpServers = app.mcpServers,
+                openPhoneOps = openPhoneOps, onPhoneOpsOpened = { openPhoneOps = false })
         }
         Route.Models -> ModelsScreen(store, onBack = back, onOpenSpeech = { nav.push(Route.SpeechModel) }, onOpenUsage = { nav.push(Route.Usage) })
         Route.Usage -> UsageScreen(app.usage, store, onBack = back, onOpenUrl = { openInBrowser(context, it) })

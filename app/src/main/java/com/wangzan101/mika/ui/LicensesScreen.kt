@@ -72,6 +72,7 @@ object Licenses {
         Entry("ZXing", "Apache-2.0", "Version 3.5.3, generates WeChat binding QR codes locally on device. https://github.com/zxing/zxing"),
         Entry("commonmark-java", "BSD-2-Clause", "Version 0.30.1 (with tables and strikethrough extensions), parses Markdown in replies into structured elements for display. Copyright (c) 2015, Atlassian Pty Ltd. https://github.com/commonmark/commonmark-java"),
         Entry("xterm.js", "MIT", "Version 5.5.0 (and @xterm/addon-fit 0.10.0), terminal emulator for the user terminal view. https://github.com/xtermjs/xterm.js"),
+        Entry("Shizuku API", "Apache-2.0", "Version 13.1.5 (api and provider), optionally used when Shizuku is installed, running, and authorized to run the local helper user service. https://github.com/RikkaApps/Shizuku-API"),
     )
 }
 

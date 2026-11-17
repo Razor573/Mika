@@ -7,6 +7,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.os.Binder
 import android.os.Bundle
+import android.os.IBinder
 import android.os.SystemClock
 import android.util.Log
 import com.wangzan101.mika.cap.phone.PhoneServices
@@ -174,6 +175,51 @@ class HelperHub internal constructor(
             putBoolean(HelperHandoff.KEY_ACCEPTED, true)
             putString(HelperHandoff.KEY_NEXT, next)
             putBinder(HelperHandoff.KEY_TOKEN, token)
+        }
+    }
+
+    /**
+     * Attach a helper binder obtained from Shizuku's UserService.
+     * Verifies the remote identity runs as shell (2000) or root (0) and links death cleanup.
+     */
+    @Synchronized
+    fun attachShizuku(binder: IBinder): IMikaShell? {
+        val shell = IMikaShell.Stub.asInterface(binder) ?: return null
+        val ids = runCatching { shell.identity() }.getOrNull()
+        if (ids == null || ids.size < 2 || (ids[0] != HelperHandoff.SHELL_UID && ids[0] != 0)) {
+            Log.w(TAG, "shizuku helper identity rejected: ${ids?.contentToString()}")
+            return null
+        }
+        try {
+            binder.linkToDeath(
+                {
+                    synchronized(deviceFilesLock) {
+                        if (_shell.compareAndSet(shell, null)) directoryStore.clearSync()
+                    }
+                },
+                0,
+            )
+        } catch (_: Exception) {
+            return null
+        }
+        handoffDiagnostics.clear()
+        synchronized(deviceFilesLock) {
+            directoryStore.clearSync()
+            _shell.value = shell
+        }
+        Log.i(TAG, "shizuku helper pid ${ids[1]} uid ${ids[0]} attached")
+        return shell
+    }
+
+    /** Detach the Shizuku-backed helper and release any resources it held for Mika. */
+    @Synchronized
+    fun detachShizuku(shell: IMikaShell? = null) {
+        runCatching { (shell ?: _shell.value)?.releaseAll() }
+        synchronized(deviceFilesLock) {
+            if (shell == null || _shell.value === shell) {
+                _shell.value = null
+                directoryStore.clearSync()
+            }
         }
     }
 

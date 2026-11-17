@@ -1,6 +1,7 @@
 package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
+import com.wangzan101.mika.core.shell.ShellTransport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,6 +17,8 @@ class BankingModeTest {
         wirelessDebugging: Boolean = true,
         helper: BuiltinShellStatus = BuiltinShellStatus.Running,
         helperPaired: Boolean = true,
+        shizukuReady: Boolean = false,
+        transport: ShellTransport = ShellTransport.WirelessDebugging,
     ) = BankingState(
         paused = false,
         accessibility = accessibility,
@@ -24,6 +27,8 @@ class BankingModeTest {
         helper = helper,
         helperPaired = helperPaired,
         taskRunning = false,
+        shizukuReady = shizukuReady,
+        transport = transport,
     )
 
     @Test
@@ -82,6 +87,35 @@ class BankingModeTest {
                     helperPaired = false,
                 ),
             ),
+        )
+    }
+
+    @Test
+    fun shizukuActiveSkipsWirelessDebuggingAndRePairSteps() {
+        assertEquals(
+            listOf(ResumeStep.OpenAccessibilitySettings),
+            planResumeSteps(
+                state(
+                    accessibility = AccessibilityState.Off,
+                    wirelessDebugging = false,
+                    helper = BuiltinShellStatus.Connecting,
+                    helperPaired = false,
+                    shizukuReady = true,
+                    transport = ShellTransport.Auto,
+                ),
+            ),
+        )
+        assertTrue(
+            planResumeSteps(
+                state(
+                    accessibility = AccessibilityState.On,
+                    wirelessDebugging = false,
+                    helper = BuiltinShellStatus.Running,
+                    helperPaired = false,
+                    shizukuReady = false,
+                    transport = ShellTransport.Shizuku,
+                ),
+            ).isEmpty(),
         )
     }
 }

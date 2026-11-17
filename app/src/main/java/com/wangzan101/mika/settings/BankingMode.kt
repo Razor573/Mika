@@ -13,6 +13,7 @@ import com.wangzan101.mika.cap.phone.setup.DeveloperSettings
 import com.wangzan101.mika.core.shell.BuiltinShellControl
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.core.shell.PermissionCommands
+import com.wangzan101.mika.core.shell.ShellTransport
 import com.wangzan101.mika.task.TaskService
 
 /**
@@ -77,6 +78,8 @@ class BankingMode private constructor(
             helper = shell.status.value,
             helperPaired = shell.paired,
             taskRunning = (app as? MikaApp)?.taskState?.busy?.value ?: false,
+            shizukuReady = shell.shizukuStart,
+            transport = shell.transport,
         )
     }
 
@@ -144,7 +147,9 @@ class BankingMode private constructor(
     fun resume(): ResumeResult {
         setPaused(false)
         val before = snapshot()
-        if (!before.wirelessDebugging && canWriteSecureSettings()) {
+        if (!before.shizukuReady && before.transport != ShellTransport.Shizuku &&
+            before.helperPaired && !before.wirelessDebugging && canWriteSecureSettings()
+        ) {
             DeveloperSettings.turnOnWirelessDebugging(app.contentResolver)
         }
         shell.resume()
@@ -168,6 +173,8 @@ data class BankingState(
     val helper: BuiltinShellStatus,
     val helperPaired: Boolean,
     val taskRunning: Boolean,
+    val shizukuReady: Boolean = false,
+    val transport: ShellTransport = ShellTransport.WirelessDebugging,
 )
 
 /** 暂停一次做完之后,哪些关掉了、哪些还要用户亲手做。 */
@@ -203,6 +210,9 @@ enum class ResumeStep {
 /** 纯函数:按恢复后的真实状态,算出还有哪些步骤要用户亲手做。 */
 fun planResumeSteps(state: BankingState): List<ResumeStep> = buildList {
     if (state.accessibility != AccessibilityState.On) add(ResumeStep.OpenAccessibilitySettings)
-    if (!state.wirelessDebugging) add(ResumeStep.OpenWirelessDebuggingPage)
-    if (!state.helperPaired) add(ResumeStep.RePairHelper)
+    val usingShizuku = state.shizukuReady || state.transport == ShellTransport.Shizuku
+    if (!usingShizuku) {
+        if (!state.wirelessDebugging) add(ResumeStep.OpenWirelessDebuggingPage)
+        if (!state.helperPaired) add(ResumeStep.RePairHelper)
+    }
 }

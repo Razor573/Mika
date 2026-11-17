@@ -24,7 +24,7 @@ enum class Fix {
     /** 本 App 的「应用信息」页:系统拦着不让开无障碍时,在这里允许受限制的设置。 */
     OpenAppInfo,
     // 内置助手
-    OpenPhoneSetup, RepairPhoneHelper, RetryPhoneHelper, UnpairPhoneHelper,
+    OpenPhoneSetup, RepairPhoneHelper, RetryPhoneHelper, UnpairPhoneHelper, OpenPhoneOps,
     OpenAboutPhone, OpenDeveloperOptions, OpenUsbDebugging, OpenWirelessDebugging, OpenWifi,
     /** 打开设置页(银行模式在设置首页就有入口):银行模式暂停时横幅点的就是它。 */
     OpenBankingMode,
@@ -80,6 +80,8 @@ object StatusCopy {
             // 银行模式暂停着:这不是故障,是用户亲手要的,直接去银行模式那页。
             p.status == BuiltinShellStatus.Paused -> Fix.OpenBankingMode
             PhoneSetupCopy.canReconnect(p.status) -> Fix.RetryPhoneHelper
+            (p.status as? BuiltinShellStatus.Failed)?.reason == BuiltinShellFailure.ShizukuNotInstalled ||
+                (p.status as? BuiltinShellStatus.Failed)?.reason == BuiltinShellFailure.ShizukuPermissionNeeded -> Fix.OpenPhoneOps
             // 这个 Wi-Fi 还没允许无线调试:直接去亲手打开一次(系统会问要不要允许)
             (p.status as? BuiltinShellStatus.Failed)?.fix == BuiltinShellFix.OpenWirelessDebugging -> Fix.OpenWirelessDebugging
             else -> Fix.OpenPhoneSetup
@@ -147,6 +149,10 @@ object StatusCopy {
                 else if (st.reason in PhoneSetupCopy.ROOT_FAILURES) BannerCopy(
                     PhoneSetupCopy.failure(st.reason).title, PhoneSetupCopy.failure(st.reason).body,
                     if (PhoneSetupCopy.canReconnect(st)) PhoneSetupCopy.RECONNECT else tr(R.string.view),
+                )
+                else if (st.reason in PhoneSetupCopy.SHIZUKU_FAILURES) BannerCopy(
+                    PhoneSetupCopy.failure(st.reason).title, PhoneSetupCopy.failure(st.reason).body,
+                    if (PhoneSetupCopy.canReconnect(st)) PhoneSetupCopy.RECONNECT else tr(R.string.fix_it),
                 )
                 else if (st.reason == BuiltinShellFailure.WifiNotAllowed) BannerCopy(
                     PhoneSetupCopy.failure(st.reason).title, PhoneSetupCopy.WIFI_NOT_ALLOWED_LINE, tr(R.string.heads_up_action),

@@ -18,9 +18,11 @@ import com.wangzan101.mika.R
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
+import com.wangzan101.mika.core.shell.ShellTransport
 import com.wangzan101.mika.settings.BankingMode
 import com.wangzan101.mika.settings.ResumeStep
 import com.wangzan101.mika.settings.planResumeSteps
+import com.wangzan101.mika.ui.components.FooterNote
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.GroupLabel
 import com.wangzan101.mika.ui.components.ListRow
@@ -51,10 +53,11 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
     val phone = remember { PhoneServices.of(context) }
     // 助手状态或无障碍实例一变就重读系统状态:界面永远是实测,不是上次记的。
     val shellStatus by phone.shellControl.status.collectAsState()
+    val shizukuState by phone.shellManager.shizuku.state.collectAsState()
     val a11yInstance by ScreenAccessibility.instance.collectAsState()
     var state by remember { mutableStateOf(mode.snapshot()) }
     var notice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(shellStatus, a11yInstance) { state = mode.snapshot() }
+    LaunchedEffect(shellStatus, a11yInstance, shizukuState) { state = mode.snapshot() }
 
     val helperText = when (state.helper) {
         BuiltinShellStatus.Running -> stringResource(R.string.banking_helper_running)
@@ -97,6 +100,9 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
             ListRow(
                 MikaIcons.Phone, stringResource(R.string.banking_helper_label), null,
             ) { RowValue(helperText, helperTone) }
+        }
+        if ((state.shizukuReady || state.transport == ShellTransport.Shizuku) && !state.wirelessDebugging) {
+            FooterNote(stringResource(R.string.banking_shizuku_note))
         }
         Spacer(Modifier.height(12.dp))
 
@@ -170,7 +176,7 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
         }
 
         // 助手已配对、却还没连上(例如刚恢复、正在等 Wi-Fi):手动再连一次。
-        if (!state.paused && state.helperPaired &&
+        if (!state.paused && (state.helperPaired || state.shizukuReady || state.transport == ShellTransport.Shizuku) &&
             state.helper != BuiltinShellStatus.Running && state.helper != BuiltinShellStatus.Connecting
         ) {
             Spacer(Modifier.height(12.dp))
