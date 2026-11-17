@@ -490,8 +490,10 @@ class BuiltinShellEngine(
             lastError = "shizuku: ${failure.name}"
             return failure
         }
-        return if (withTimeoutOrNull(handoffTimeoutMs) { helper.first { it != null } } != null) null
-        else BuiltinShellFailure.ShizukuBindFailed.also { lastError = "helper handoff timed out (shizuku)" }
+        if (withTimeoutOrNull(handoffTimeoutMs) { helper.first { it != null } } != null) return null
+        runCatching { platform.stopHelper() }
+        lastError = "helper handoff timed out (shizuku)"
+        return BuiltinShellFailure.ShizukuBindFailed
     }
 
     /** 经 su 起一次助手并等交接;su 的答复记下来(拒绝、不回话之后就不再自己去问)。 */

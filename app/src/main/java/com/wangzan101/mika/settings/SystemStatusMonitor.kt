@@ -71,7 +71,7 @@ class SystemStatusMonitor(context: Context, private val shell: BuiltinShellContr
     }
 
     fun refresh() {
-        (app as? PhoneServices.Owner)?.phone?.shellManager?.refreshShizuku()
+        (app as? PhoneServices.Owner)?.phone?.shellManager?.refreshShizukuAsync()
         _status.value = read()
     }
 

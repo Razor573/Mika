@@ -17,9 +17,13 @@ import com.wangzan101.mika.core.shell.HelperHandoff
 import com.wangzan101.mika.core.shell.HelperRestoreReport
 import com.wangzan101.mika.core.shell.NonceSlots
 import com.wangzan101.mika.core.shell.NonceStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import android.os.ParcelFileDescriptor
 import java.io.IOException
 import com.wangzan101.mika.shell.IMikaShell
@@ -57,6 +61,7 @@ class HelperHub internal constructor(
 
     private val deviceFilesLock = Any()
     private val deviceFilesSession = java.util.UUID.randomUUID().toString()
+    private val detachScope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1))
 
     /** Synchronize on every call, including after helper reconnection; never fall back to an old policy. */
     fun syncDeviceFiles(): Boolean = synchronized(deviceFilesLock) {
@@ -212,14 +217,19 @@ class HelperHub internal constructor(
     }
 
     /** Detach the Shizuku-backed helper and release any resources it held for Mika. */
-    @Synchronized
     fun detachShizuku(shell: IMikaShell? = null) {
-        runCatching { (shell ?: _shell.value)?.releaseAll() }
-        synchronized(deviceFilesLock) {
-            if (shell == null || _shell.value === shell) {
+        val target = synchronized(deviceFilesLock) {
+            val current = _shell.value
+            if (shell == null || current === shell) {
                 _shell.value = null
                 directoryStore.clearSync()
+                current
+            } else {
+                null
             }
+        }
+        if (target != null) {
+            detachScope.launch { runCatching { target.releaseAll() } }
         }
     }
 

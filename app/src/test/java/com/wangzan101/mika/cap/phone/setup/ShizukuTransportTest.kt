@@ -7,7 +7,10 @@ import android.os.IBinder
 import com.wangzan101.mika.core.shell.BuiltinShellFailure
 import com.wangzan101.mika.core.shell.ShizukuPlatformState
 import com.wangzan101.mika.shell.IMikaShell
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -237,6 +240,57 @@ class ShizukuTransportTest {
         assertEquals(listOf<IMikaShell?>(shell), detached)
         assertFalse(controller.state.value.running)
         assertEquals(beforeDisconnect + 1, changed)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun prepareStopAndStopHelperAsyncDetachSynchronouslyAndUnbindOnIo() = runTest {
+        val bridge = FakeBridge().apply {
+            installed = true
+            binderAlive = true
+            permission = PackageManager.PERMISSION_GRANTED
+        }
+        val detached = mutableListOf<IMikaShell?>()
+        val shell = fakeShell()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val controller = ShizukuController(
+            scope = this,
+            bridge = bridge,
+            attach = { shell },
+            detach = { detached += it },
+            onChanged = {},
+            io = dispatcher,
+        )
+
+        // Calling prepareStop() / stopHelperAsync() when inactive does not unbind.
+        assertFalse(controller.prepareStop())
+        controller.stopHelperAsync()
+        advanceUntilIdle()
+        assertEquals(0, bridge.unbindCalls)
+        assertTrue(detached.isEmpty())
+
+        // After launch + bind, stopHelperAsync() synchronously detaches & clears active bind before IO unbind runs.
+        assertNull(controller.launchHelper())
+        controller.connection.onServiceConnected(null, fakeBinder())
+        controller.stopHelperAsync()
+        assertEquals(listOf<IMikaShell?>(shell), detached)
+        assertEquals(0, bridge.unbindCalls)
+
+        advanceUntilIdle()
+        assertEquals(1, bridge.unbindCalls)
+        assertEquals(listOf(true), bridge.unbindRemoveFlags)
+
+        // Late onServiceConnected after prepareStop() (before IO unbind) rejects immediately without keeping boundShell.
+        detached.clear()
+        bridge.unbindCalls = 0
+        bridge.unbindRemoveFlags.clear()
+        assertNull(controller.launchHelper())
+        assertTrue(controller.prepareStop())
+        assertTrue(detached.isEmpty())
+        controller.connection.onServiceConnected(null, fakeBinder())
+        assertEquals(1, bridge.unbindCalls)
+        assertEquals(listOf(true), bridge.unbindRemoveFlags)
+        assertFalse(controller.prepareStop())
     }
 
     @Test

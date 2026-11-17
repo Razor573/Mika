@@ -279,7 +279,7 @@ fun SettingsScreen(
                 }
             },
             onOpenShizukuGuide = { openInBrowser(context, SHIZUKU_SETUP_GUIDE_URL) },
-            onRefreshShizuku = { shellManager.refreshShizuku() },
+            onRefreshShizuku = { shellManager.refreshShizukuAsync() },
         )
         SettingsPage.Calls -> CallSettingsScreen((context.applicationContext as com.wangzan101.mika.MikaApp).calls, onBack = toHome)
         SettingsPage.Notifications -> NotificationsScreen(status, onFix = ::fix, onBack = back)

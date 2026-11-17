@@ -46,6 +46,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -84,7 +85,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
 
     private val platform: AndroidPlatform by lazy {
         AndroidPlatform(
-            app, hub, root, shizuku,
+            app, hub, root, shizuku, scope,
             { _transport.value = it },
             { lastConnectCandidates = it },
             { _scanningPorts.value = it },
@@ -155,6 +156,11 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
         return after
     }
 
+    /** 在后台线程刷新 Shizuku 状态;若有变化立即通知引擎。 */
+    fun refreshShizukuAsync() {
+        scope.launch(Dispatchers.IO) { refreshShizuku() }
+    }
+
     /** 用户在引导页填了无线调试的端口:下一次连接带上它(只用这一次,连上了就记作缓存),然后重试。 */
     suspend fun connectWithPort(port: Int) {
         platform.manualPort.set(port)
@@ -167,7 +173,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
         started = true
         usbScript.start()
         root.refresh()
-        shizuku.refresh()
+        refreshShizukuAsync()
         val e = engine
         // 无线调试一打开就试着连回去;关掉时状态马上变成「无线调试已关」
         app.contentResolver.registerContentObserver(
@@ -187,7 +193,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
             )
         }
         e.start()
-        shizuku.start()
+        shizuku.start(refreshNow = false)
     }
 
     private class AndroidPlatform(
@@ -195,6 +201,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
         private val hub: HelperHub,
         private val root: RootControl,
         private val shizuku: ShizukuController,
+        private val scope: CoroutineScope,
         private val onTransportChanged: (ShellTransport) -> Unit,
         private val candidates: (ConnectCandidates) -> Unit,
         private val scanning: (Boolean) -> Unit,
@@ -233,7 +240,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
             onTransportChanged(transport)
         }
 
-        override fun shizukuState(): ShizukuPlatformState = shizuku.refresh()
+        override fun shizukuState(): ShizukuPlatformState = shizuku.state.value
 
         override suspend fun launchHelperViaShizuku(): BuiltinShellFailure? = shizuku.launchHelper()
 
@@ -334,12 +341,15 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
         private fun portRangeText(): String? = runCatching { File(PORT_RANGE_FILE).readText() }.getOrNull()
 
         override fun stopHelper() {
-            shizuku.stopHelper()
             val remaining = hub.shell.value
-            if (remaining != null) {
-                // destroy 会让助手进程当场退出,这一调用多半以 DeadObjectException 结束
-                runCatching { remaining.destroy() }
-                hub.detachShizuku(remaining)
+            hub.detachShizuku(remaining)
+            val unbind = shizuku.prepareStop()
+            if (unbind || remaining != null) {
+                scope.launch(Dispatchers.IO) {
+                    if (unbind) shizuku.unbindService()
+                    // destroy 会让助手进程当场退出,这一调用多半以 DeadObjectException 结束
+                    if (remaining != null) runCatching { remaining.destroy() }
+                }
             }
         }
 

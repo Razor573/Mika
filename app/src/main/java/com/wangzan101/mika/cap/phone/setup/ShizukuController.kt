@@ -15,10 +15,13 @@ import com.wangzan101.mika.core.shell.BuiltinShellFailure
 import com.wangzan101.mika.core.shell.ShizukuPlatformState
 import com.wangzan101.mika.shell.IMikaShell
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
 /**
@@ -31,6 +34,7 @@ class ShizukuController internal constructor(
     private val attach: (IBinder) -> IMikaShell?,
     private val detach: (IMikaShell?) -> Unit,
     private val onChanged: () -> Unit,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     constructor(
         context: Context,
@@ -129,10 +133,10 @@ class ShizukuController internal constructor(
     }
 
     @Synchronized
-    fun start() {
+    fun start(refreshNow: Boolean = true) {
         if (started) return
         started = true
-        refresh()
+        if (refreshNow) refresh()
         runCatching {
             bridge.addBinderReceivedListenerSticky(binderReceivedListener)
             bridge.addBinderDeadListener(binderDeadListener)
@@ -178,7 +182,7 @@ class ShizukuController internal constructor(
         }
     }
 
-    fun stopHelper() {
+    fun prepareStop(): Boolean {
         val (prev, shouldUnbind) = synchronized(lock) {
             val wasActive = bindRequested || boundShell != null
             bindRequested = false
@@ -189,8 +193,22 @@ class ShizukuController internal constructor(
         if (prev != null) {
             detach(prev)
         }
-        if (shouldUnbind) {
-            runCatching { bridge.unbindUserService(connection, remove = true) }
+        return shouldUnbind
+    }
+
+    fun unbindService() {
+        runCatching { bridge.unbindUserService(connection, remove = true) }
+    }
+
+    fun stopHelper() {
+        if (prepareStop()) {
+            unbindService()
+        }
+    }
+
+    fun stopHelperAsync() {
+        if (prepareStop()) {
+            scope.launch(io) { unbindService() }
         }
     }
 

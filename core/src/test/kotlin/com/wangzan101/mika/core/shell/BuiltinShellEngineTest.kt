@@ -940,6 +940,21 @@ class BuiltinShellEngineTest {
     }
 
     @Test
+    fun autoModeStopsInFlightShizukuBeforeFallingBackToWirelessOnTimeout() = runTest {
+        platform.pairedFlag = true
+        platform.shizuku = ShizukuPlatformState(installed = true, running = true, permissionGranted = true)
+        platform.deliverOnShizukuLaunch = false
+        platform.deliverOnLaunch = true
+        val e = engine()
+        e.start()
+        advanceUntilIdle()
+        assertEquals(listOf("shizuku", "stop", "launch"), platform.calls)
+        assertEquals(BuiltinShellStatus.Running, e.status.value)
+        assertEquals("binder", helper.value)
+        assertEquals(null, e.lastError)
+    }
+
+    @Test
     fun autoModeReportsShizukuNotRunningWhenInstalledAndUnpairedThenConnectsOnRetryAndShizukuChanged() = runTest {
         platform.pairedFlag = false
         platform.shizuku = ShizukuPlatformState(installed = true, running = false, permissionGranted = true)
