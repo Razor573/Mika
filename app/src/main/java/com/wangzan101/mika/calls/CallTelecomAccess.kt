@@ -44,9 +44,11 @@ internal class CallTelecomAccess(private val context: Context) {
         if (original != "allow") {
             if (!journal.edit().putString(PREVIOUS_OP, original).commit()) return "Could not save phone permission restore data"
             val change = command(shell, "cmd appops set --user $user $pkg MANAGE_ONGOING_CALLS allow")
-            if (change != CallTelecomCommandOutcome.OK || readOp(shell) != "allow" || !managePermission()) {
+            val readBack = if (change == CallTelecomCommandOutcome.OK) readOp(shell) else null
+            val failure = change.verificationFailure(readBack, readBack == "allow" && managePermission())
+            if (failure != null) {
                 rollback(shell)
-                return change.appOpsFailureMessage
+                return failure
             }
         } else if (!managePermission()) {
             return "This system does not allow Mika to manage carrier calls"
@@ -129,6 +131,16 @@ internal enum class CallTelecomCommandOutcome {
             SHELL_APP_OPS_DENIED -> "The system restricts ADB from changing call management permissions (missing MANAGE_APP_OPS_MODES), so call companion cannot be enabled"
             else -> "The system did not grant call management permission"
         }
+
+    /** Report the verified post-command state, never raw shell output or a guessed permission. */
+    fun verificationFailure(readBack: String?, telecomGranted: Boolean): String? = when {
+        this != OK -> appOpsFailureMessage
+        readBack in setOf("default", "ignore", "deny", "errored", "foreground") ->
+            "Attempted to grant permission, but the system read back call management permission as $readBack, so call companion cannot be enabled"
+        readBack != "allow" -> "Permission command ran, but call management permission status could not be read back; please try again"
+        !telecomGranted -> "Call management permission read back as allow, but system telecom service still has not granted it, so call companion cannot be enabled"
+        else -> null
+    }
 
     companion object {
         private val shellAppOpsDenied = Regex(

@@ -126,10 +126,13 @@ import androidx.compose.ui.unit.sp
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.R
 import com.wangzan101.mika.cap.web.KeptPage
+import com.wangzan101.mika.chat.ChecklistSource
+import com.wangzan101.mika.chat.SavedChecklistStore
 import com.wangzan101.mika.chat.SharedFile
 import com.wangzan101.mika.confirm.ConfirmationCopy
 import com.wangzan101.mika.settings.Prerequisites
 import com.wangzan101.mika.settings.RecommendedTask
+import com.wangzan101.mika.settings.TaskTemplate
 import com.wangzan101.mika.settings.RecommendedTaskStore
 import com.wangzan101.mika.takeover.Takeover
 import com.wangzan101.mika.task.SteerNote
@@ -206,9 +209,13 @@ fun ChatScreen(
     onOpenTeach: (String) -> Unit = {},
     /** 首页推荐任务。不传时用本机保存的那一份;测试传入单独的存储,避免改到用户的数据。 */
     recommendations: RecommendedTaskStore? = null,
+    checklists: SavedChecklistStore? = null,
+    workflows: com.wangzan101.mika.workflow.WorkflowRuntime? = null,
     openReport: (String) -> Unit = {},
     openPlayback: (String) -> Unit = {},
 ) {
+    val checklistStore = checklists ?: (LocalContext.current.applicationContext as? MikaApp)?.savedChecklists
+    val workflowRuntime = workflows ?: (LocalContext.current.applicationContext as? MikaApp)?.workflows
     val recommendationStore = recommendations
         ?: (LocalContext.current.applicationContext as? MikaApp)?.recommendedTasks
     val recommendedTasksFlow = remember(recommendationStore) {
@@ -251,7 +258,24 @@ fun ChatScreen(
     )) { vm }
     val input = ui.input
     // 推荐任务可以直接填进空输入框;已有内容时先确认,不能因误触把草稿换掉。
-    var pendingExample by remember { mutableStateOf<String?>(null) }
+    var pendingExample by rememberSaveable(ui.conversationId) { mutableStateOf<String?>(null) }
+    var showSavedTasks by remember(ui.conversationId) { mutableStateOf(false) }
+    var showChecklists by remember(ui.conversationId) { mutableStateOf(false) }
+    var checklistIncoming by remember(ui.conversationId) { mutableStateOf<ChecklistSource?>(null) }
+    var pendingChecklistDraft by remember(ui.conversationId) { mutableStateOf<String?>(null) }
+    var showWorkflows by rememberSaveable { mutableStateOf(false) }
+    var saveTaskPrompt by remember(ui.conversationId) { mutableStateOf<String?>(null) }
+    var fillTaskPrompt by rememberSaveable(ui.conversationId) { mutableStateOf<String?>(null) }
+    var fillTaskTitle by rememberSaveable(ui.conversationId) { mutableStateOf("") }
+    val fillDraft: (String) -> Unit = { prompt ->
+        if (vm.ui.value.input.isEmpty()) vm.input(prompt) else pendingExample = prompt
+    }
+    val pickTask: (RecommendedTask) -> Unit = { task ->
+        if (task.fillIn && TaskTemplate.fields(task.prompt).isNotEmpty()) {
+            fillTaskTitle = task.title
+            fillTaskPrompt = task.prompt
+        } else fillDraft(task.prompt)
+    }
     var retryFailures by remember { mutableStateOf<Pair<String, String>?>(null) }
     var voiceHolding by remember { mutableStateOf(false) }
     var editRequest by remember { mutableIntStateOf(0) }
@@ -366,6 +390,10 @@ fun ChatScreen(
     LaunchedEffect(ui.pendingSharedDraft, ui.sharedDraft) {
         if (ui.pendingSharedDraft != null || ui.sharedDraft != null) {
             pendingExample = null
+            fillTaskPrompt = null
+            pendingChecklistDraft = null
+            showChecklists = false
+            showWorkflows = false
             if (menu != null) {
                 lift.snapTo(0f)
                 menu = null
@@ -395,9 +423,7 @@ fun ChatScreen(
             ) {
                 if (ui.exchanges.isEmpty() && ui.blocked == null) {
                     item("empty") {
-                        EmptyState(ui.conversationId, recommendedTasks, Modifier.fillParentMaxHeight()) { prompt ->
-                            if (input.isEmpty()) vm.input(prompt) else pendingExample = prompt
-                        }
+                        EmptyState(ui.conversationId, recommendedTasks, Modifier.fillParentMaxHeight(), onPick = pickTask)
                     }
                 }
                 ui.exchanges.forEachIndexed { i, ex ->
@@ -480,6 +506,7 @@ fun ChatScreen(
             mode = ui.composer,
             hasHistory = ui.exchanges.isNotEmpty(),
             onSend = { vm.send(input, check) },
+            onSavedTasks = if (recommendationStore != null) ({ showSavedTasks = true }) else null,
             onTeach = if (ui.composer == ComposerMode.Idle) ({ onOpenTeach(input.trim()) }) else null,
             onStop = vm::cancel,
             queued = ui.queued,
@@ -578,6 +605,15 @@ fun ChatScreen(
             val retryTurn = vm.retryTurn(m.key)
             MessageMenu(
                 m, progress = { lift.value },
+                onSaveTask = if (recommendationStore != null && m.from == QuoteMessage.From.You && m.text.isNotBlank()) ({
+                    closeMenu { saveTaskPrompt = m.text }
+                }) else null,
+                onSaveChecklist = if (checklistStore != null && m.from == QuoteMessage.From.Mika && m.text.isNotBlank() && ui.conversationId != null) ({
+                    closeMenu {
+                        checklistIncoming = ChecklistSource(ui.conversationId!!, m.key, m.text)
+                        showChecklists = true
+                    }
+                }) else null,
                 onCopy = { closeMenu { copyMessage(context, m.text) } },
                 onQuote = { closeMenu { vm.quote(m.from, m.text) } },
                 onSelect = {
@@ -647,6 +683,70 @@ fun ChatScreen(
         )
     }
 
+    if (showSavedTasks && recommendationStore != null) androidx.compose.ui.window.Dialog(
+        onDismissRequest = { showSavedTasks = false },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            RecommendedTasksScreen(recommendationStore, onBack = { showSavedTasks = false },
+                onOpenChecklists = if (checklistStore != null) ({ showSavedTasks = false; checklistIncoming = null; showChecklists = true }) else null,
+                onOpenWorkflows = if (workflowRuntime != null) ({ showSavedTasks = false; showWorkflows = true }) else null,
+                onPick = { task ->
+                showSavedTasks = false
+                pickTask(task)
+            })
+        }
+    }
+    if (showChecklists && checklistStore != null) androidx.compose.ui.window.Dialog(
+        onDismissRequest = { showChecklists = false; checklistIncoming = null },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            SavedChecklistsScreen(checklistStore, incoming = checklistIncoming,
+                onBack = { showChecklists = false; checklistIncoming = null },
+                onUseDraft = { text ->
+                    showChecklists = false; checklistIncoming = null
+                    if (vm.ui.value.input.isEmpty()) vm.input(text) else pendingChecklistDraft = text
+                })
+        }
+    }
+    pendingChecklistDraft?.let { text ->
+        MikaDialog(
+            onDismissRequest = { pendingChecklistDraft = null },
+            title = { Text(stringResource(R.string.chat_example_replace_title)) },
+            text = { Text(stringResource(R.string.share_draft_replace_body)) },
+            confirmButton = { TextButton({ vm.input(text); pendingChecklistDraft = null }, Modifier.testTag("checklist-replace-draft")) {
+                Text(stringResource(R.string.chat_example_replace_action))
+            } },
+            dismissButton = { TextButton({ pendingChecklistDraft = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (showWorkflows && workflowRuntime != null) androidx.compose.ui.window.Dialog(
+        onDismissRequest = { showWorkflows = false },
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+            WorkflowsScreen(workflowRuntime, onBack = { showWorkflows = false },
+                onOpenConversation = { id -> showWorkflows = false; vm.openWorkflowConversation(id) },
+                onUseResult = { text ->
+                    showWorkflows = false
+                    if (vm.ui.value.input.isEmpty()) vm.input(text) else pendingExample = text
+                })
+        }
+    }
+    saveTaskPrompt?.let { prompt ->
+        recommendationStore?.let { store ->
+            RecommendedTaskDialog(store, initial = null, onDismiss = { saveTaskPrompt = null }, seedPrompt = prompt)
+        }
+    }
+
+    fillTaskPrompt?.let { prompt ->
+        TaskFillDialog(fillTaskTitle, prompt, onDismiss = { fillTaskPrompt = null }, onFill = { filled ->
+            fillTaskPrompt = null
+            fillDraft(filled)
+        })
+    }
+
     pendingExample?.let { example ->
         MikaDialog(
             onDismissRequest = { pendingExample = null },
@@ -700,7 +800,7 @@ private fun LazyListState.nearTail(thresholdPx: Int): Boolean {
 /** 空对话:居中问候 + 一句价值主张 + 自动换行的建议胶囊。点一条把完整提示词填进输入框,改好了再发;一条都没有时不显示。 */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EmptyState(conversation: String?, tasks: List<RecommendedTask>, modifier: Modifier = Modifier, onPick: (String) -> Unit) {
+private fun EmptyState(conversation: String?, tasks: List<RecommendedTask>, modifier: Modifier = Modifier, onPick: (RecommendedTask) -> Unit) {
     val c = MikaTheme.colors
     val hour = remember(conversation) { LocalTime.now().hour }
     Column(
@@ -716,7 +816,7 @@ private fun EmptyState(conversation: String?, tasks: List<RecommendedTask>, modi
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                tasks.forEach { task -> SuggestionChip(task.title) { onPick(task.prompt) } }
+                tasks.forEach { task -> SuggestionChip(task.title) { onPick(task) } }
             }
         }
     }
@@ -1431,6 +1531,7 @@ internal fun Composer(
     attachBlocked: Boolean = false,
     /** 「＋」面板里的「教 Mika」。点了先收起面板。 */
     onTeach: (() -> Unit)? = null,
+    onSavedTasks: (() -> Unit)? = null,
     attachments: List<PendingAttachment> = emptyList(),
     importing: Boolean = false,
     rejected: List<AttachmentFailure> = emptyList(),
@@ -1586,6 +1687,12 @@ internal fun Composer(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(MikaIcons.Plus, label, Modifier.size(20.dp).graphicsLayer { rotationZ = turn }, tint = c.ink)
+                    }
+                }
+                if (onSavedTasks != null) {
+                    androidx.compose.material3.IconButton(onClick = { keyboard?.hide(); onSavedTasks() },
+                        modifier = Modifier.testTag("composer-saved-tasks")) {
+                        Icon(MikaIcons.Star, stringResource(R.string.recommendations_title), Modifier.size(MikaSize.Icon), tint = c.ink)
                     }
                 }
                 Box(Modifier.weight(1f).padding(start = if (showAttach) 2.dp else 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)) {

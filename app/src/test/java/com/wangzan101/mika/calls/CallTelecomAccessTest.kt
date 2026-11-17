@@ -22,6 +22,36 @@ class CallTelecomAccessTest {
         }
     }
 
+    @Test fun successfulCommandWithDefaultReadbackReportsSystemRejection() {
+        val result = CallTelecomCommandOutcome.classify(0, "")
+        val readBack = CallPolicy.previousAppOpMode("No operations.\nDefault mode: default")
+        assertEquals("Attempted to grant permission, but the system read back call management permission as default, so call companion cannot be enabled",
+            result.verificationFailure(readBack, false))
+    }
+
+    @Test fun failedReadbackIsNotReportedAsPermissionDenied() {
+        assertEquals("Permission command ran, but call management permission status could not be read back; please try again",
+            CallTelecomCommandOutcome.OK.verificationFailure(null, false))
+    }
+
+    @Test fun allowedAppOpStillRequiresTelecomPermission() {
+        assertEquals("Call management permission read back as allow, but system telecom service still has not granted it, so call companion cannot be enabled",
+            CallTelecomCommandOutcome.OK.verificationFailure("allow", false))
+        assertEquals(null, CallTelecomCommandOutcome.OK.verificationFailure("allow", true))
+    }
+
+    @Test fun commandFailuresTakePriorityAndUnknownReadbackNeverLeaks() {
+        for (outcome in listOf(CallTelecomCommandOutcome.FAILED, CallTelecomCommandOutcome.SHELL_APP_OPS_DENIED)) {
+            assertEquals(outcome.appOpsFailureMessage, outcome.verificationFailure("allow", true))
+        }
+        assertEquals("Permission command ran, but call management permission status could not be read back; please try again",
+            CallTelecomCommandOutcome.OK.verificationFailure("private-device-data", false))
+        for (mode in listOf("ignore", "deny", "errored", "foreground")) {
+            assertEquals("Attempted to grant permission, but the system read back call management permission as $mode, so call companion cannot be enabled",
+                CallTelecomCommandOutcome.OK.verificationFailure(mode, true))
+        }
+    }
+
     @Test fun unknownFailuresDoNotSuggestShellAppOpsPermissionDenial() {
         listOf(
             "java.lang.SecurityException: uid 2000 does not have android.permission.GRANT_RUNTIME_PERMISSIONS.",

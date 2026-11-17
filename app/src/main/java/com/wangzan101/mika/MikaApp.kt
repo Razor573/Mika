@@ -91,6 +91,18 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
     val detailedTraces by lazy { DetailedTraces(this) }
 
     val remoteTasks by lazy { RemoteTaskHub(this) }
+    internal fun workflowInterrupted(attemptId: String) {
+        scope.launch(Dispatchers.IO) { workflows.complete(attemptId, false, "", "interrupted") }
+    }
+    val workflows by lazy {
+        com.wangzan101.mika.workflow.WorkflowRuntime(
+            com.wangzan101.mika.workflow.WorkflowStore(
+                java.io.File(filesDir, com.wangzan101.mika.workflow.WorkflowStore.FILE),
+                com.wangzan101.mika.settings.KeystoreKeyCipher("mika-workflows"),
+            ),
+        ) { dispatch -> TaskService.startWorkflow(this, dispatch.attemptId) }
+    }
+
 
     /** 通话功能：设置页负责开关与凭证；CallRuntime 是本地状态与实时语音的宿主，AndroidPhoneCallPort 是交给模型的工具入口。 */
     val calls by lazy { com.wangzan101.mika.calls.CallRuntime(this) }
@@ -295,6 +307,13 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         com.wangzan101.mika.settings.RecommendedTaskStore(java.io.File(filesDir, com.wangzan101.mika.settings.RecommendedTaskStore.FILE))
     }
 
+    val savedChecklists by lazy {
+        com.wangzan101.mika.chat.SavedChecklistStore(
+            java.io.File(filesDir, com.wangzan101.mika.chat.SavedChecklistStore.FILE),
+            com.wangzan101.mika.settings.KeystoreKeyCipher("mika-saved-checklists"),
+        )
+    }
+
     /** 全局的询问 / 自主和各任务自己的那一份;开发者选项里的「自主模式」经它改。 */
     val approvalControl: ApprovalControl by lazy { ApprovalControl(approvals) }
 
@@ -310,14 +329,24 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
     /** 自身操作的进程内 UI 请求(开 Mika 的页/文件);任务服务发,MainActivity 处理。 */
     val selfUi = com.wangzan101.mika.self.SelfUi()
 
+    /** 更新镜像:用户可增删改排序;检查更新和下载都按它走,官方 GitHub 始终兜底。 */
+    val updateMirrors: com.wangzan101.mika.about.UpdateMirrorStore by lazy {
+        com.wangzan101.mika.about.UpdateMirrorStore(java.io.File(filesDir, com.wangzan101.mika.about.UpdateMirrorStore.FILE))
+    }
+
     /** 检查更新:查到的新版本跟进程走,侧栏、设置首页、关于页的红点看同一份。 */
     val updates: com.wangzan101.mika.about.UpdateChecker by lazy {
         com.wangzan101.mika.about.UpdateChecker(java.io.File(filesDir, "update-v1.json"), BuildConfig.VERSION_NAME,
+            mirrorSettings = updateMirrors::snapshot,
             deviceAbis = android.os.Build.SUPPORTED_ABIS.toList())
     }
 
     internal val apkUpdater by lazy {
-        com.wangzan101.mika.about.ApkUpdater(this, shellRunner = phone.shellManager.commandRunner)
+        com.wangzan101.mika.about.ApkUpdater(
+            this,
+            shellRunner = phone.shellManager.commandRunner,
+            mirrorSettings = updateMirrors::snapshot,
+        )
     }
     internal val automaticUpdates by lazy { com.wangzan101.mika.about.AutomaticUpdates(this, apkUpdater) }
 
@@ -426,6 +455,7 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         // 上次进程在复制或绑定分享草稿途中退出时留下的临时文件;目录至多保留一份有效草稿。
         runCatching { sharedDrafts.cleanup() }
         scope.launch(Dispatchers.IO) {
+            runCatching { updateMirrors.ensureLoaded() }
             runCatching { com.wangzan101.mika.task.AndroidDeviceFiles.cleanupStaging(SandboxDirs(this@MikaApp)) }
                 .onFailure { Log.w("MikaImport", "Could not clean device import staging", it) }
         }
