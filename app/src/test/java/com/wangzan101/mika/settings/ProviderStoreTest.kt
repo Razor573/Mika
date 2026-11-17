@@ -1718,6 +1718,65 @@ class ProviderStoreTest {
         }
     }
 
+    @Test fun geminiDeveloperApiKeyOnlyUsesValidGeminiProviderAndPrefersMain() {
+        val s = store()
+        assertNull(s.geminiDeveloperApiKey())
+
+        val sa = testServiceAccountJson("proj-v1", "sa1@proj-v1.iam.gserviceaccount.com")
+        val vertex = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST,
+            sa, listOf(ListedModel("gemini-2.5-pro")), location = "",
+        )
+        assertTrue(s.use(ModelRole.Main, vertex.id, "gemini-2.5-pro", none))
+        assertNull(s.geminiDeveloperApiKey())
+
+        val agSession = AccountSession(
+            provider = AntigravityAuth.PROVIDER,
+            accountId = "user-ag",
+            label = "ag@example.com",
+            accessToken = "ag-access",
+            refreshToken = "ag-refresh",
+            expiresAtMs = System.currentTimeMillis() + 3_600_000L,
+            apiBase = AntigravityAuth.API_BASE,
+            clientId = "cid",
+            issuer = AntigravityAuth.ISSUER,
+            projectId = "proj-ag",
+        )
+        val ag = s.connectAccount(agSession, listOf(ListedModel("gemini-4-hydrogen")))
+        assertTrue(s.use(ModelRole.Main, ag.id, "gemini-4-hydrogen", none))
+        assertNull(s.geminiDeveloperApiKey())
+
+        s.connect(
+            "Gemini Invalid", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
+            "bad\nkey", listOf(ListedModel("gemini-2.5-flash")),
+        )
+        s.connect(
+            "Gemini Blank", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
+            "   ", listOf(ListedModel("gemini-2.5-flash")),
+        )
+        assertNull(s.geminiDeveloperApiKey())
+
+        val gemFirst = s.connect(
+            "Gemini First", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
+            "  AIza-first  ", listOf(ListedModel("gemini-2.5-flash")),
+        )
+        val gemMain = s.connect(
+            "Gemini Main", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
+            "AIza-main", listOf(ListedModel("gemini-2.5-pro")),
+        )
+        assertEquals("AIza-first", s.geminiDeveloperApiKey())
+
+        assertTrue(s.use(ModelRole.Main, gemMain.id, "gemini-2.5-pro", none))
+        assertEquals("AIza-main", s.geminiDeveloperApiKey())
+
+        assertTrue(s.use(ModelRole.Main, vertex.id, "gemini-2.5-pro", none))
+        assertEquals("AIza-first", s.geminiDeveloperApiKey())
+
+        s.removeProvider(gemFirst.id)
+        s.removeProvider(gemMain.id)
+        assertNull(s.geminiDeveloperApiKey())
+    }
+
     @Suppress("TestFunctionName")
     private fun TriageTargetOf(id: String, name: String, model: String) = com.wangzan101.mika.core.proactive.TriageTarget(id, name, model)
 

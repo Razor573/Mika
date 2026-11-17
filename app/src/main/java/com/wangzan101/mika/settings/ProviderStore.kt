@@ -906,6 +906,22 @@ class ProviderStore(
 
     fun mainProviderId(): String? = configFor(ModelRole.Main)?.providerId
 
+    /** Returns a stored Gemini Developer API key (`Kind.Gemini` only; never Vertex or Antigravity). */
+    @Synchronized
+    fun geminiDeveloperApiKey(): String? {
+        fun validKey(providerId: String): String? = providerKey(providerId)
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && ApiKeyText.isHeaderLegal(it) }
+        val mainCfg = configFor(ModelRole.Main)
+        if (mainCfg?.kind == ProviderConfig.Kind.Gemini) {
+            validKey(mainCfg.providerId)?.let { return it }
+        }
+        return _providers.value
+            .asSequence()
+            .filter { it.kind == ProviderConfig.Kind.Gemini }
+            .firstNotNullOfOrNull { validKey(it.id) }
+    }
+
     private sealed interface GroundingTarget {
         val providerName: String
 
