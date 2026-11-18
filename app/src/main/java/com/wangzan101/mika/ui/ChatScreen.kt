@@ -221,6 +221,10 @@ fun ChatScreen(
     openPlayback: (String) -> Unit = {},
     /** 人格选择器里的「管理人格」:打开设置里的人格页。 */
     onOpenPersonas: () -> Unit = {},
+    shortcutTask: Pair<Long, RecommendedTask>? = null,
+    onShortcutTaskConsumed: (Long) -> Unit = {},
+    shortcutWorkflowTemplateId: Pair<Long, String>? = null,
+    onShortcutWorkflowConsumed: (Long) -> Unit = {},
 ) {
     val checklistStore = checklists ?: (LocalContext.current.applicationContext as? MikaApp)?.savedChecklists
     val workflowRuntime = workflows ?: (LocalContext.current.applicationContext as? MikaApp)?.workflows
@@ -285,6 +289,24 @@ fun ChatScreen(
             fillTaskTitle = task.title
             fillTaskPrompt = task.prompt
         } else fillDraft(task.prompt)
+    }
+    var initialWorkflowTemplateId by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(shortcutTask?.first) {
+        val (serial, task) = shortcutTask ?: return@LaunchedEffect
+        showSavedTasks = false
+        showChecklists = false
+        showWorkflows = false
+        initialWorkflowTemplateId = null
+        pickTask(task)
+        onShortcutTaskConsumed(serial)
+    }
+    LaunchedEffect(shortcutWorkflowTemplateId?.first) {
+        val (serial, templateId) = shortcutWorkflowTemplateId ?: return@LaunchedEffect
+        showSavedTasks = false
+        showChecklists = false
+        initialWorkflowTemplateId = templateId
+        showWorkflows = true
+        onShortcutWorkflowConsumed(serial)
     }
     var retryFailures by remember { mutableStateOf<Pair<String, String>?>(null) }
     var voiceHolding by remember { mutableStateOf(false) }
@@ -793,16 +815,22 @@ fun ChatScreen(
         )
     }
     if (showWorkflows && workflowRuntime != null) androidx.compose.ui.window.Dialog(
-        onDismissRequest = { showWorkflows = false },
+        onDismissRequest = { showWorkflows = false; initialWorkflowTemplateId = null },
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
     ) {
         androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-            WorkflowsScreen(workflowRuntime, onBack = { showWorkflows = false },
-                onOpenConversation = { id -> showWorkflows = false; vm.openWorkflowConversation(id) },
+            WorkflowsScreen(
+                workflowRuntime,
+                onBack = { showWorkflows = false; initialWorkflowTemplateId = null },
+                onOpenConversation = { id -> showWorkflows = false; initialWorkflowTemplateId = null; vm.openWorkflowConversation(id) },
                 onUseResult = { text ->
                     showWorkflows = false
+                    initialWorkflowTemplateId = null
                     if (vm.ui.value.input.isEmpty()) vm.input(text) else pendingExample = text
-                })
+                },
+                initialTemplateId = initialWorkflowTemplateId,
+                onInitialTemplateConsumed = { initialWorkflowTemplateId = null },
+            )
         }
     }
     saveTaskPrompt?.let { prompt ->

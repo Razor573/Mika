@@ -437,9 +437,10 @@ class ToolDispatcher internal constructor(
     /** 主模型能看图时动作之后再看一眼:内容和画面是同一时刻的;什么都没打开时为 null。读到的记进账本。 */
     suspend fun lookNow(): Glance? = surfaces.viewNow()?.let { v -> Glance(v.content, v.image, v.imageId, remember(v.observations, surface)) }
 
-    /** 打开链接的工具此刻会不会放行这组参数(只看链接规则与参考资料,不执行)。 */
+    /** 打开链接的工具此刻会不会放行这组参数(只看链接规则、直通安全协议与参考资料,不执行)。 */
     fun linkAllowed(action: String?, uri: String?, pkg: String?): Boolean =
-        LinkPolicy.check(action, uri, pkg) == null && (action != null || (uri to pkg) in ctx.allowedLinks)
+        LinkPolicy.check(action, uri, pkg) == null &&
+            (action != null || (uri to pkg) in ctx.allowedLinks || com.wangzan101.mika.core.cap.phone.VerifiedIntentRouter.isDirectSafeIntent(uri))
 
     /** 循环把带链接的参考资料交给模型时登记这些链接。 */
     fun allowLinks(links: List<Link>) {

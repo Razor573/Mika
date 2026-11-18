@@ -335,4 +335,9 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
+    <string name="shortcut_pin">Закрепить на главном экране</string>
+    <string name="shortcut_pin_requested">Запрос на добавление ярлыка отправлен</string>
+    <string name="shortcut_pin_unsupported">Текущий лаунчер не поддерживает закрепление ярлыков</string>
+    <string name="shortcut_invalid">Недействительный или устаревший ярлык</string>
+    <string name="shortcut_target_missing">Эта сохранённая или многошаговая задача больше не существует</string>
 </resources>

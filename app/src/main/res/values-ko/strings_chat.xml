@@ -293,4 +293,9 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
+    <string name="shortcut_pin">홈 화면에 고정</string>
+    <string name="shortcut_pin_requested">홈 화면 바로가기를 요청했습니다</string>
+    <string name="shortcut_pin_unsupported">현재 런처에서는 바로가기 고정을 지원하지 않습니다</string>
+    <string name="shortcut_invalid">유효하지 않거나 만료된 바로가기입니다</string>
+    <string name="shortcut_target_missing">저장된 작업 또는 다단계 작업이 더 이상 존재하지 않습니다</string>
 </resources>

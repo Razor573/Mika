@@ -1,5 +1,6 @@
 package com.wangzan101.mika.ui
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -14,8 +15,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.wangzan101.mika.R
+import com.wangzan101.mika.shortcuts.PinnedTaskShortcuts
 import com.wangzan101.mika.ui.components.*
 import com.wangzan101.mika.ui.theme.MikaIcons
+import com.wangzan101.mika.ui.theme.MikaSize
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.workflow.*
 import kotlinx.coroutines.Dispatchers
@@ -27,8 +30,16 @@ import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun WorkflowsScreen(runtime: WorkflowRuntime, onBack: () -> Unit, onOpenConversation: (String) -> Unit, onUseResult: (String) -> Unit) {
+internal fun WorkflowsScreen(
+    runtime: WorkflowRuntime,
+    onBack: () -> Unit,
+    onOpenConversation: (String) -> Unit,
+    onUseResult: (String) -> Unit,
+    initialTemplateId: String? = null,
+    onInitialTemplateConsumed: () -> Unit = {},
+) {
     val data by runtime.store.data.collectAsState()
     val loaded by runtime.store.loaded.collectAsState()
     val saveError by runtime.saveError.collectAsState()
@@ -56,6 +67,20 @@ internal fun WorkflowsScreen(runtime: WorkflowRuntime, onBack: () -> Unit, onOpe
     LaunchedEffect(runtime) {
         try { withContext(Dispatchers.IO) { runtime.store.load() } }
         catch (e: WorkflowException) { error = e.problem }
+    }
+    LaunchedEffect(initialTemplateId, loaded) {
+        val targetId = initialTemplateId ?: return@LaunchedEffect
+        if (!loaded) return@LaunchedEffect
+        val found = data.templates.find { it.id == targetId }
+        if (found != null) {
+            selectedRun = null
+            editor = null
+            selectedTemplate = found.id
+            starting = found
+        } else {
+            Toast.makeText(context, R.string.shortcut_target_missing, Toast.LENGTH_SHORT).show()
+        }
+        onInitialTemplateConsumed()
     }
     val template = data.templates.find { it.id == selectedTemplate }
     val run = data.runs.find { it.id == selectedRun }
@@ -132,9 +157,14 @@ internal fun WorkflowsScreen(runtime: WorkflowRuntime, onBack: () -> Unit, onOpe
             GroupCard {
                 template.steps.forEachIndexed { index, step -> ListRow(MikaIcons.Route, "${index + 1}. ${step.title}", step.instruction, first = index == 0) }
             }
-            Row {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton({ editor = Json.encodeToString(template) }, modifier = Modifier.testTag("workflow-edit")) { Text(stringResource(R.string.workflow_edit)) }
                 TextButton({ editor = Json.encodeToString(template.copy(id = UUID.randomUUID().toString(), revision = 0)) }) { Text(stringResource(R.string.workflow_duplicate)) }
+                TextButton({ PinnedTaskShortcuts.pinWorkflow(context, template) }, modifier = Modifier.testTag("workflow-pin")) {
+                    Icon(MikaIcons.Pin, null, Modifier.size(MikaSize.SmallIcon))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.shortcut_pin))
+                }
                 TextButton({ deleting = template.id to false }) { Text(stringResource(R.string.recommendations_delete)) }
             }
         } else {

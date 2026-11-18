@@ -307,4 +307,9 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
+    <string name="shortcut_pin">سنجاق به صفحهٔ اصلی</string>
+    <string name="shortcut_pin_requested">درخواست افزودن میان‌بر به صفحهٔ اصلی ارسال شد</string>
+    <string name="shortcut_pin_unsupported">لانچر فعلی از سنجاق کردن میان‌بر پشتیبانی نمی‌کند</string>
+    <string name="shortcut_invalid">میان‌بر نامعتبر یا منقضی است</string>
+    <string name="shortcut_target_missing">این کار ذخیره‌شده یا چندمرحله‌ای دیگر وجود ندارد</string>
 </resources>

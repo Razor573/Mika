@@ -25,8 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -39,6 +41,7 @@ import com.wangzan101.mika.settings.RecommendedTask
 import com.wangzan101.mika.settings.TaskTemplate
 import com.wangzan101.mika.settings.RecommendedTaskError
 import com.wangzan101.mika.settings.RecommendedTaskStore
+import com.wangzan101.mika.shortcuts.PinnedTaskShortcuts
 import com.wangzan101.mika.ui.components.ButtonKind
 import com.wangzan101.mika.ui.components.ButtonSize
 import com.wangzan101.mika.ui.components.FooterNote
@@ -69,6 +72,7 @@ fun RecommendedTasksScreen(store: RecommendedTaskStore, onBack: () -> Unit, onPi
     var resetting by remember { mutableStateOf(false) }
     var resetError by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val scroll = rememberScrollState()
     var reorderError by remember { mutableStateOf<RecommendedTaskError?>(null) }
     val reorder = rememberReorderableRowsState(
@@ -125,6 +129,7 @@ fun RecommendedTasksScreen(store: RecommendedTaskStore, onBack: () -> Unit, onPi
                                     ) {
                                         Icon(MikaIcons.Edit, stringResource(R.string.recommendations_edit), Modifier.size(MikaSize.Icon), tint = c.ink3)
                                     }
+                                    PinTaskButton { if (!reorder.busy) PinnedTaskShortcuts.pinSavedTask(context, task) }
                                     DeleteTaskButton { if (!reorder.busy) { deleteError = null; deleting = task } }
                                     if (onPick == null) dragHandle()
                                 }
@@ -290,15 +295,24 @@ internal fun RecommendedTaskDialog(store: RecommendedTaskStore, initial: Recomme
 
 }
 
+@Composable
+private fun PinTaskButton(onClick: () -> Unit) {
+    TaskRowIconButton(MikaIcons.Pin, stringResource(R.string.shortcut_pin), onClick)
+}
+
 /** 行尾的删除。单独可点,不会连着打开编辑。 */
 @Composable
 private fun DeleteTaskButton(onClick: () -> Unit) {
-    val label = stringResource(R.string.recommendations_delete)
+    TaskRowIconButton(MikaIcons.Trash, stringResource(R.string.recommendations_delete), onClick)
+}
+
+@Composable
+private fun TaskRowIconButton(icon: ImageVector, label: String, onClick: () -> Unit) {
     Box(
         Modifier.size(MikaSize.IconButton).clip(CircleShape).clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(MikaIcons.Trash, label, Modifier.size(MikaSize.Icon), tint = MikaTheme.colors.ink3)
+        Icon(icon, label, Modifier.size(MikaSize.Icon), tint = MikaTheme.colors.ink3)
     }
 }
 

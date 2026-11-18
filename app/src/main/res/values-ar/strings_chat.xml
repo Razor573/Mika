@@ -363,4 +363,9 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
+    <string name="shortcut_pin">تثبيت على الشاشة الرئيسية</string>
+    <string name="shortcut_pin_requested">تم طلب إضافة اختصار للشاشة الرئيسية</string>
+    <string name="shortcut_pin_unsupported">المشغّل الحالي لا يدعم تثبيت الاختصارات</string>
+    <string name="shortcut_invalid">الاختصار غير صالح أو منتهي الصلاحية</string>
+    <string name="shortcut_target_missing">لم تعد هذه المهمة المحفوظة أو متعددة الخطوات موجودة</string>
 </resources>

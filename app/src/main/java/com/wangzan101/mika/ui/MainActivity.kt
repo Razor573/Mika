@@ -70,7 +70,9 @@ import com.wangzan101.mika.task.TaskService
 import com.wangzan101.mika.settings.Prerequisites
 import com.wangzan101.mika.settings.FeatureFlags
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.RecommendedTask
 import com.wangzan101.mika.settings.SystemStatusMonitor
+import com.wangzan101.mika.shortcuts.PinnedTaskShortcuts
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.setup.DeveloperSettings
 import com.wangzan101.mika.cap.phone.setup.PairingNotifier
@@ -88,6 +90,8 @@ class MainActivity : ComponentActivity() {
     private var requestedCallHistoryId by mutableStateOf<String?>(null)
     private var openTeach by mutableStateOf(false)
     private var requestedSharedDraft by mutableStateOf<SharedDraftRequest?>(null)
+    private var shortcutLaunchRequest by mutableStateOf<ShortcutLaunchRequest?>(null)
+    private var shortcutSerial = 0L
     private var shareJob: Job? = null
     private var shareSerial = 0L
     private var shareInCurrent = false
@@ -114,6 +118,9 @@ class MainActivity : ComponentActivity() {
         requestedCalls = intent.getBooleanExtra(EXTRA_OPEN_CALLS, false)
         requestedCallHistoryId = intent.getStringExtra(EXTRA_CALL_HISTORY_ID)
         takeTeach(intent)
+        if (savedInstanceState == null) {
+            takeShortcut(intent)
+        }
         shareInCurrent = savedInstanceState?.getBoolean(STATE_SHARE_IN_CURRENT, false) ?: false
         shareHandled = savedInstanceState?.getBoolean(STATE_SHARE_HANDLED, false) ?: false
         // 已处理完的分享在旋转/重建时不重复触发;真正的冷启动分享或尚未完成的后台分享继续收下。
@@ -145,6 +152,10 @@ class MainActivity : ComponentActivity() {
                         },
                         openTeach = openTeach,
                         onTeachOpened = { openTeach = false },
+                        shortcutLaunch = shortcutLaunchRequest,
+                        onShortcutLaunchConsumed = { serial ->
+                            if (shortcutLaunchRequest?.serial == serial) shortcutLaunchRequest = null
+                        },
                     )
                 }
             }
@@ -163,6 +174,7 @@ class MainActivity : ComponentActivity() {
             app.chat.cancelPendingSharedDraft()
         }
         takeTeach(intent)
+        takeShortcut(intent)
         requestedSharedDraft?.let { app.sharedDrafts.discard(it.draft.image) }
         requestedSharedDraft = null
         // 界面已在后台存活时收到分享:放入当前打开的会话,而不是新建会话。
@@ -332,6 +344,26 @@ class MainActivity : ComponentActivity() {
         intent.removeExtra(EXTRA_OPEN_TEACH)
     }
 
+    private fun takeShortcut(intent: Intent) {
+        val taskId = intent.getStringExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_TASK_ID)?.takeIf { it.isNotBlank() }
+        val workflowId = intent.getStringExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_WORKFLOW_ID)?.takeIf { it.isNotBlank() }
+        val token = intent.getStringExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_TOKEN)
+        intent.removeExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_TASK_ID)
+        intent.removeExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_WORKFLOW_ID)
+        intent.removeExtra(PinnedTaskShortcuts.EXTRA_SHORTCUT_TOKEN)
+        if (taskId == null && workflowId == null) return
+        if (!PinnedTaskShortcuts.isValidToken(this, token)) {
+            Toast.makeText(this, R.string.shortcut_invalid, Toast.LENGTH_SHORT).show()
+            return
+        }
+        (application as MikaApp).chat.cancelPendingSharedDraft()
+        shortcutLaunchRequest = when {
+            taskId != null -> ShortcutLaunchRequest.SavedTask(taskId, ++shortcutSerial)
+            workflowId != null -> ShortcutLaunchRequest.Workflow(workflowId, ++shortcutSerial)
+            else -> null
+        }
+    }
+
     companion object {
         const val EXTRA_OPEN_CONVERSATION = "open_conversation"
         const val EXTRA_OPEN_CALLS = "open_calls"
@@ -358,6 +390,12 @@ internal fun <T> firstThatStarts(candidates: List<T>, start: (T) -> Boolean): Bo
 
 private data class SharedDraftRequest(val draft: SharedDraft, val serial: Long, val inCurrentConversation: Boolean = false)
 
+private sealed interface ShortcutLaunchRequest {
+    val serial: Long
+    data class SavedTask(val taskId: String, override val serial: Long) : ShortcutLaunchRequest
+    data class Workflow(val templateId: String, override val serial: Long) : ShortcutLaunchRequest
+}
+
 /**
  * 页面切换:对话页是根,侧栏和设置等入口把页面压进 [NavStack],返回键和页面上的返回按钮都走 [NavStack.back]。
  * 各页面只通过回调进出,不知道彼此。
@@ -376,11 +414,13 @@ private fun MikaRoot(
     onSharedDraftOpened: (Boolean, SharedDraft) -> Unit,
     openTeach: Boolean,
     onTeachOpened: () -> Unit,
+    shortcutLaunch: ShortcutLaunchRequest?,
+    onShortcutLaunchConsumed: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     var focusedCallHistoryId by remember { mutableStateOf<String?>(null) }
     val personalStart = remember { FeatureFlags.get(context).personalStart() }
-    val nav = rememberNavStack(if (personalStart && requestedConversation == null) Route.Personal else Route.Chat)
+    val nav = rememberNavStack(if (personalStart && requestedConversation == null && shortcutLaunch == null) Route.Personal else Route.Chat)
     var filesFromDrawer by rememberSaveable { mutableStateOf(false) }
     var filesConversation by rememberSaveable { mutableStateOf<String?>(null) }
     // 从设置页「重新配对」进来时先回到配对一步
@@ -505,8 +545,32 @@ private fun MikaRoot(
             null -> nav.reset()
         }
     }
+    var pendingShortcutTask by remember { mutableStateOf<Pair<Long, RecommendedTask>?>(null) }
+    var pendingShortcutWorkflow by remember { mutableStateOf<Pair<Long, String>?>(null) }
+    LaunchedEffect(shortcutLaunch?.serial) {
+        val req = shortcutLaunch ?: return@LaunchedEffect
+        when (req) {
+            is ShortcutLaunchRequest.SavedTask -> {
+                withContext(Dispatchers.IO) { app.recommendedTasks.ensureLoaded { ChatCopy.recommendationSeeds() } }
+                val task = app.recommendedTasks.tasks.value.find { it.id == req.taskId }
+                if (task == null) {
+                    Toast.makeText(context, R.string.shortcut_target_missing, Toast.LENGTH_SHORT).show()
+                } else {
+                    nav.reset()
+                    pendingShortcutWorkflow = null
+                    pendingShortcutTask = req.serial to task
+                }
+            }
+            is ShortcutLaunchRequest.Workflow -> {
+                nav.reset()
+                pendingShortcutTask = null
+                pendingShortcutWorkflow = req.serial to req.templateId
+            }
+        }
+        onShortcutLaunchConsumed(req.serial)
+    }
     LaunchedEffect(Unit) {
-        if (onboarding == null && requestedConversation == null && nav.current != Route.Personal) {
+        if (onboarding == null && requestedConversation == null && shortcutLaunch == null && nav.current != Route.Personal) {
             Onboarding.start(onboardingInputs())?.let(::goOnboarding)
         }
     }
@@ -601,6 +665,10 @@ private fun MikaRoot(
                                 app.teach.prefill(hint)
                                 nav.push(Route.Teach)
                             },
+                            shortcutTask = pendingShortcutTask,
+                            onShortcutTaskConsumed = { serial -> if (pendingShortcutTask?.first == serial) pendingShortcutTask = null },
+                            shortcutWorkflowTemplateId = pendingShortcutWorkflow,
+                            onShortcutWorkflowConsumed = { serial -> if (pendingShortcutWorkflow?.first == serial) pendingShortcutWorkflow = null },
                         )
                     }
                     var installUpdate by remember { mutableStateOf<ReleaseInfo?>(null) }
