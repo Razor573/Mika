@@ -5,6 +5,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -99,12 +100,12 @@ class UiTreeJsonTest {
         val pruned = UiTreeJson.prunedWindows(snap)
         val prunedJson = pruned.windows.toString()
 
-        assertTrue(prunedJson.length <= rawJson.length * 0.6, "Expected >=40% reduction: raw=${rawJson.length}, pruned=${prunedJson.length}")
+        assertTrue("Expected >=40% reduction: raw=${rawJson.length}, pruned=${prunedJson.length}", prunedJson.length <= rawJson.length * 0.6)
         assertFalse(prunedJson.contains("Offscreen"))
         assertFalse(prunedJson.contains("ZeroWidth"))
         for (i in 1..12) {
-            assertTrue(prunedJson.contains("\"@e$i\""), "Missing ref @e$i")
-            assertTrue(prunedJson.contains("$$i.99"), "Missing price for item $i")
+            assertTrue("Missing ref @e$i", prunedJson.contains("\"@e$i\""))
+            assertTrue("Missing price for item $i", prunedJson.contains("$$i.99"))
         }
         assertTrue(pruned.meaningfulCount >= 12)
     }

@@ -1054,8 +1054,6 @@ class TaskRun(
                         sandbox = sandbox, workspace = { conversationId }, runSpec = childSpec,
                         conversationId = conversationId, inlineScreen = speed.inlineScreen,
                         adaptiveVision = speed.adaptiveVision,
-                compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
-                fullRawTreeDump = speed.fullRawTreeDump,
                         compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
                         fullRawTreeDump = speed.fullRawTreeDump)
                     AgentLoop(model, childTools, basePrompt, maxSteps = childSpec.stepBudget ?: AgentLoop.UNLIMITED_STEPS,

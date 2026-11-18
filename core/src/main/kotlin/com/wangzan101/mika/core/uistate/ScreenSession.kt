@@ -73,7 +73,7 @@ internal class ScreenSession(
     private val fullRawTreeDump: Boolean = false,
     private val phoneElementsLimit: Int = DEFAULT_PHONE_ELEMENTS,
 ) {
-    private val modelElementsLimit get() = if (surface.id == "phone") phoneElementsLimit else MAX_ELEMENTS
+    private val modelElementsLimit get() = if (surface.id == "phone") (if (useCompactTree) phoneElementsLimit else Int.MAX_VALUE) else MAX_ELEMENTS
     private val useCompactTree get() = compactUiTree && !fullRawTreeDump && surface.id == "phone"
     val screen: ScreenPort get() = surface.screen
     private var textOnlyDepth = 0
