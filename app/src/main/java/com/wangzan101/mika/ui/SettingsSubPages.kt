@@ -381,6 +381,7 @@ fun DuringWorkScreen(
     triggerRunMinutes: Int? = null, onTriggerRunMinutes: (Int?) -> Unit = {},
     tokenBudget: Long? = null, onTokenBudget: (Long?) -> Unit = {},
     showTaskCost: Boolean = false, onShowTaskCost: (Boolean) -> Unit = {},
+    compactUiTree: Boolean = true, onCompactUiTree: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     var editingLimit by remember { mutableStateOf(false) }
@@ -393,6 +394,9 @@ fun DuringWorkScreen(
         GroupCard {
             ListRow(null, AutonomyCopy.TITLE, AutonomyCopy.SUBTITLE, first = true, onClick = { onAutonomous(!autonomous) }) {
                 MikaSwitch(autonomous, onAutonomous, Modifier.testTag("work-autonomous"))
+            }
+            ListRow(null, stringResource(R.string.settings_compact_ui_tree), stringResource(R.string.settings_compact_ui_tree_sub), onClick = { onCompactUiTree(!compactUiTree) }) {
+                MikaSwitch(compactUiTree, onCompactUiTree, Modifier.testTag("work-compact-ui-tree"))
             }
         }
         GroupCard {

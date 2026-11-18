@@ -248,4 +248,6 @@
         <item quantity="one">%1$d minute</item>
         <item quantity="other">%1$d minutes</item>
     </plurals>
+    <string name="settings_compact_ui_tree">Compact UI tree</string>
+    <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
 </resources>

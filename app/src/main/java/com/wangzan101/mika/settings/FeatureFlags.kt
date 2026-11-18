@@ -105,6 +105,13 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         prefs.edit().putBoolean(KEEP_SCREEN_ON, on).commit()
     }
 
+    /** 精简手机 UI 树;默认开,用户可以关。 */
+    fun uiTreeCompact(): Boolean = prefs.getBoolean(UI_TREE_COMPACT, true)
+
+    fun setUiTreeCompact(on: Boolean) {
+        prefs.edit().putBoolean(UI_TREE_COMPACT, on).commit()
+    }
+
     fun showTaskCost(): Boolean = prefs.getBoolean(SHOW_TASK_COST, false)
 
     fun setShowTaskCost(on: Boolean) {
@@ -448,6 +455,7 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         private const val TASK_TOKEN_BUDGET = "task_token_budget"
         private const val PROACTIVE_DAILY_TOKEN_BUDGET = "proactive_daily_token_budget"
         private const val KEEP_SCREEN_ON = "keep_screen_on"
+        private const val UI_TREE_COMPACT = "ui_tree_compact"
         private const val SHOW_TASK_COST = "show_task_cost"
         private const val MUTE_TARGET = "mute_target"
         private const val OPERATING_PACE = "operating_pace"

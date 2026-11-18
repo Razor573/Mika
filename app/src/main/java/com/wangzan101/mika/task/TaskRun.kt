@@ -1053,7 +1053,11 @@ class TaskRun(
                         appPacing = { pace.appPacing() }, appTempo = { pace.of(it).tempo }, appCapped = { pace.capped(it) }, appIdleScroll = { IdleScroll(Random.Default) },
                         sandbox = sandbox, workspace = { conversationId }, runSpec = childSpec,
                         conversationId = conversationId, inlineScreen = speed.inlineScreen,
-                        adaptiveVision = speed.adaptiveVision)
+                        adaptiveVision = speed.adaptiveVision,
+                compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
+                fullRawTreeDump = speed.fullRawTreeDump,
+                        compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
+                        fullRawTreeDump = speed.fullRawTreeDump)
                     AgentLoop(model, childTools, basePrompt, maxSteps = childSpec.stepBudget ?: AgentLoop.UNLIMITED_STEPS,
                         // 子任务跟着询问 / 自主;询问时它也过关卡,子任务里花钱的一步一律不做
                         confirmations = runApproval.gate(), approvals = runApproval, autonomous = runApproval.startedAutonomous,
@@ -1081,6 +1085,8 @@ class TaskRun(
                 } else null,
                 stableRefs = speed.inlineScreen, inlineScreen = speed.inlineScreen,
                 adaptiveVision = speed.adaptiveVision,
+                compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
+                fullRawTreeDump = speed.fullRawTreeDump,
                 deepLinks = speed.deepLinks, memory = memory, profile = if (memory != null) memoryRuntime.profile() else null,
                 taskMemory = taskMemory,
                 utterances = utterances, conversationId = conversationId,

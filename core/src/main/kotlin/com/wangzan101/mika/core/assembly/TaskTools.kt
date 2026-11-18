@@ -82,6 +82,8 @@ fun toolDispatcher(
     inlineScreen: Boolean = false,
     /** 先给模型元素表；只在元素信息明显不足时自动附图。动作仍带回元素变化。 */
     adaptiveVision: Boolean = false,
+    compactUiTree: Boolean = false,
+    fullRawTreeDump: Boolean = false,
     /** 提速开关 deepLinks:提供打开链接的工具。 */
     deepLinks: Boolean = false,
     /** 记忆;和 [utterances] 都给了才提供 memory_search / memory_save / memory_edit。 */
@@ -156,7 +158,7 @@ fun toolDispatcher(
             (runSpec.capabilities == null || "sandbox" in runSpec.capabilities)
     }?.let { com.wangzan101.mika.core.cap.sandbox.WorkspaceScreenshots(it, workspace) }
     val config = ToolConfig(visionEnabled, skills, recordFrames, vision, inlineScreen, adaptiveVision, memory, profile, utterances, conversationId,
-        imageOps, scheduleTrigger, scheduleAdmin, runSpec, childHost, userScreens, personalSkills, selfConfig, runRecords, webSearch, self, selfOperate,
+        imageOps, compactUiTree, fullRawTreeDump, scheduleTrigger, scheduleAdmin, runSpec, childHost, userScreens, personalSkills, selfConfig, runRecords, webSearch, self, selfOperate,
         screenshotStore?.let { store -> { path, png -> store.save(path, png) } }, taskMemory = taskMemory, notices = notices, webFetch = webFetch)
     val providers: List<CapabilityProvider> = listOf(
         object : CapabilityProvider {

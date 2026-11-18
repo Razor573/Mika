@@ -31,11 +31,25 @@ internal object PhoneQuery : PhoneTool {
         "resourceId" to str("Full or partial Android resource ID to find."),
         "role" to str("Full or partial accessibility class or role to find."),
         "limit" to int("Maximum results, default 30.", 1, 100),
+        "rootRef" to str("Optional element ref (e.g. \"@e12\") to inspect."),
+        "full" to bool("When true with rootRef, return full unpruned descendants of that container."),
     ))
 
     override suspend fun execute(a: Args, ctx: ToolContext): ToolExecution {
         val read = ctx.session.observe(withImage = false, recordFrame = false)
         val snapshot = ctx.session.lastSnapshot!!
+        val rootRef = a.str("rootRef", max = 64)
+        val full = a.bool("full") ?: false
+        if (rootRef != null && full) {
+            val subtree = com.wangzan101.mika.core.uistate.UiTreeJson.subtree(snapshot, rootRef)
+                ?: return failure("ref_not_found", "No UI tree node found for ref $rootRef.")
+            return read.with(content = JsonObject(mapOf(
+                "ok" to JsonPrimitive(true),
+                "rootRef" to JsonPrimitive(rootRef),
+                "full" to JsonPrimitive(true),
+                "tree" to subtree,
+            )))
+        }
         val query = PhoneAutomationEngine.Query(a.str("text", max = 200), a.str("resourceId", max = 200), a.str("role", max = 100))
         val found = PhoneAutomationEngine.find(snapshot, query, a.int("limit", 1, 100) ?: 30)
         return read.with(content = JsonObject(mapOf("ok" to JsonPrimitive(true)) + found))

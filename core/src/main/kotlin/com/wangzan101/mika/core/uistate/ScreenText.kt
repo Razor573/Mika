@@ -37,8 +37,18 @@ object ScreenJson {
     /** observe 的元素数组;center 换成与 tap 坐标相同的 0–999(像素只在端口内部用);返回数组与被截掉的元素数。 */
     fun elements(s: ScreenSnapshot, maxElements: Int): Pair<JsonArray, Int> {
         val all = s.elements.filter { it.meaningful }
+        val selected = if (all.size <= maxElements) {
+            all
+        } else {
+            val cx = if (s.width > 0) s.width / 2 else 500
+            val cy = if (s.height > 0) s.height / 2 else 500
+            all.sortedWith(
+                compareByDescending<UiElement> { it.clickable || it.editable || it.scrollable || it.checkable || it.selected || it.focused }
+                    .thenBy { kotlin.math.abs(it.centerX - cx) + kotlin.math.abs(it.centerY - cy) }
+            ).take(maxElements)
+        }
         val arr = buildJsonArray {
-            for (e in all.take(maxElements)) add(buildJsonObject {
+            for (e in selected) add(buildJsonObject {
                 put("ref", e.ref)
                 put("role", e.role)
                 put("name", e.name)

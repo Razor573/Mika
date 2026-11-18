@@ -35,6 +35,8 @@ import com.wangzan101.mika.core.tool.okObj
 import com.wangzan101.mika.core.net.UrlHost
 
 internal const val MAX_ELEMENTS = 200
+internal const val DEFAULT_PHONE_ELEMENTS = 250
+private const val MIN_PRUNED_MEANINGFUL = 3
 /** 一次全量屏幕之后最多接几次差异。 */
 private const val MAX_CHAIN_DIFFS = 5
 /** 写操作后读屏前等界面稳定的上限。 */
@@ -67,9 +69,12 @@ internal class ScreenSession(
     val shots: Shots,
     vision: VisionService? = null,
     private val adaptiveVision: Boolean = false,
+    private val compactUiTree: Boolean = false,
+    private val fullRawTreeDump: Boolean = false,
+    private val phoneElementsLimit: Int = DEFAULT_PHONE_ELEMENTS,
 ) {
-    /** 手机模型结果不按元素数量截断;网页仍沿用自己的输出预算。 */
-    private val modelElementsLimit get() = if (surface.id == "phone") Int.MAX_VALUE else MAX_ELEMENTS
+    private val modelElementsLimit get() = if (surface.id == "phone") phoneElementsLimit else MAX_ELEMENTS
+    private val useCompactTree get() = compactUiTree && !fullRawTreeDump && surface.id == "phone"
     val screen: ScreenPort get() = surface.screen
     private var textOnlyDepth = 0
 
@@ -159,7 +164,9 @@ internal class ScreenSession(
     suspend fun observe(withImage: Boolean, adaptiveImage: Boolean = false, recordFrame: Boolean = true): ToolExecution {
         val s = snapshot()
         val (tree, ocr, ocrStatus) = readTree(s)
-        val imageReason = if (adaptiveImage && tree.poor) tree.reason else null
+        val pruned = if (useCompactTree && s.windows.isNotEmpty()) UiTreeJson.prunedWindows(s) else null
+        val fallbackToRaw = pruned != null && (pruned.meaningfulCount < MIN_PRUNED_MEANINGFUL || tree.poor)
+        val imageReason = if (adaptiveImage && (tree.poor || fallbackToRaw)) tree.reason ?: "sparse_pruned_tree" else null
         val sendImage = withImage || imageReason != null
         stabilizer?.latest?.let { shown = it; chain.clear(); chain += it.snapshotId }
         val seen = interfaceRead(s, ocr.orEmpty())
@@ -192,12 +199,17 @@ internal class ScreenSession(
             else treeHint(tree, ocrStatus)?.let { put("hint", it) }
             put("viewport", buildJsonObject { put("width", s.width); put("height", s.height) })
             put("elements", elements)
-            if (surface.id == "phone" && s.windows.isNotEmpty()) put("tree", UiTreeJson.windows(s))
-            ocr?.let { put("visibleText", VisibleText.json(it)) }
-            if (surface.id == "phone") ScreenMap.json(s, ocr.orEmpty())?.let { put("screenMap", it) }
-            val omitted = s.web?.omitted ?: 0
-            put("truncated", hidden > 0 || omitted > 0)
-            if (omitted > 0) put("omitted", hidden + omitted)
+            if (surface.id == "phone" && s.windows.isNotEmpty()) {
+                put("tree", if (pruned != null && !fallbackToRaw) pruned.windows else UiTreeJson.windows(s))
+            }
+            val omitVisibleText = useCompactTree && !fallbackToRaw && ocr.isNullOrEmpty()
+            if (!omitVisibleText) ocr?.let { put("visibleText", VisibleText.json(it)) }
+            if (surface.id == "phone" && (!useCompactTree || fallbackToRaw)) {
+                ScreenMap.json(s, ocr.orEmpty())?.let { put("screenMap", it) }
+            }
+            val omitted = hidden + (s.web?.omitted ?: 0)
+            put("truncated", omitted > 0)
+            if (omitted > 0) put("omitted", omitted)
         }
         // 受保护或持续全黑的帧都不给视觉模型;后者仍保留可读控件供降级操作。
         val png = if ((sendImage && textOnlyDepth == 0 || (recordFrames && recordFrame && textOnlyDepth == 0)) &&
