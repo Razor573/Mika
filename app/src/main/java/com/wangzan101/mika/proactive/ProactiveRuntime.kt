@@ -140,7 +140,7 @@ class ProactiveRuntime(
         consent = { _consent.value },
         budgetLimit = flags::proactiveDailyTokenBudget,
         language = ::triageLanguage,
-        eligible = { pkg -> BlockedApps.learnEligible(pkg, allowed.current(), _learnOptOut.value, access().effectiveBlocked) },
+        eligible = { pkg -> BlockedApps.learnEligible(pkg, allowed.current(), _learnOptOut.value, access().blocked) },
         suspended = { !access().known },
         slot = requests,
         sensitive = { _learnSensitive.value },

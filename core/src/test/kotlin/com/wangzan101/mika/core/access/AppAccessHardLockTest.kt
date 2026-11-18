@@ -61,7 +61,11 @@ class AppAccessHardLockTest {
         val inner = object : ScreenPort by FakeScreen() {
             override suspend fun snapshot(): ScreenSnapshot {
                 reads++
-                return FakeScreen().snapshot()
+                return FakeScreen().snapshot().copy(packageName = "com.google.android.apps.authenticator2")
+            }
+            override suspend fun screenshotPng(): ByteArray {
+                reads++
+                return byteArrayOf(1)
             }
         }
         val port = AppAccessScreenPort(
@@ -70,13 +74,20 @@ class AppAccessHardLockTest {
             packages = { listOf("com.google.android.apps.authenticator2") },
         )
         try {
-            port.snapshot()
+            port.screenshotPng()
             fail("expected AppAccessDenied")
         } catch (e: AppAccessDenied) {
             assertEquals("app_blocked", e.code)
             assertEquals("com.google.android.apps.authenticator2", e.packageName)
         }
         assertEquals(0, reads)
+        try {
+            port.snapshot()
+            fail("expected AppAccessDenied")
+        } catch (e: AppAccessDenied) {
+            assertEquals("app_blocked", e.code)
+            assertEquals("com.google.android.apps.authenticator2", e.packageName)
+        }
         try {
             port.openApp("io.metamask")
             fail("expected AppAccessDenied")
