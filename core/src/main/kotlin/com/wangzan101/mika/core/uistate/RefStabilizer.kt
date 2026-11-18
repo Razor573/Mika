@@ -99,6 +99,42 @@ class RefStabilizer(private val prefix: String = "s") {
         return ModelSnapshot("$prefix$n", port, elements, toPort).also { latest = it }
     }
 
+    /**
+     * Reuse previous `@eN` refs 1-to-1 for an identical screen (same canonical hash),
+     * advancing `snapshotId` and updating `toPort` to the latest port refs.
+     */
+    fun reuse(port: ScreenSnapshot): ModelSnapshot {
+        val prev = latest
+        if (prev == null ||
+            prev.port.packageName?.trim().orEmpty() != port.packageName?.trim().orEmpty() ||
+            prev.elements.size != port.elements.size
+        ) {
+            return next(port)
+        }
+        val n = ++count
+        val order = UiTreeJson.ELEMENT_CANONICAL_ORDER
+        val prevOrder = prev.port.elements.indices.sortedWith(Comparator { a, b ->
+            order.compare(prev.port.elements[a], prev.port.elements[b])
+        })
+        val currOrder = port.elements.indices.sortedWith(Comparator { a, b ->
+            order.compare(port.elements[a], port.elements[b])
+        })
+        val matchedPrev = IntArray(port.elements.size)
+        for (k in prevOrder.indices) matchedPrev[currOrder[k]] = prevOrder[k]
+        val toPort = LinkedHashMap<String, String>()
+        val bornNow = HashMap<String, Int>()
+        val elements = port.elements.mapIndexed { i, e ->
+            val ref = prev.elements[matchedPrev[i]].ref
+            bornNow[ref] = born[ref] ?: n
+            toPort[ref] = e.ref
+            e.copy(ref = ref)
+        }
+        born = bornNow
+        centers[n] = elements.associate { it.ref to (it.centerX to it.centerY) }
+        while (centers.size > KEEP_CENTERS) centers.remove(centers.keys.first())
+        return ModelSnapshot("$prefix$n", port, elements, toPort).also { latest = it }
+    }
+
     fun resolve(ref: String, snapshotId: String): Resolved {
         val cur = latest ?: return Resolved.Stale(StaleCause.SnapshotUnknown)
         val n = snapshotId.removePrefix(prefix).takeIf { snapshotId.startsWith(prefix) }?.toIntOrNull()

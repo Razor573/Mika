@@ -100,6 +100,9 @@ object RunMetricsCopy {
         add(tr(R.string.metrics_output_tokens) to UsageCopy.tokens(m.outputTokens))
         add(tr(R.string.usage_cached) to UsageCopy.tokens(m.cachedTokens))
         if (m.callsWithoutUsage > 0) add(tr(R.string.metrics_no_usage) to trPlural(R.plurals.times, m.callsWithoutUsage))
+        if (m.lightCalls > 0 || m.lightRejectedCalls > 0) {
+            add(tr(R.string.metrics_light_rejected) to lightRejectedValue(m.lightRejectedCalls, m.lightCalls, m.lightRejectionRate))
+        }
         m.allCalls?.let { add(tr(R.string.metrics_all_calls) to trPlural(R.plurals.metrics_all_calls_value, it)) }
         m.allHttpCalls?.let { add(tr(R.string.metrics_all_http_calls) to trPlural(R.plurals.times, it)) }
         m.usdCost?.let(ChatTokensCopy::usdCost)?.let { add(tr(R.string.metrics_est_cost) to it) }
@@ -115,6 +118,9 @@ object RunMetricsCopy {
         add(tr(R.string.metrics_median_feedback) to (s.medianFirstFeedbackMs?.let(::duration) ?: "—"))
         add(tr(R.string.metrics_avg_round_trips) to tr(R.string.metrics_avg_round_trips_value, String.format(Locale.ROOT, "%.1f", s.avgModelCalls)))
         add(tr(R.string.metrics_avg_tokens) to UsageCopy.tokens(s.avgTokens.roundToLong()))
+        if (s.lightCalls > 0 || s.lightRejectedCalls > 0) {
+            add(tr(R.string.metrics_light_rejected) to lightRejectedValue(s.lightRejectedCalls, s.lightCalls, s.lightRejectionRate))
+        }
         s.avgUsdCost?.let { avg ->
             ChatTokensCopy.formatUsdAmount(avg)?.let { add(tr(R.string.metrics_avg_cost) to "~$it") }
         }
@@ -122,6 +128,9 @@ object RunMetricsCopy {
             ChatTokensCopy.formatUsdAmount(total)?.let { add(tr(R.string.metrics_total_cost) to "~$it") }
         }
     }
+
+    private fun lightRejectedValue(rejected: Int, total: Int, rate: Double): String =
+        "$rejected / $total (${UsageCopy.percent(rate)})"
 
     /** 时间去向:各项之和占总时长之和。 */
     fun splitRows(s: RunStats): List<Pair<String, String>> = listOf(

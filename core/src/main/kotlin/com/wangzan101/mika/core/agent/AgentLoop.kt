@@ -76,7 +76,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -93,16 +96,16 @@ import com.wangzan101.mika.core.general.VIEW_USER_SCREEN
 /** 批做完后另看的一眼:内容和画面同一时刻。 */
 private fun batchViewNote(content: String) = Feedback.format("batch_view_note", "screen" to content)
 
-/** 进度块取出后，其余文字保持一条助手消息；调用及其私有数据原样保留。 */
-private fun cleanReplyParts(parts: List<Part>, text: String): List<Part> {
-    var textWritten = false
-    return parts.mapNotNull { part ->
-        if (part !is Part.Text) part else if (textWritten) null else {
-            textWritten = true
-            Part.Text(text).takeIf { text.isNotEmpty() }
-        }
-    }
-}
+/** 进度块取出后，其余文字在最终回答时保持一条助手消息；带工具调用的中途轮次只留工具调用并受输出上限约束。 */
+private fun cleanReplyParts(parts: List<Part>, text: String): List<Part> =
+    capToolCallParts(parts, text)
+
+/** 规范化助手回复片段：含工具调用时剥除正文并限制工具参数与非私有思考在 [maxToolTokens] 以内；无工具调用时完整保留最终回答。 */
+internal fun capToolCallParts(
+    parts: List<Part>,
+    text: String,
+    maxToolTokens: Int = AgentLoop.MAX_TOOL_CALL_OUTPUT_TOKENS,
+): List<Part> = AgentLoop.capToolCallParts(parts, text, maxToolTokens)
 
 /**
  * 写、改 Mika 自己的记忆不先问「是讨论还是要操作」。那个判断管的是要不要去读、去动 App 和网站;这两个工具只动 Mika 自己的记忆,
@@ -210,7 +213,7 @@ class AgentLoop(
         tools.observer = { record { order.observed(RunEvent.Observed.of(it)) } }
     }
 
-    private val caller = ModelCaller(model, tools, router, flags, retry, ::emit, ::now, autonomous, trace, modelFallbacks, modelChainProviderIds)
+    private val caller = ModelCaller(model, tools, router, flags, retry, ::emit, ::now, autonomous, trace, modelFallbacks, modelChainProviderIds, decision = intentDecision)
     private val intentGate = intentJudge?.let {
         IntentGate(it, model.takeUnless { main -> main === it }, intentDecision) { detail ->
             emit(RunEvent.State(now(), "jev_intent", detail))
@@ -544,7 +547,9 @@ class AgentLoop(
             }
         }
 
+        var pendingToolCapNotice: Message? = null
         for (step in 1..maxSteps) {
+            pendingToolCapNotice?.let { history += it; pendingToolCapNotice = null }
             appendSteers(history, inbox)
             if (maxSteps != Int.MAX_VALUE) TurnPolicy.beforeStep(TurnSnapshot(step, maxSteps))?.let { history += ctx.notice(it.source, it.text) }
             appendRuntimeState(history, place, labels, step)
@@ -591,6 +596,19 @@ class AgentLoop(
             val cleanParts = cleanReplyParts(reply.parts, text)
             history += Message(Role.Assistant, cleanParts, Author.Mika).also { caller.noteReply(it, used, reply.usage) }
             val calls = reply.parts.filterIsInstance<Part.ToolCall>()
+            if (calls.isNotEmpty()) {
+                val rawTextTokens = TokenEstimate.of(text)
+                val rawToolTokens = rawTextTokens + calls.sumOf { TokenEstimate.of(it.name + it.argsJson) }
+                if (rawToolTokens > MAX_TOOL_CALL_OUTPUT_TOKENS) {
+                    emit(RunEvent.State(now(), "tool_output_capped", "step=$step raw=$rawToolTokens max=$MAX_TOOL_CALL_OUTPUT_TOKENS"))
+                }
+                if (rawTextTokens > MAX_TOOL_CALL_OUTPUT_TOKENS) {
+                    pendingToolCapNotice = ctx.notice(
+                        "tool_only_cap",
+                        "Mid-task tool calls must not include prose; call tools directly with concise arguments only.",
+                    )
+                }
+            }
             note = text.ifEmpty { calls.firstOrNull()?.name ?: note }
             val tool = calls.firstOrNull()?.name
             val reason = calls.firstOrNull()?.let { tools.callReason(it.name, parseArgs(it.argsJson)) }
@@ -1142,6 +1160,156 @@ class AgentLoop(
 
         /** 用户点了「我自己做完了」。 */
         val USER_FINISHED_NOTE: String get() = Feedback["user_finished_note"]
+
+        const val MAX_TOOL_CALL_OUTPUT_TOKENS = 200
+        private val VERBOSE_TOOL_ARG_KEYS = listOf("explanation", "note", "reason")
+        private val OWN_REASON_TOOLS = setOf("hand_to_user", "handle_obstacle")
+
+        /**
+         * Strips prose on mid-task tool-call turns and caps tool-call arguments and non-opaque thinking to [maxToolTokens].
+         * Final text replies without tool calls are returned unchanged (collapsed to a single non-empty [Part.Text]).
+         */
+        internal fun capToolCallParts(
+            parts: List<Part>,
+            text: String,
+            maxToolTokens: Int = MAX_TOOL_CALL_OUTPUT_TOKENS,
+        ): List<Part> {
+            if (parts.none { it is Part.ToolCall }) {
+                var textWritten = false
+                return parts.mapNotNull { part ->
+                    if (part !is Part.Text) part else if (textWritten) null else {
+                        textWritten = true
+                        Part.Text(text).takeIf { text.isNotEmpty() }
+                    }
+                }
+            }
+            val budget = maxToolTokens.coerceAtLeast(0)
+            val toolCalls = parts.filterIsInstance<Part.ToolCall>()
+            val cappedCalls = capToolCalls(toolCalls, budget)
+            val callQueue = ArrayDeque(cappedCalls)
+            val fixedTokens = cappedCalls.sumOf { TokenEstimate.of(it.name + it.argsJson) } +
+                parts.filterIsInstance<Part.Thinking>().filter { it.opaque != null }.sumOf { TokenEstimate.of(it.text) }
+            var remainingThinkBudget = (budget - fixedTokens).coerceAtLeast(0)
+            return parts.mapNotNull { part ->
+                when (part) {
+                    is Part.Text -> null
+                    is Part.ToolCall -> callQueue.removeFirst()
+                    is Part.Thinking -> {
+                        if (part.opaque != null) part
+                        else {
+                            val tokens = TokenEstimate.of(part.text)
+                            when {
+                                tokens <= remainingThinkBudget -> {
+                                    remainingThinkBudget -= tokens
+                                    part
+                                }
+                                remainingThinkBudget >= 4 -> {
+                                    val clipped = TokenEstimate.clip(part.text, remainingThinkBudget, "…")
+                                    remainingThinkBudget = 0
+                                    if (clipped.isEmpty()) null else part.copy(text = clipped)
+                                }
+                                else -> null
+                            }
+                        }
+                    }
+                    is Part.Image, is Part.ToolResult -> part
+                }
+            }
+        }
+
+        private fun capToolCalls(calls: List<Part.ToolCall>, budget: Int): List<Part.ToolCall> {
+            val singlePass = calls.map { trimToolCall(it, budget) }
+            if (singlePass.sumOf { TokenEstimate.of(it.name + it.argsJson) } <= budget) return singlePass
+            val perCallBudget = (budget / calls.size.coerceAtLeast(1)).coerceAtLeast(1)
+            return singlePass.map { trimToolCall(it, perCallBudget) }
+        }
+
+        private fun trimToolCall(call: Part.ToolCall, limit: Int): Part.ToolCall {
+            if (TokenEstimate.of(call.name + call.argsJson) <= limit) return call
+            val parsed = try {
+                Json.parseToJsonElement(call.argsJson) as? JsonObject
+            } catch (_: SerializationException) {
+                null
+            }
+            if (parsed == null) {
+                val room = (limit - TokenEstimate.of(call.name)).coerceAtLeast(0)
+                val clipped = if (room <= 2) "{}" else TokenEstimate.clip(call.argsJson, room, "…")
+                return call.copy(argsJson = clipped)
+            }
+            var current = parsed
+            for (key in VERBOSE_TOOL_ARG_KEYS) {
+                if (key !in current) continue
+                if (key == "reason" && call.name in OWN_REASON_TOOLS) {
+                    val v = (current[key] as? JsonPrimitive)?.contentOrNull
+                    if (v != null && v.length <= 40) continue
+                }
+                current = JsonObject(current - key)
+                val serialized = current.toString()
+                if (TokenEstimate.of(call.name + serialized) <= limit) {
+                    return call.copy(argsJson = serialized)
+                }
+            }
+            var lo = 0
+            var hi = limit
+            var best: JsonObject? = null
+            while (lo <= hi) {
+                val mid = (lo + hi) / 2
+                val candidate = clipJsonStrings(current, mid) as JsonObject
+                if (TokenEstimate.of(call.name + candidate.toString()) <= limit) {
+                    best = candidate
+                    lo = mid + 1
+                } else {
+                    hi = mid - 1
+                }
+            }
+            if (best != null) return call.copy(argsJson = best.toString())
+            val shrunk = clipJsonStrings(current, 4) as JsonObject
+            var arrLo = 0
+            var arrHi = maxArraySize(shrunk)
+            var bestArr: JsonObject? = null
+            while (arrLo <= arrHi) {
+                val mid = (arrLo + arrHi) / 2
+                val candidate = capJsonArrays(shrunk, mid) as JsonObject
+                if (TokenEstimate.of(call.name + candidate.toString()) <= limit) {
+                    bestArr = candidate
+                    arrLo = mid + 1
+                } else {
+                    arrHi = mid - 1
+                }
+            }
+            if (bestArr != null) return call.copy(argsJson = bestArr.toString())
+            val minimal = linkedMapOf<String, JsonElement>()
+            for ((k, v) in capJsonArrays(shrunk, 1) as JsonObject) {
+                val next = JsonObject(minimal + (k to v))
+                if (TokenEstimate.of(call.name + next.toString()) <= limit) {
+                    minimal[k] = v
+                }
+            }
+            return call.copy(argsJson = JsonObject(minimal).toString())
+        }
+
+        private fun clipJsonStrings(element: JsonElement, maxStrTokens: Int): JsonElement = when (element) {
+            is JsonPrimitive -> {
+                if (element.isString && TokenEstimate.of(element.content) > maxStrTokens) {
+                    val clipped = if (maxStrTokens <= 1) "…" else TokenEstimate.clip(element.content, maxStrTokens, "…")
+                    JsonPrimitive(clipped)
+                } else element
+            }
+            is JsonObject -> JsonObject(element.mapValues { (_, v) -> clipJsonStrings(v, maxStrTokens) })
+            is JsonArray -> JsonArray(element.map { clipJsonStrings(it, maxStrTokens) })
+        }
+
+        private fun maxArraySize(element: JsonElement): Int = when (element) {
+            is JsonArray -> maxOf(element.size, element.maxOfOrNull(::maxArraySize) ?: 0)
+            is JsonObject -> element.values.maxOfOrNull(::maxArraySize) ?: 0
+            else -> 0
+        }
+
+        private fun capJsonArrays(element: JsonElement, maxItems: Int): JsonElement = when (element) {
+            is JsonArray -> JsonArray(element.take(maxItems).map { capJsonArrays(it, maxItems) })
+            is JsonObject -> JsonObject(element.mapValues { (_, v) -> capJsonArrays(v, maxItems) })
+            else -> element
+        }
     }
 
     private fun now() = clock()

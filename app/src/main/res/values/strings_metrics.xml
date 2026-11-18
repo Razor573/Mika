@@ -69,4 +69,5 @@
     <string name="metrics_est_cost">Est. cost</string>
     <string name="metrics_avg_cost">Avg. cost</string>
     <string name="metrics_total_cost">Total cost</string>
+    <string name="metrics_light_rejected">Light rejected</string>
 </resources>

@@ -57,6 +57,10 @@ data class RunMetrics(
     val judged: String? = null,
     val deepSeekCost: DeepSeekCost? = null,
     val usdCost: UsdCost? = null,
+    val lightRejectedCalls: Int = 0,
+    val mainCalls: Int = 0,
+    val mainModelMs: Long = 0,
+    val lightModelMs: Long = 0,
 ) {
     val otherMs: Long get() = (totalMs - modelMs - observeMs - actMs).coerceAtLeast(0)
 
@@ -65,6 +69,15 @@ data class RunMetrics(
 
     /** 办成了:报了成功(含没能核实的),交出回答后也没判成只办了一部分或办不到。 */
     val succeeded: Boolean get() = outcome in SUCCESS && judged !in NOT_DONE
+
+    /** 轻量模型回复被拒并改派给主模型的比例;没调用过轻量模型时为 0.0。 */
+    val lightRejectionRate: Double get() = if (lightCalls <= 0) 0.0 else lightRejectedCalls.toDouble() / lightCalls
+
+    /** 主模型单次请求平均耗时(毫秒);没有主模型调用时为 null。 */
+    val mainMeanLatencyMs: Double? get() = if (mainCalls <= 0) null else mainModelMs.toDouble() / mainCalls
+
+    /** 轻量模型单次请求平均耗时(毫秒);没有轻量模型调用时为 null。 */
+    val lightMeanLatencyMs: Double? get() = if (lightCalls <= 0) null else lightModelMs.toDouble() / lightCalls
 
     /**
      * 按事件顺序累计;[build] 随时可调。运行记录的写线程用它边写边算,不必在收尾时重读整份记录。
@@ -80,12 +93,16 @@ data class RunMetrics(
         private var firstFeedback: Long? = null
         private var calls = 0
         private var light = 0
+        private var lightRejected = 0
+        private var mainCalls = 0
         private var noUsage = 0
         private var input = 0L
         private var output = 0L
         private var cached = 0L
         private var all: RunEvent.ModelCalls? = null
         private var modelMs = 0L
+        private var mainModelMs = 0L
+        private var lightModelMs = 0L
         private var retryMs = 0L
         private var steps = 0
         private var judged: String? = null
@@ -99,12 +116,27 @@ data class RunMetrics(
                 is RunEvent.TaskStarted -> if (started == null) { started = e.atMs; goal = e.goal.take(GOAL_MAX) }
                 is RunEvent.ModelReply -> {
                     calls++
-                    if (e.role == ROLE_LIGHT || !e.acted) light++
+                    val latency = e.latencyMs.coerceAtLeast(0)
+                    when {
+                        e.role == ROLE_LIGHT_REJECTED || !e.acted -> {
+                            light++
+                            lightRejected++
+                            lightModelMs += latency
+                        }
+                        e.role == ROLE_LIGHT -> {
+                            light++
+                            lightModelMs += latency
+                        }
+                        else -> {
+                            mainCalls++
+                            mainModelMs += latency
+                        }
+                    }
                     if (e.inputTokens == null && e.outputTokens == null) noUsage++
                     input += e.inputTokens ?: 0
                     output += e.outputTokens ?: 0
                     cached += e.cachedTokens ?: 0
-                    modelMs += e.latencyMs.coerceAtLeast(0)
+                    modelMs += latency
                     retryMs += e.retryWaitMs.coerceAtLeast(0)
                     if (e.acted) {
                         steps = maxOf(steps, e.step)
@@ -180,6 +212,10 @@ data class RunMetrics(
                 judged = judged,
                 deepSeekCost = all?.deepSeekCost,
                 usdCost = all?.usdCost,
+                lightRejectedCalls = lightRejected,
+                mainCalls = mainCalls,
+                mainModelMs = mainModelMs,
+                lightModelMs = lightModelMs,
             )
         }
     }
@@ -190,6 +226,7 @@ data class RunMetrics(
         private const val OBSERVE = "observe"
         private const val ACT = "act"
         private const val ROLE_LIGHT = "light"
+        private const val ROLE_LIGHT_REJECTED = "light_rejected"
         /** 包在外层调用里的子步:一批动作里的一步、页面脚本里的一个动作。 */
         private val NESTED = setOf("batch", "script")
         private val SUCCESS = setOf("succeeded", "unverified")
@@ -218,8 +255,11 @@ data class RunStats(
     val otherMs: Long,
     val avgUsdCost: Double? = null,
     val totalUsdCost: Double? = null,
+    val lightCalls: Int = 0,
+    val lightRejectedCalls: Int = 0,
 ) {
     val successRate: Double get() = if (runs == 0) 0.0 else succeeded.toDouble() / runs
+    val lightRejectionRate: Double get() = if (lightCalls <= 0) 0.0 else lightRejectedCalls.toDouble() / lightCalls
 
     companion object {
         fun of(runs: List<RunMetrics>): RunStats {
@@ -240,6 +280,8 @@ data class RunStats(
                 otherMs = runs.sumOf { it.otherMs },
                 avgUsdCost = avgUsd,
                 totalUsdCost = totalUsd,
+                lightCalls = runs.sumOf { it.lightCalls },
+                lightRejectedCalls = runs.sumOf { it.lightRejectedCalls },
             )
         }
 

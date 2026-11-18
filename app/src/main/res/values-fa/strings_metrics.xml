@@ -69,4 +69,5 @@
     <string name="metrics_est_cost">هزینه تخمینی</string>
     <string name="metrics_avg_cost">میانگین هزینه</string>
     <string name="metrics_total_cost">هزینه کل</string>
+    <string name="metrics_light_rejected">مدل سبک رد شده</string>
 </resources>

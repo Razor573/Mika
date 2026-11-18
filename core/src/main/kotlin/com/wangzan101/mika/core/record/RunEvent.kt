@@ -80,6 +80,10 @@ sealed interface RunEvent {
          * 改派掉的轻量模型回复和旧记录里没有。
          */
         val repliedAtMs: Long? = null,
+        /** 路由决策模型对轻量模型动作的置信度分数;未查决策模型或旧记录为 null。 */
+        val decisionScore: Double? = null,
+        /** 改派主模型后与轻量模型回复的对比结果;未改派或旧记录为 null。 */
+        val mainDiff: String? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
         val acted: Boolean get() = role != "light_rejected"

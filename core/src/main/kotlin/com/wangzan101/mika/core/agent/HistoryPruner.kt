@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import com.wangzan101.mika.core.tool.ToolIndex
 import com.wangzan101.mika.core.tool.Verb
 
@@ -40,6 +41,7 @@ object HistoryPruner {
      * 取原来 4000 字符那条线对应的 token 数,英文结果的裁法不变;中文结果按真实占用算,比原来更早算大。
      */
     const val BIG_RESULT_TOKENS = 1_000
+    const val DEFAULT_KEEP_FULL_OBSERVATIONS = 3
 
     /** 线之前各种观察怎么缩短。 */
     private enum class Shrink { Interface, IfBig, Never }
@@ -88,6 +90,97 @@ object HistoryPruner {
         }
         // 用户的话(连同照片)不裁
         return input.mapIndexed { i, m -> if (i >= line || i == anchor || m.author == Author.User) m else shrinkMessage(m, names, screens) }
+    }
+
+    private data class ObsEntry(
+        val msgIndex: Int,
+        val partIndex: Int,
+        val snapshotIds: Set<String>,
+        val baseIds: Set<String>,
+    )
+
+    /**
+     * 保留最近 [keepFullObservations] 条尚未缩短的界面/UI树观察结果(以及它们通过 `base` 链引用的更早全量屏幕)，
+     * 缩短更早的界面/UI树结果(`elements`、`elementTables`、`tree`、`screenMap`、`screen`)并替换更早的助手画面。
+     * 不打断调用/结果配对，也不改写用户消息。
+     */
+    fun pruneOlderObservations(
+        input: List<Message>,
+        tools: ToolIndex,
+        keepFullObservations: Int = DEFAULT_KEEP_FULL_OBSERVATIONS,
+    ): List<Message> {
+        require(keepFullObservations >= 0) { "need keepFullObservations >= 0" }
+        val names = callVerbs(input, tools)
+        val obs = ArrayList<ObsEntry>()
+        input.forEachIndexed { msgIdx, m ->
+            if (m.author == Author.User) return@forEachIndexed
+            m.parts.forEachIndexed { partIdx, p ->
+                if (p is Part.ToolResult) {
+                    unshrunkObservationInfo(p, names[p.callId])?.let { (ids, bases) ->
+                        obs += ObsEntry(msgIdx, partIdx, ids, bases)
+                    }
+                }
+            }
+        }
+        val keepTailCount = minOf(keepFullObservations, obs.size)
+        val keepObsIndices = HashSet<Int>()
+        for (idx in (obs.size - keepTailCount) until obs.size) {
+            keepObsIndices += idx
+        }
+        if (keepObsIndices.isNotEmpty()) {
+            val neededBases = HashSet<String>()
+            for (idx in keepObsIndices) neededBases += obs[idx].baseIds
+            var added = true
+            while (added) {
+                added = false
+                for (idx in obs.indices) {
+                    if (idx !in keepObsIndices && obs[idx].snapshotIds.any { it in neededBases }) {
+                        keepObsIndices += idx
+                        neededBases += obs[idx].baseIds
+                        added = true
+                    }
+                }
+            }
+        }
+        val shrinkPositions = HashSet<Pair<Int, Int>>()
+        obs.forEachIndexed { idx, entry ->
+            if (idx !in keepObsIndices) shrinkPositions += entry.msgIndex to entry.partIndex
+        }
+
+        val obsCutoffMsgIdx = when {
+            keepFullObservations == 0 -> Int.MAX_VALUE
+            obs.size <= keepFullObservations -> 0
+            else -> obs[obs.size - keepFullObservations].msgIndex
+        }
+        val assistantImageMsgIndices = input.indices.filter { i ->
+            input[i].author != Author.User && input[i].parts.any { it is Part.Image }
+        }
+        val keepImageMsgIndices = assistantImageMsgIndices
+            .filter { it >= obsCutoffMsgIdx }
+            .takeLast(keepFullObservations)
+            .toSet()
+
+        val screens = screenResults(input)
+        var changed = false
+        val out = input.mapIndexed { msgIdx, m ->
+            if (m.author == Author.User) return@mapIndexed m
+            val parts = m.parts.mapIndexed { partIdx, p ->
+                when {
+                    p is Part.Image && msgIdx !in keepImageMsgIndices ->
+                        Part.Text(p.screenshotId?.let(::olderImage) ?: OMITTED_IMAGE)
+                    p is Part.ToolResult && (msgIdx to partIdx) in shrinkPositions -> {
+                        val shrunk = if (p.callId in screens) shrinkScreenAndTree(p.content) else shrinkInterface(p.content)
+                        if (shrunk == p.content) p else withObsIds(p, shrunk)
+                    }
+                    else -> p
+                }
+            }
+            if (parts == m.parts) m else {
+                changed = true
+                m.copy(parts = parts)
+            }
+        }
+        return if (changed) out else input
     }
 
     /**
@@ -194,6 +287,38 @@ object HistoryPruner {
         return JsonObject(obj + ("screenshots" to small)).toString()
     }
 
+    private fun unshrunkObservationInfo(p: Part.ToolResult, verb: Verb?): Pair<Set<String>, Set<String>>? {
+        val ways = p.reads.mapNotNull { BY_FORM[it.form] }.toSet()
+        if (Shrink.Never in ways || verb in REFERENCE_VERBS) return null
+        val obj = parse(p.content) ?: return null
+        val screenObj = obj[SCREEN] as? JsonObject
+        val hasPayload = screenObj != null ||
+            obj["elements"] is JsonArray ||
+            obj[ScreenElementTable.KEY] is JsonArray ||
+            obj["tree"] is JsonArray ||
+            obj["screenMap"] is JsonObject
+        if (!hasPayload) return null
+        val ids = buildSet {
+            (obj["snapshotId"] as? JsonPrimitive)?.contentOrNull?.let(::add)
+            (screenObj?.get("snapshotId") as? JsonPrimitive)?.contentOrNull?.let(::add)
+        }
+        val bases = buildSet {
+            (obj["base"] as? JsonPrimitive)?.contentOrNull?.let(::add)
+            (screenObj?.get("base") as? JsonPrimitive)?.contentOrNull?.let(::add)
+        }
+        return ids to bases
+    }
+
+    private fun shrinkScreenAndTree(content: String): String {
+        val obj = parse(content) ?: return content
+        val updated = obj.mapValues { (k, v) ->
+            if ((k == SCREEN && v is JsonObject) || k == "elements" || k == ScreenElementTable.KEY || k == "tree" || k == "screenMap") {
+                JsonPrimitive(OMITTED)
+            } else v
+        }
+        return JsonObject(updated).toString()
+    }
+
     private fun shrinkScreen(content: String): String {
         val obj = parse(content) ?: return content
         return JsonObject(obj + (SCREEN to JsonPrimitive(OMITTED))).toString()
@@ -210,7 +335,7 @@ object HistoryPruner {
         val obj = parse(content) ?: return content
         val small = obj.mapValues { (k, v) ->
             val long = if (v is JsonPrimitive) v.isString && v.content.length > LONG_TEXT else v.toString().length > LONG_TEXT
-            if (k == "elements" || k == ScreenElementTable.KEY || k == "tree" || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
+            if (k == "elements" || k == ScreenElementTable.KEY || k == "tree" || k == "screenMap" || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
         }
         return JsonObject(small).toString()
     }

@@ -83,4 +83,5 @@
     <string name="metrics_est_cost">Оценка стоимости</string>
     <string name="metrics_avg_cost">Средняя стоимость</string>
     <string name="metrics_total_cost">Общая стоимость</string>
+    <string name="metrics_light_rejected">Лёгкая модель отклонена</string>
 </resources>
