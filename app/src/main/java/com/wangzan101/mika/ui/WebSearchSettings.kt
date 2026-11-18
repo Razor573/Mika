@@ -49,6 +49,7 @@ internal object WebSearchCopy {
         WebSearchProvider.Jina -> "Jina"
         WebSearchProvider.Exa -> "Exa"
         WebSearchProvider.Keirolabs -> "Keirolabs"
+        WebSearchProvider.TinyFish -> "TinyFish"
         WebSearchProvider.SearXNG -> "SearXNG"
     }
 
@@ -60,6 +61,7 @@ internal object WebSearchCopy {
             WebSearchProvider.Jina -> R.string.web_search_note_jina
             WebSearchProvider.Exa -> R.string.web_search_note_exa
             WebSearchProvider.Keirolabs -> R.string.web_search_note_keirolabs
+            WebSearchProvider.TinyFish -> R.string.web_search_note_tinyfish
             WebSearchProvider.SearXNG -> R.string.web_search_note_searxng
         },
     )
@@ -94,6 +96,7 @@ internal object WebSearchCopy {
         WebSearchProvider.Jina -> "https://jina.ai/?sui=apikey"
         WebSearchProvider.Exa -> "https://dashboard.exa.ai/api-keys"
         WebSearchProvider.Keirolabs -> "https://platform.keirolabs.cloud/dashboard/keys"
+        WebSearchProvider.TinyFish -> "https://agent.tinyfish.ai/api-keys"
         else -> null
     }
 

@@ -52,7 +52,7 @@ internal object StopRules {
         val treeBlind = v.evidence["treeBlind"] == JsonPrimitive(true)
         val why = when (v.code) {
             "repeating_action" -> "the same action kept repeating with no effect"
-            "no_progress" -> if (treeBlind) "the view hierarchy could not read the target position, and the screen showed no visible change after repeated actions, so it is unclear whether they took effect; stopped retrying"
+            "no_progress" -> if (treeBlind) "the view hierarchy could not read the target position, and taps and swipes produced no visible change; this app may not respond to Mika's automation"
                 else "the screen showed no change after multiple actions"
             "read_loop" -> "the page did not change and repeated reads did not find what was needed"
             "too_many_failures" -> "actions failed repeatedly"
