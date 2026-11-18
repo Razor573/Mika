@@ -43,7 +43,7 @@ object ScreenJson {
             val cx = if (s.width > 0) s.width / 2 else 500
             val cy = if (s.height > 0) s.height / 2 else 500
             all.sortedWith(
-                compareByDescending<UiElement> { it.clickable || it.editable || it.scrollable || it.checkable || it.selected || it.focused }
+                compareByDescending<UiElement> { it.clickable || it.editable || it.scrollable || it.focused || UiStates.CHECKED in it.states || UiStates.SELECTED in it.states }
                     .thenBy { kotlin.math.abs(it.centerX - cx) + kotlin.math.abs(it.centerY - cy) }
             ).take(maxElements)
         }
