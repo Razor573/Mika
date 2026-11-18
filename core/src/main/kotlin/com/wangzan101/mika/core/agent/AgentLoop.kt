@@ -1236,7 +1236,7 @@ class AgentLoop(
                 val clipped = if (room <= 2) "{}" else TokenEstimate.clip(call.argsJson, room, "…")
                 return call.copy(argsJson = clipped)
             }
-            var current = parsed
+            var current: JsonObject = parsed
             for (key in VERBOSE_TOOL_ARG_KEYS) {
                 if (key !in current) continue
                 if (key == "reason" && call.name in OWN_REASON_TOOLS) {
