@@ -9,6 +9,8 @@ import com.wangzan101.mika.core.tool.ToolContext
 import com.wangzan101.mika.core.tool.ToolDef
 import com.wangzan101.mika.core.tool.ToolExecution
 import com.wangzan101.mika.core.tool.Verb
+import com.wangzan101.mika.core.tool.bool
+import com.wangzan101.mika.core.tool.fail
 import com.wangzan101.mika.core.tool.int
 import com.wangzan101.mika.core.tool.str
 import kotlinx.serialization.json.JsonArray
@@ -32,7 +34,7 @@ internal object PhoneQuery : PhoneTool {
         "role" to str("Full or partial accessibility class or role to find."),
         "limit" to int("Maximum results, default 30.", 1, 100),
         "rootRef" to str("Optional element ref (e.g. \"@e12\") to inspect."),
-        "full" to flag("When true with rootRef, return full unpruned descendants of that container."),
+        "full" to bool("When true with rootRef, return full unpruned descendants of that container."),
     ))
 
     override suspend fun execute(a: Args, ctx: ToolContext): ToolExecution {
