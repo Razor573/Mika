@@ -213,7 +213,7 @@ class PrefixStabilityAdaptersTest {
         val port: ScreenPort = if (!vision) scripted else object : ScreenPort by scripted {
             override suspend fun screenshotPng() = byteArrayOf(1, 2, 3)
         }
-        val rows = if (contextTokens == 80_000) 6000 else 3200
+        val rows = if (contextTokens == 80_000) 6000 else 1800
         val sb = FakeSandbox().apply { next = { r -> CommandResult(0, false, false, 10, "输出${r.argv}" + "行".repeat(rows), 0, false) } }
         runTest {
             AgentLoop(model, toolDispatcher(port, sandbox = sb, workspace = { "w" }, visionEnabled = vision),

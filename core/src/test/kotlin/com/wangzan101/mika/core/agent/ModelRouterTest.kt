@@ -93,9 +93,9 @@ class ModelRouterTest {
         val r = ModelRouter(main, light)
         assertSame(main, r.pick(clean(3).copy(lastOk = false)))
         assertSame(main, r.pick(clean(4)))
-        // 切换 App: 进入新阶段并该步先由主模型接手, 下一步恢复轻量模型
-        assertSame(main, r.pick(clean(5).copy(sameAppAsLast = false, phaseId = 1)))
-        assertSame(light, r.pick(clean(6).copy(phaseId = 1)))
+        // phaseId == 0 且切换未稳时先走主模型, 进入新阶段 phaseId > 0 干净切换直接保留轻量模型
+        assertSame(main, r.pick(clean(5).copy(sameAppAsLast = false, phaseId = 0)))
+        assertSame(light, r.pick(clean(6).copy(sameAppAsLast = false, phaseId = 1)))
 
         // 仅 phaseId 推进也进入新阶段
         r.noteTrouble()
@@ -107,6 +107,44 @@ class ModelRouterTest {
         assertSame(main, r.pick(clean(9).copy(phaseId = 2)))
         r.startNewPhase()
         assertSame(light, r.pick(clean(10).copy(phaseId = 2)))
+    }
+
+    @Test fun cleanPhaseTransitionStaysInLightWithoutBouncingWhileTroubleLocksPhase() {
+        val r = ModelRouter(main, light)
+        val t = StepTrack()
+        // 第 1、2 步在 com.a (phaseId = 0): 主模型
+        assertSame(main, r.pick(t.context(1, false)))
+        t.after(Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.a")
+        assertSame(main, r.pick(t.context(2, false)))
+        t.after(Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.a")
+        // 第 3 步切到轻量模型
+        assertSame(light, r.pick(t.context(3, false)))
+
+        // 干净切阶段 (phone_launch_app -> com.b, phaseId = 1): 直接留在轻量模型, 不回弹主模型
+        t.after(Verb.LaunchApp, ok = true, guard = false, changed = true, recovery = false, app = "com.b")
+        assertEquals(1, t.context(4, false).phaseId)
+        assertFalse(t.context(4, false).sameAppAsLast)
+        assertSame(light, r.pick(t.context(4, false)))
+        t.after(Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.b")
+        assertSame(light, r.pick(t.context(5, false)))
+
+        // 该阶段内遇到异常 (lastChanged == false): 锁定主模型直到再次切换阶段
+        t.after(Verb.Tap, ok = true, guard = false, changed = false, recovery = false, app = "com.b")
+        assertSame(main, r.pick(t.context(6, false)))
+        t.after(Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.b")
+        assertSame(main, r.pick(t.context(7, false)))
+
+        // 下一阶段若切换本身出错也立即锁定主模型
+        t.after(Verb.LaunchApp, ok = false, guard = false, changed = false, recovery = false, app = null)
+        assertEquals(2, t.context(8, false).phaseId)
+        assertSame(main, r.pick(t.context(8, false)))
+        t.after(Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.b")
+        assertSame(main, r.pick(t.context(9, false)))
+
+        // 新的干净切换阶段恢复轻量模型
+        t.after(Verb.LaunchApp, ok = true, guard = false, changed = true, recovery = false, app = "com.d")
+        assertEquals(3, t.context(10, false).phaseId)
+        assertSame(light, r.pick(t.context(10, false)))
     }
 
     @Test fun describeAndSwipeAreMainOnlyUnlessDecisionAllowsLight() {

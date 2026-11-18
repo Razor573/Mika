@@ -43,6 +43,7 @@ import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -311,7 +312,7 @@ class CacheCostLeakRegressionTest {
         val oversizedArgs = """{"reason":"${"verbose diagnostic reasoning ".repeat(80)}"}"""
         assertTrue(TokenEstimate.of(oversizedArgs) > AgentLoop.MAX_TOOL_CALL_OUTPUT_TOKENS)
 
-        val longSummary = "Checked the current screen and confirmed that the primary navigation controls are visible and ready for user action. ".repeat(14)
+        val longSummary = "Checked the current screen and confirmed that the primary navigation controls are visible and ready for user action. ".repeat(14).trim()
         assertTrue(TokenEstimate.of(longSummary) > 300)
 
         val model = FakeModel(
@@ -438,6 +439,13 @@ class CacheCostLeakRegressionTest {
             midTaskLogs.all { it.outputTokens <= AgentLoop.MAX_TOOL_CALL_OUTPUT_TOKENS },
         )
         assertEquals(1, callLogs.count { it.tool == null && !it.rejected })
+        assertTrue("Expected lightCalls > 0", metrics.lightCalls > 0)
+        assertTrue("Expected mainCalls >= 2, was ${metrics.mainCalls}", metrics.mainCalls >= 2)
+        assertTrue("Expected lightRejectedCalls <= 1, was ${metrics.lightRejectedCalls}", metrics.lightRejectedCalls <= 1)
+        assertNotNull("Expected mainMeanLatencyMs to be populated", metrics.mainMeanLatencyMs)
+        assertTrue("Expected mainMeanLatencyMs > 0", metrics.mainMeanLatencyMs!! > 0.0)
+        assertNotNull("Expected lightMeanLatencyMs to be populated", metrics.lightMeanLatencyMs)
+        assertTrue("Expected lightMeanLatencyMs > 0", metrics.lightMeanLatencyMs!! > 0.0)
         assertTrue("Expected lightRejectionRate < 0.10, was ${metrics.lightRejectionRate}", metrics.lightRejectionRate < 0.10)
 
         val compactedLogs = callLogs.filter { it.compacted }

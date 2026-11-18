@@ -42,7 +42,7 @@ class ModelRouter(private val main: ChatModel, private val light: ChatModel?) {
     fun startNewPhase() { escalatedInPhase = false }
 
     fun pick(ctx: StepContext): ChatModel {
-        if (!ctx.sameAppAsLast || ctx.phaseId != currentPhaseId) {
+        if (ctx.phaseId != currentPhaseId || (ctx.phaseId == 0 && !ctx.sameAppAsLast)) {
             currentPhaseId = ctx.phaseId
             escalatedInPhase = false
         }
@@ -52,7 +52,7 @@ class ModelRouter(private val main: ChatModel, private val light: ChatModel?) {
         ) {
             escalatedInPhase = true
         }
-        if (!ctx.sameAppAsLast || escalatedInPhase) return main
+        if ((ctx.phaseId == 0 && !ctx.sameAppAsLast) || escalatedInPhase) return main
         val l = light?.takeIf { active } ?: return main
         val simple = ctx.step > 1 && (!ctx.hasImages || l.capabilities.vision)
         return if (simple) l else main
