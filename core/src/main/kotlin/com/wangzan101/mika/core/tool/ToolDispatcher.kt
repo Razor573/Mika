@@ -440,7 +440,7 @@ class ToolDispatcher internal constructor(
     /** 打开链接的工具此刻会不会放行这组参数(只看链接规则、直通安全协议与参考资料,不执行)。 */
     fun linkAllowed(action: String?, uri: String?, pkg: String?): Boolean =
         LinkPolicy.check(action, uri, pkg) == null &&
-            (action != null || (uri to pkg) in ctx.allowedLinks || com.wangzan101.mika.core.cap.phone.VerifiedIntentRouter.isDirectSafeIntent(uri))
+            (action != null || (uri to pkg) in ctx.allowedLinks || LinkPolicy.isDirectSafeIntent(uri))
 
     /** 循环把带链接的参考资料交给模型时登记这些链接。 */
     fun allowLinks(links: List<Link>) {
