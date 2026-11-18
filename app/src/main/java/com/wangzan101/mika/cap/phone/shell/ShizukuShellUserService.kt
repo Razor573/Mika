@@ -204,6 +204,14 @@ class ShizukuShellUserService : IMikaShell.Stub {
         recursive: BooleanArray?,
     ): Bundle = delegate.setDeviceFilePolicy(protocol, session, revision, roots, recursive)
 
+    override fun startShareFile(
+        displayId: Int,
+        packageName: String,
+        uri: String,
+        mime: String,
+        text: String,
+    ): Int = delegate.startShareFile(displayId, packageName, uri, mime, text)
+
     override fun destroy() {
         runCatching { delegate.releaseAll() }
         exitProcess(0)
