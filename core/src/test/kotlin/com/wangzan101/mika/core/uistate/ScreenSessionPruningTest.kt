@@ -118,7 +118,7 @@ class ScreenSessionPruningTest {
     @Test fun phoneQueryRootRefExpandsUnprunedSubtree() = runTest {
         val msgBody = UiTreeNode("TextView", listOf(40, 300, 800, 380), text = "Message body")
         val collapsedWrapper = UiTreeNode("FrameLayout", listOf(40, 300, 800, 380), children = listOf(msgBody))
-        val container = UiTreeNode("LinearLayout", listOf(20, 280, 900, 420), ref = "@e12", clickable = true, children = listOf(collapsedWrapper))
+        val container = UiTreeNode("LinearLayout", listOf(20, 280, 900, 420), ref = "@e12", text = "Alice", clickable = true, children = listOf(collapsedWrapper))
         val header = UiTreeNode("TextView", listOf(20, 20, 500, 80), ref = "@e1", text = "WhatsApp")
         val status = UiTreeNode("TextView", listOf(20, 120, 500, 180), ref = "@e2", text = "Online")
         val root = UiTreeNode("LinearLayout", listOf(0, 0, 999, 999), children = listOf(header, status, container))
@@ -126,7 +126,7 @@ class ScreenSessionPruningTest {
         val elements = listOf(
             UiElement("@e1", "TextView", "WhatsApp", 260, 50, listOf(20, 20, 500, 80), null, clickable = false, editable = false, scrollable = false),
             UiElement("@e2", "TextView", "Online", 260, 150, listOf(20, 120, 500, 180), null, clickable = false, editable = false, scrollable = false),
-            UiElement("@e12", "LinearLayout", "", 460, 350, listOf(20, 280, 900, 420), null, clickable = true, editable = false, scrollable = false),
+            UiElement("@e12", "LinearLayout", "Alice", 460, 350, listOf(20, 280, 900, 420), null, clickable = true, editable = false, scrollable = false),
         )
         val snap = ScreenSnapshot("snap-wa", "com.whatsapp", elements, 1080, 2400, windows = listOf(window))
 

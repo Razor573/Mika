@@ -21,8 +21,8 @@ class DeveloperSwitchesTest {
             listOf("adaptive-vision", "inline-screen", "batch-steps", "deep-links", "light-steps"),
             speed.map { it.id },
         )
-        assertEquals(listOf("replay", "parallel-tasks", "structured-compaction", "tables-at-birth"), experimental.map { it.id })
-        assertEquals(9, (speed + experimental).map { it.id }.toSet().size)
+        assertEquals(listOf("replay", "parallel-tasks", "structured-compaction", "tables-at-birth", "full-raw-tree"), experimental.map { it.id })
+        assertEquals(10, (speed + experimental).map { it.id }.toSet().size)
     }
 
     /** 拨动一个开关只改它自己那一项,其余保持原值。 */
@@ -36,6 +36,7 @@ class DeveloperSwitchesTest {
                 base.batchSteps != after.batchSteps, base.deepLinks != after.deepLinks, base.lightSteps != after.lightSteps,
                 base.replay != after.replay, base.parallelTasks != after.parallelTasks,
                 base.structuredCompaction != after.structuredCompaction, base.tablesAtBirth != after.tablesAtBirth,
+                base.fullRawTreeDump != after.fullRawTreeDump,
             )
             assertEquals("${sw.id} should change exactly one flag", 1, changed.count { it })
         }
