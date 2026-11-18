@@ -94,6 +94,7 @@ private open class MeteredModel(
     private fun note(usage: Usage?, tally: RunUsageTally?, httpAttempts: Int, startedAt: Instant?) {
         runCatching { sink.record(source, usage, httpAttempts) }
         tally?.add(usage, httpAttempts)
+        tally?.usdCost?.add(source, usage, httpAttempts)
         if (startedAt != null) tally?.deepSeekCost?.add(source.model.takeIf { source.deepSeekDirect }, startedAt, usage, httpAttempts)
     }
 }

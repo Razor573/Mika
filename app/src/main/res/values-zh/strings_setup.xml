@@ -81,4 +81,5 @@
     <string name="model_probe_tried">试了 %1$s，都没测试通过。</string>
     <string name="model_probe_fallback">先试的 %1$s 没测试通过：%2$s。主模型用了测试通过的「%3$s」。</string>
     <string name="model_pick_main">选主模型</string>
+    <string name="cap_free">免费</string>
 </resources>

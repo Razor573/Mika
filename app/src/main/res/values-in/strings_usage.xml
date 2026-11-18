@@ -47,4 +47,5 @@
     <string name="usage_allowance_updated">Terakhir diperbarui %1$s</string>
     <string name="usage_allowance_self_hosted">Koneksi yang dihosting sendiri</string>
     <string name="usage_allowance_unsupported">Kuota tidak dapat diperiksa untuk koneksi ini</string>
+    <string name="usage_allowance_free_tier">Tingkat gratis</string>
 </resources>

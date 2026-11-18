@@ -66,4 +66,7 @@
         <item quantity="one">%1$d مرحله</item>
         <item quantity="other">%1$d مرحله</item>
     </plurals>
+    <string name="metrics_est_cost">هزینه تخمینی</string>
+    <string name="metrics_avg_cost">میانگین هزینه</string>
+    <string name="metrics_total_cost">هزینه کل</string>
 </resources>

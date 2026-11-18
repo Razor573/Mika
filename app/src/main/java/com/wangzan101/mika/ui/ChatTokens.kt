@@ -13,6 +13,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.wangzan101.mika.core.record.ConversationTokens
 import com.wangzan101.mika.core.record.RunMetrics
 import com.wangzan101.mika.core.usage.DeepSeekCost
+import com.wangzan101.mika.core.usage.UsdCost
 import com.wangzan101.mika.record.RunStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -20,6 +21,7 @@ import kotlinx.coroutines.withContext
 import java.math.RoundingMode
 import java.text.NumberFormat
 import java.util.Currency
+import java.util.Locale
 
 /** 对话页上的 token 用量:每轮结束那一行带上这一轮的,顶栏闲着时写这个对话合起来的。数字和「查看过程」顶上那一行同一个。 */
 object ChatTokensCopy {
@@ -39,6 +41,22 @@ object ChatTokensCopy {
         val upper = formatter.format(max)
         val amount = if (lower == upper) lower else "$lower–$upper"
         val result = tr(R.string.chat_task_cost_estimate, amount)
+        return if (estimate.partial) tr(R.string.chat_task_cost_partial, result) else result
+    }
+
+    fun formatUsdAmount(amount: Double): String? {
+        if (!amount.isFinite() || amount < 0.0) return null
+        return when {
+            amount == 0.0 -> "\$0.00"
+            amount < 0.01 -> String.format(Locale.ROOT, "\$%.3f", amount)
+            else -> String.format(Locale.ROOT, "\$%.2f", amount)
+        }
+    }
+
+    fun usdCost(estimate: UsdCost): String? {
+        val amount = estimate.usd ?: return null
+        val formatted = formatUsdAmount(amount) ?: return null
+        val result = if (estimate.exact) formatted else "~$formatted"
         return if (estimate.partial) tr(R.string.chat_task_cost_partial, result) else result
     }
 

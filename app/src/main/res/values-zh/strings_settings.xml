@@ -198,7 +198,7 @@
     <string name="mcp_servers_refresh_all">测试全部</string>
     <string name="mcp_servers_allowlist">允许的工具(英文逗号分隔,留空为全部)</string>
     <string name="settings_show_task_cost">显示任务费用</string>
-    <string name="settings_show_task_cost_sub">按人民币估算新任务的 DeepSeek API 费用。</string>
+    <string name="settings_show_task_cost_sub">显示新任务的预估费用（美元估算及 DeepSeek 人民币估算）。</string>
     <string name="quit_title">完全退出 Mika</string>
     <string name="quit_row_sub">停止后台任务，收起悬浮胶囊</string>
     <string name="quit_confirm_body">正在进行的任务会停止，悬浮胶囊和通知都会收起。下次打开 Mika 就回来。</string>
@@ -233,4 +233,8 @@
     </plurals>
     <string name="settings_compact_ui_tree">Compact UI tree</string>
     <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
+    <string name="settings_task_usd_budget">单任务消费上限（美元）</string>
+    <string name="settings_task_usd_budget_sub">仅统计已知定价或服务商返回费用的调用。达到上限时，Mika 会暂停询问是否继续，无人值守时则直接停止。</string>
+    <string name="settings_usd_budget_custom">自定义消费上限（美元）</string>
+    <string name="settings_usd_budget_invalid">请输入 %1$s 到 %2$s 之间的金额。</string>
 </resources>

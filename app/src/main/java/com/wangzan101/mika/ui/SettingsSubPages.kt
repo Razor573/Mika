@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import com.wangzan101.mika.capsule.CapsuleCardScale
 import com.wangzan101.mika.capsule.CapsuleIdleOpacity
 import com.wangzan101.mika.capsule.CapsuleMode
+import com.wangzan101.mika.core.usage.UsdBudgetLimits
 import com.wangzan101.mika.capsule.CapsuleTileService
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.settings.ChannelRow
@@ -380,6 +381,7 @@ fun DuringWorkScreen(
     stepLimit: Int? = null, onStepLimit: (Int?) -> Unit = {},
     triggerRunMinutes: Int? = null, onTriggerRunMinutes: (Int?) -> Unit = {},
     tokenBudget: Long? = null, onTokenBudget: (Long?) -> Unit = {},
+    usdBudget: Double? = null, onUsdBudget: (Double?) -> Unit = {},
     showTaskCost: Boolean = false, onShowTaskCost: (Boolean) -> Unit = {},
     compactUiTree: Boolean = true, onCompactUiTree: (Boolean) -> Unit = {},
 ) {
@@ -389,6 +391,8 @@ fun DuringWorkScreen(
     var customLimit by remember { mutableStateOf("") }
     var editingTokenBudget by remember { mutableStateOf(false) }
     var customTokenBudget by remember { mutableStateOf("") }
+    var editingUsdBudget by remember { mutableStateOf(false) }
+    var customUsdBudget by remember { mutableStateOf("") }
     PageScaffold(stringResource(R.string.settings_during_work), onBack) {
         GroupLabel(AutonomyCopy.GROUP)
         GroupCard {
@@ -435,6 +439,14 @@ fun DuringWorkScreen(
                 },
             )
             ListRow(
+                MikaIcons.Clock, stringResource(R.string.settings_task_usd_budget),
+                usdBudget?.let(::usdBudgetLabel) ?: stringResource(R.string.settings_token_budget_unlimited),
+                onClick = {
+                    customUsdBudget = usdBudget?.takeIf { it !in UsdBudgetLimits.PRESETS }?.toString().orEmpty()
+                    editingUsdBudget = true
+                },
+            )
+            ListRow(
                 null, stringResource(R.string.settings_show_task_cost), stringResource(R.string.settings_show_task_cost_sub),
                 onClick = { onShowTaskCost(!showTaskCost) },
             ) {
@@ -462,6 +474,24 @@ fun DuringWorkScreen(
             onCustom = { customTokenBudget = it.filter(Char::isDigit).take(9) },
             onPick = { onTokenBudget(it); editingTokenBudget = false },
             onDismiss = { editingTokenBudget = false },
+        )
+        if (editingUsdBudget) UsdBudgetDialog(
+            title = stringResource(R.string.settings_task_usd_budget),
+            description = stringResource(R.string.settings_task_usd_budget_sub),
+            current = usdBudget,
+            custom = customUsdBudget,
+            onCustom = { raw ->
+                val filtered = buildString {
+                    var dotSeen = false
+                    for (ch in raw) {
+                        if (ch.isDigit()) append(ch)
+                        else if (ch == '.' && !dotSeen) { dotSeen = true; append(ch) }
+                    }
+                }.take(8)
+                customUsdBudget = filtered
+            },
+            onPick = { onUsdBudget(it); editingUsdBudget = false },
+            onDismiss = { editingUsdBudget = false },
         )
         // 允许 Mika 改自己的设置:默认关,打开后任务里才有 settings_list、settings_set
         GroupCard {

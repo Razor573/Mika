@@ -59,4 +59,7 @@
     <plurals name="chat_steps_n">
         <item quantity="other">%1$d 步</item>
     </plurals>
+    <string name="metrics_est_cost">預估費用</string>
+    <string name="metrics_avg_cost">平均費用</string>
+    <string name="metrics_total_cost">總費用</string>
 </resources>

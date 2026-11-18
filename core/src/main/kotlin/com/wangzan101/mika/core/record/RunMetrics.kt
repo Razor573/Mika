@@ -1,6 +1,7 @@
 package com.wangzan101.mika.core.record
 
 import com.wangzan101.mika.core.usage.DeepSeekCost
+import com.wangzan101.mika.core.usage.UsdCost
 import kotlinx.serialization.Serializable
 
 /**
@@ -55,6 +56,7 @@ data class RunMetrics(
     val failKind: String? = null,
     val judged: String? = null,
     val deepSeekCost: DeepSeekCost? = null,
+    val usdCost: UsdCost? = null,
 ) {
     val otherMs: Long get() = (totalMs - modelMs - observeMs - actMs).coerceAtLeast(0)
 
@@ -177,6 +179,7 @@ data class RunMetrics(
                 failKind = end?.kind,
                 judged = judged,
                 deepSeekCost = all?.deepSeekCost,
+                usdCost = all?.usdCost,
             )
         }
     }
@@ -213,23 +216,32 @@ data class RunStats(
     val observeMs: Long,
     val actMs: Long,
     val otherMs: Long,
+    val avgUsdCost: Double? = null,
+    val totalUsdCost: Double? = null,
 ) {
     val successRate: Double get() = if (runs == 0) 0.0 else succeeded.toDouble() / runs
 
     companion object {
-        fun of(runs: List<RunMetrics>): RunStats = RunStats(
-            runs = runs.size,
-            succeeded = runs.count { it.succeeded },
-            medianTotalMs = median(runs.map { it.totalMs }) ?: 0,
-            medianFirstFeedbackMs = median(runs.mapNotNull { it.firstFeedbackMs }),
-            avgModelCalls = if (runs.isEmpty()) 0.0 else runs.sumOf { it.modelCalls }.toDouble() / runs.size,
-            avgTokens = if (runs.isEmpty()) 0.0 else runs.sumOf { it.tokens }.toDouble() / runs.size,
-            totalMs = runs.sumOf { it.totalMs },
-            modelMs = runs.sumOf { it.modelMs },
-            observeMs = runs.sumOf { it.observeMs },
-            actMs = runs.sumOf { it.actMs },
-            otherMs = runs.sumOf { it.otherMs },
-        )
+        fun of(runs: List<RunMetrics>): RunStats {
+            val pricedUsd = runs.mapNotNull { it.usdCost?.usd }
+            val totalUsd = if (pricedUsd.isEmpty()) null else pricedUsd.sum()
+            val avgUsd = if (pricedUsd.isEmpty()) null else totalUsd!! / pricedUsd.size
+            return RunStats(
+                runs = runs.size,
+                succeeded = runs.count { it.succeeded },
+                medianTotalMs = median(runs.map { it.totalMs }) ?: 0,
+                medianFirstFeedbackMs = median(runs.mapNotNull { it.firstFeedbackMs }),
+                avgModelCalls = if (runs.isEmpty()) 0.0 else runs.sumOf { it.modelCalls }.toDouble() / runs.size,
+                avgTokens = if (runs.isEmpty()) 0.0 else runs.sumOf { it.tokens }.toDouble() / runs.size,
+                totalMs = runs.sumOf { it.totalMs },
+                modelMs = runs.sumOf { it.modelMs },
+                observeMs = runs.sumOf { it.observeMs },
+                actMs = runs.sumOf { it.actMs },
+                otherMs = runs.sumOf { it.otherMs },
+                avgUsdCost = avgUsd,
+                totalUsdCost = totalUsd,
+            )
+        }
 
         /** 中位数;偶数个取中间两个的平均(向下取整)。空表为 null。 */
         fun median(xs: List<Long>): Long? {

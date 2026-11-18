@@ -14,10 +14,26 @@ import kotlin.coroutines.CoroutineContext
  * 适配器内部的兼容重发增加实际请求数,但不增加逻辑调用数。不在这个上下文里的调用(交出回答后的结局判定、记忆提取)不算,
  * Token 用量页照样都记。只在内存里加,多线程安全。
  */
-class RunUsageTally(val tokenBudget: Long? = null, val deepSeekCost: DeepSeekRunCost? = null) : AbstractCoroutineContextElement(Key) {
+class RunUsageTally(
+    val tokenBudget: Long? = null,
+    val deepSeekCost: DeepSeekRunCost? = null,
+    val usdBudget: Double? = null,
+    val usdCost: RunUsdCost? = null,
+) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<RunUsageTally>
 
-    init { require(tokenBudget == null || tokenBudget > 0) }
+    init {
+        require(tokenBudget == null || tokenBudget > 0)
+        require(usdBudget == null || (usdBudget.isFinite() && usdBudget > 0.0))
+    }
+
+    @Volatile private var extraUsdBudget: Double = 0.0
+
+    fun extendUsdBudget(deltaUsd: Double) {
+        if (deltaUsd.isFinite() && deltaUsd > 0.0) {
+            synchronized(this) { extraUsdBudget += deltaUsd }
+        }
+    }
 
     private val logicalCalls = AtomicInteger()
     private val calls = AtomicInteger()
@@ -45,13 +61,20 @@ class RunUsageTally(val tokenBudget: Long? = null, val deepSeekCost: DeepSeekRun
 
     /** 在下一次实际请求前调用；达到预算时不允许收尾、重试或旁路调用继续消耗。 */
     fun checkBudget() {
-        val limit = tokenBudget ?: return
-        val used = totalTokens()
-        if (used >= limit) throw ModelError.TaskBudgetExceeded(limit, used)
+        tokenBudget?.let { limit ->
+            val used = totalTokens()
+            if (used >= limit) throw ModelError.TaskBudgetExceeded(limit, used)
+        }
+        usdBudget?.let { limit ->
+            val cap = synchronized(this) { limit + extraUsdBudget }
+            val spent = usdCost?.currentUsd() ?: 0.0
+            if (spent >= cap) throw ModelError.UsdBudgetExceeded(cap, spent)
+        }
     }
 
     /** 此刻的合计,作为运行记录里的一条 [RunEvent.ModelCalls]。 */
-    fun event(atMs: Long, cost: DeepSeekCost? = null) = RunEvent.ModelCalls(
-        atMs, logicalCalls.get(), unreported.get(), input.get(), output.get(), cached.get(), calls.get(), httpUnreported.get(), deepSeekCost = cost,
+    fun event(atMs: Long, cost: DeepSeekCost? = null, usdCost: UsdCost? = this.usdCost?.snapshot()) = RunEvent.ModelCalls(
+        atMs, logicalCalls.get(), unreported.get(), input.get(), output.get(), cached.get(), calls.get(), httpUnreported.get(),
+        deepSeekCost = cost, usdCost = usdCost,
     )
 }

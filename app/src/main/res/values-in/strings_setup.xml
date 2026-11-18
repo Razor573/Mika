@@ -81,4 +81,5 @@
     <string name="model_probe_tried">Sudah mencoba %1$s; tidak satu pun lulus pengujian.</string>
     <string name="model_probe_fallback">%1$s, yang dicoba pertama, tidak lulus pengujian: %2$s. Model utamanya “%3$s”, yang lulus.</string>
     <string name="model_pick_main">Pilih model utama</string>
+    <string name="cap_free">Gratis</string>
 </resources>

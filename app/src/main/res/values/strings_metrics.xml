@@ -66,4 +66,7 @@
         <item quantity="one">%1$d step</item>
         <item quantity="other">%1$d steps</item>
     </plurals>
+    <string name="metrics_est_cost">Est. cost</string>
+    <string name="metrics_avg_cost">Avg. cost</string>
+    <string name="metrics_total_cost">Total cost</string>
 </resources>

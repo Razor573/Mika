@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -28,7 +29,11 @@ sealed interface ProviderAllowance {
     data class Balance(val amounts: List<AllowanceMoney>) : ProviderAllowance
 
     /** remaining 为 null 表示这把 Key 没有配置支出上限。 */
-    data class KeyLimit(val remaining: AllowanceMoney?, val reset: ResetPeriod? = null) : ProviderAllowance
+    data class KeyLimit(
+        val remaining: AllowanceMoney?,
+        val reset: ResetPeriod? = null,
+        val isFreeTier: Boolean? = null,
+    ) : ProviderAllowance
 }
 
 enum class ResetPeriod { Daily, Weekly, Monthly }
@@ -79,7 +84,8 @@ class ProviderAllowanceClient(http: OkHttpClient) {
     }
 
     private fun openRouter(data: JsonObject): ProviderAllowance.KeyLimit {
-        if (data["limit"] == JsonNull) return ProviderAllowance.KeyLimit(null)
+        val isFreeTier = (data["is_free_tier"] as? JsonPrimitive)?.booleanOrNull
+        if (data["limit"] == JsonNull) return ProviderAllowance.KeyLimit(null, isFreeTier = isFreeTier)
         val remaining = AllowanceMoney(data.amount("limit_remaining"), "USD")
         val period = when (data.text("limit_reset")) {
             "daily" -> ResetPeriod.Daily
@@ -87,7 +93,7 @@ class ProviderAllowanceClient(http: OkHttpClient) {
             "monthly" -> ResetPeriod.Monthly
             else -> null
         }
-        return ProviderAllowance.KeyLimit(remaining, period)
+        return ProviderAllowance.KeyLimit(remaining, period, isFreeTier)
     }
 
     private fun JsonObject.data(): JsonObject = get("data") as? JsonObject ?: throw ModelError.BadResponse()

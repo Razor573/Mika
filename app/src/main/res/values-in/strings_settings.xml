@@ -233,4 +233,8 @@
     </plurals>
     <string name="settings_compact_ui_tree">Compact UI tree</string>
     <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
+    <string name="settings_task_usd_budget">Batas pengeluaran per tugas (USD)</string>
+    <string name="settings_task_usd_budget_sub">Hanya panggilan dengan harga yang diketahui atau biaya yang dilaporkan yang dihitung. Setelah batas tercapai, Mika berhenti sejenak untuk bertanya sebelum melanjutkan, atau berhenti jika tanpa pengawasan.</string>
+    <string name="settings_usd_budget_custom">Batas pengeluaran khusus (USD)</string>
+    <string name="settings_usd_budget_invalid">Masukkan jumlah dari %1$s hingga %2$s.</string>
 </resources>

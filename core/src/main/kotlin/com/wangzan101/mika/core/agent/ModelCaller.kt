@@ -132,6 +132,8 @@ internal class ModelCaller(
         } catch (e: ModelError.TaskBudgetExceeded) {
             // 整个运行共用一份预算；轻量失败后不能再改问主模型。
             throw e
+        } catch (e: ModelError.UsdBudgetExceeded) {
+            throw e
         } catch (e: Exception) {
             // Key、额度、模型名、请求本身不对,重试也没用:本任务余下的步都用主模型
             if (e is ModelError.Auth || e is ModelError.IllegalHeader || e is ModelError.QuotaExceeded || e is ModelError.DailyBudgetExceeded || e is ModelError.ModelNotFound ||
@@ -189,9 +191,9 @@ internal class ModelCaller(
     /** 链上不再换了,决定交出哪个错误:预算错误原样;只试过一个模型原样;试过整条链包成 [ModelError.ChainFailed]。 */
     private fun terminalError(e: ModelError): ModelError {
         // 当前错误就是预算错误时以它为准;否则链上较早的预算错误优先于包装(审 T-1112-74a8f2 D1):预算错误不包 ChainFailed,原样交出
-        if (e is ModelError.TaskBudgetExceeded || e is ModelError.DailyBudgetExceeded) return e
+        if (e is ModelError.TaskBudgetExceeded || e is ModelError.UsdBudgetExceeded || e is ModelError.DailyBudgetExceeded) return e
         trialLog.map { it.second }.firstOrNull {
-            it is ModelError.TaskBudgetExceeded || it is ModelError.DailyBudgetExceeded
+            it is ModelError.TaskBudgetExceeded || it is ModelError.UsdBudgetExceeded || it is ModelError.DailyBudgetExceeded
         }?.let { return it }
         return if (trialLog.size < 2) e
         else ModelError.ChainFailed(headError ?: e, trialLog.map { (index, err) -> chain[index].name to err })

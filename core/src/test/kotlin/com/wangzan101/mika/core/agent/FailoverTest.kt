@@ -37,6 +37,7 @@ class FailoverTest {
 
     @Test fun taskBudgetNeverSwitches() {
         assertNull(Failover.nextIndex(ModelError.TaskBudgetExceeded(100, 100), 0, tags, 3))
+        assertNull(Failover.nextIndex(ModelError.UsdBudgetExceeded(0.15, 0.16), 0, tags, 3))
     }
 
     @Test fun dailyBudgetOnlySwitchesAcrossProviders() {

@@ -6,6 +6,7 @@ import com.wangzan101.mika.cap.sandbox.AttachmentFailureReason
 import com.wangzan101.mika.core.agent.QuoteMessage
 import com.wangzan101.mika.core.record.ConversationTokens
 import com.wangzan101.mika.core.usage.DeepSeekCost
+import com.wangzan101.mika.core.usage.UsdCost
 import com.wangzan101.mika.settings.FeatureFlags
 import com.wangzan101.mika.core.agent.AttachedPage
 import com.wangzan101.mika.ui.components.DirectionalIcon
@@ -447,10 +448,13 @@ fun ChatScreen(
                     val backgroundNote = i == ui.exchanges.lastIndex && ui.operatingPhone
                     val metrics = ex.runId?.let(runMetrics::get)
                     val cost = metrics?.deepSeekCost?.takeIf { showTaskCost }
+                    val usdCost = metrics?.usdCost?.takeIf { showTaskCost }
                     exchange(
                         i, ex, ui.conversationId, ui.takeoverStage, vm, reduceMotion, backgroundNote, openRun, loadSource, openSource, kept,
                         highlightKey = highlightKey,
-                        tokens = ConversationTokens.turn(metrics, includeSideCalls = cost != null), cost = cost,
+                        tokens = ConversationTokens.turn(metrics, includeSideCalls = cost != null || usdCost != null),
+                        cost = cost,
+                        usdCost = usdCost,
                         recover = { resume ->
                             val label = if (resume) R.string.chat_resume_request else R.string.chat_restart_request
                             vm.send(context.getString(label, ex.goal), check)
@@ -926,6 +930,7 @@ private fun LazyListScope.exchange(
     /** 这一轮用了多少 token(结束后、读到运行小结时才有)。 */
     tokens: Long? = null,
     cost: DeepSeekCost? = null,
+    usdCost: UsdCost? = null,
     /** 终态后的两个新运行入口:true 从摘要断点继续,false 按原目标重新开始。 */
     recover: (Boolean) -> Unit = {},
     openReport: (String) -> Unit = {}, openPlayback: (String) -> Unit = {},
@@ -966,7 +971,11 @@ private fun LazyListScope.exchange(
     ex.draft?.takeIf(String::isNotBlank)?.let { draft -> item("d$index") { DraftText(draft, ex.waitingForModel) } }
     waiting.forEach(::steer)
     val receipt = if (ex.steps.isNotEmpty() || ex.recordedRun != null) {
-        val usage = listOfNotNull(tokens?.let(ChatTokensCopy::amount), cost?.let(ChatTokensCopy::cost)).joinToString(" · ")
+        val usage = listOfNotNull(
+            tokens?.let(ChatTokensCopy::amount),
+            usdCost?.let(ChatTokensCopy::usdCost),
+            cost?.let(ChatTokensCopy::cost),
+        ).joinToString(" · ")
         if (ex.steps.isNotEmpty()) listOf(stepsSummary(ex), usage).filter(String::isNotEmpty).joinToString(" · ") else usage
     } else ""
     item("r$index") {

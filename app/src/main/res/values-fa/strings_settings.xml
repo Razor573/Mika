@@ -250,4 +250,8 @@
     </plurals>
     <string name="settings_compact_ui_tree">Compact UI tree</string>
     <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
+    <string name="settings_task_usd_budget">سقف هزینه برای هر کار (دلار)</string>
+    <string name="settings_task_usd_budget_sub">فقط فراخوانی‌هایی که قیمت مشخص یا هزینه گزارش‌شده دارند محاسبه می‌شوند. پس از رسیدن به سقف، Mika پیش از ادامه از شما می‌پرسد یا در حالت خودکار متوقف می‌شود.</string>
+    <string name="settings_usd_budget_custom">سقف هزینه دلخواه (دلار)</string>
+    <string name="settings_usd_budget_invalid">مبلغی بین %1$s تا %2$s وارد کنید.</string>
 </resources>

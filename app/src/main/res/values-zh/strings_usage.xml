@@ -47,4 +47,5 @@
     <string name="usage_allowance_updated">上次更新 %1$s</string>
     <string name="usage_allowance_self_hosted">自托管连接</string>
     <string name="usage_allowance_unsupported">未接入额度查询</string>
+    <string name="usage_allowance_free_tier">免费层级</string>
 </resources>

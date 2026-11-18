@@ -59,4 +59,7 @@
     <plurals name="chat_steps_n">
         <item quantity="other">%1$d langkah</item>
     </plurals>
+    <string name="metrics_est_cost">Est. biaya</string>
+    <string name="metrics_avg_cost">Rata-rata biaya</string>
+    <string name="metrics_total_cost">Total biaya</string>
 </resources>

@@ -81,4 +81,5 @@
     <string name="model_probe_tried">%1$s امتحان شد؛ هیچ‌کدام آزمون را نگذرانده‌اند.</string>
     <string name="model_probe_fallback">%1$s ابتدا امتحان شد، اما آزمون را نگذرانْد: %2$s. مدل اصلی «%3$s» است که آزمون را گذرانده است.</string>
     <string name="model_pick_main">انتخاب مدل اصلی</string>
+    <string name="cap_free">رایگان</string>
 </resources>

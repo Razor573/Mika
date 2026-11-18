@@ -73,4 +73,7 @@
         <item quantity="many">%1$d pasos</item>
         <item quantity="other">%1$d pasos</item>
     </plurals>
+    <string name="metrics_est_cost">Costo est.</string>
+    <string name="metrics_avg_cost">Costo prom.</string>
+    <string name="metrics_total_cost">Costo total</string>
 </resources>

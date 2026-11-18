@@ -52,4 +52,5 @@
     <string name="usage_allowance_updated">آخر تحديث: %1$s</string>
     <string name="usage_allowance_self_hosted">اتصال مستضاف ذاتيًا</string>
     <string name="usage_allowance_unsupported">الاستعلام عن الحصة غير متاح لهذا الاتصال</string>
+    <string name="usage_allowance_free_tier">المستوى المجاني</string>
 </resources>

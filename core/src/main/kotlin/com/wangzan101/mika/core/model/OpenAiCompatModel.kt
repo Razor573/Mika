@@ -10,6 +10,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -316,7 +317,8 @@ class OpenAiCompatModel(
         val cached = maxOf(int(u["prompt_tokens_details"] as? JsonObject, "cached_tokens") ?: 0, hit ?: 0).coerceAtMost(inT)
         // completion_tokens 含思考;有的服务商在 completion_tokens_details.reasoning_tokens 里单独报
         val reasoning = (int(u["completion_tokens_details"] as? JsonObject, "reasoning_tokens") ?: 0).coerceIn(0, outT)
-        return Usage(inT, outT, cached, reasoning)
+        val costUsd = (u["cost"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 }
+        return Usage(inT, outT, cached, reasoning, costUsd)
     }
 }
 

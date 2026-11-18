@@ -52,6 +52,7 @@ import com.wangzan101.mika.core.proactive.TargetedModel
 import com.wangzan101.mika.core.proactive.TriageTarget
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
 import com.wangzan101.mika.core.usage.DeepSeekPriceTable
+import com.wangzan101.mika.core.usage.ModelRateOverride
 import com.wangzan101.mika.core.usage.UsagePurpose
 import com.wangzan101.mika.core.usage.UsageSink
 import com.wangzan101.mika.core.usage.UsageSource
@@ -68,6 +69,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -179,6 +181,8 @@ data class Provider(
     val projectId: String = "",
     /** Vertex AI 区域（空值回退为 `global`）。 */
     val location: String = "",
+    /** Custom USD per-1M-token rates keyed by model ID. */
+    val customRates: Map<String, CustomModelRate> = emptyMap(),
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
 
@@ -199,6 +203,19 @@ internal val MODEL_READ_TIMEOUT_SECONDS = 1..(Int.MAX_VALUE / 1_000)
 
 /** 主模型备援链最长几位(项目 3)。 */
 internal const val MAX_MAIN_FALLBACKS = 2
+
+data class CustomModelRate(
+    val inputPerMUsd: Double,
+    val outputPerMUsd: Double,
+    val cachedInputPerMUsd: Double? = null,
+) {
+    fun isValid(): Boolean =
+        inputPerMUsd.isFinite() && inputPerMUsd >= 0.0 &&
+            outputPerMUsd.isFinite() && outputPerMUsd >= 0.0 &&
+            (cachedInputPerMUsd == null || (cachedInputPerMUsd.isFinite() && cachedInputPerMUsd >= 0.0))
+
+    fun toOverride(): ModelRateOverride = ModelRateOverride(inputPerMUsd, outputPerMUsd, cachedInputPerMUsd)
+}
 
 /** 留空的窗口沿用所选模型配置，留空的触发点交给核心自动计算，留空的读超时用全局默认(120 秒)。 */
 data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens: Int? = null, val readTimeoutSeconds: Int? = null) {
@@ -745,6 +762,25 @@ class ProviderStore(
         writeConfig()
         return true
     }
+
+    /** Persist or clear custom USD per-1M rates for [model] under [providerId]. */
+    @Synchronized
+    fun setCustomModelRate(providerId: String, model: String, rate: CustomModelRate?): Boolean {
+        if (rate != null && !rate.isValid()) return false
+        val p = provider(providerId) ?: return false
+        val updatedRates = if (rate == null) p.customRates - model else p.customRates + (model to rate)
+        val updated = _providers.value.map { if (it.id == p.id) p.copy(customRates = updatedRates) else it }
+        try {
+            writeAtomically(configFile, configJson(updated))
+        } catch (_: Exception) {
+            return false
+        }
+        _providers.value = updated
+        return true
+    }
+
+    fun customRateFor(providerId: String, model: String): ModelRateOverride? =
+        provider(providerId)?.customRates?.get(model)?.toOverride()
 
     /** 看图模型的「看图定位已验证」(开发者选项里改);看图用主模型时改的是主模型那条配置。没有看图模型时不动。 */
     @Synchronized
@@ -1525,12 +1561,18 @@ class ProviderStore(
                     val c = ModelOptions.collapseAntigravityId(k)
                     if (c !in collapsedVision || k == c) collapsedVision[c] = v
                 }
+                val collapsedRates = linkedMapOf<String, CustomModelRate>()
+                for ((k, v) in p.customRates) {
+                    val c = ModelOptions.collapseAntigravityId(k)
+                    if (c !in collapsedRates || k == c) collapsedRates[c] = v
+                }
                 p.copy(
                     models = p.models?.let(::collapseAntigravityListedModels),
                     verifiedModels = p.verifiedModels.mapNotNull(::supportedCollapsedAntigravityIdOrNull).toSet(),
                     typedModels = p.typedModels.mapNotNull(::supportedCollapsedAntigravityIdOrNull).toSet(),
                     contextSettings = collapsedContext,
                     visionOverrides = collapsedVision,
+                    customRates = collapsedRates,
                 )
             }
         }
@@ -1671,6 +1713,13 @@ class ProviderStore(
         savedUntested = o["untested"]?.jsonPrimitive?.booleanOrNull ?: false,
         projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
         location = o["location"]?.jsonPrimitive?.content.orEmpty(),
+        customRates = (o["customRates"] as? JsonObject).orEmpty().mapNotNull { (model, raw) ->
+            val entry = raw as? JsonObject ?: return@mapNotNull null
+            val input = (entry["inputPerMUsd"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 } ?: return@mapNotNull null
+            val output = (entry["outputPerMUsd"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 } ?: return@mapNotNull null
+            val cached = (entry["cachedInputPerMUsd"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 }
+            model to CustomModelRate(input, output, cached)
+        }.toMap(),
         models = o["models"]?.jsonArray?.map { e ->
             val m = e.jsonObject
             ListedModel(
@@ -1764,6 +1813,13 @@ class ProviderStore(
                         }
                         if (p.visionOverrides.isNotEmpty()) putJsonObject("visionOverrides") {
                             for ((model, sees) in p.visionOverrides) put(model, sees)
+                        }
+                        if (p.customRates.isNotEmpty()) putJsonObject("customRates") {
+                            for ((model, rate) in p.customRates) putJsonObject(model) {
+                                put("inputPerMUsd", rate.inputPerMUsd)
+                                put("outputPerMUsd", rate.outputPerMUsd)
+                                rate.cachedInputPerMUsd?.let { put("cachedInputPerMUsd", it) }
+                            }
                         }
                         if (p.typedModels.isNotEmpty()) putJsonArray("typedModels") { p.typedModels.forEach { add(it) } }
                         p.models?.let { models ->

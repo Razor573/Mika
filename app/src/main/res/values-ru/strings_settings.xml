@@ -251,4 +251,8 @@
     </plurals>
     <string name="settings_compact_ui_tree">Compact UI tree</string>
     <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
+    <string name="settings_task_usd_budget">Лимит расходов на задачу (USD)</string>
+    <string name="settings_task_usd_budget_sub">Учитываются только вызовы с известной ценой или указанной стоимостью. При достижении лимита Mika приостановится и спросит, продолжать ли, либо остановится в автономном режиме.</string>
+    <string name="settings_usd_budget_custom">Свой лимит расходов (USD)</string>
+    <string name="settings_usd_budget_invalid">Введите сумму от %1$s до %2$s.</string>
 </resources>

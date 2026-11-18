@@ -158,6 +158,7 @@ fun SettingsScreen(
     var stepLimit by remember { mutableStateOf(flags.taskStepLimit()) }
     var triggerRunMinutes by remember { mutableStateOf(flags.triggerRunMinutes()) }
     var tokenBudget by remember { mutableStateOf(flags.taskTokenBudget()) }
+    var usdBudget by remember { mutableStateOf(flags.taskUsdBudget()) }
     var selfConfig by remember { mutableStateOf(flags.selfConfig()) }
     var selfOperate by remember { mutableStateOf(flags.selfOperate()) }
     var deviceFiles by remember { mutableStateOf(flags.deviceFiles()) }
@@ -306,6 +307,7 @@ fun SettingsScreen(
             stepLimit = stepLimit, onStepLimit = { flags.setTaskStepLimit(it); stepLimit = it },
             triggerRunMinutes = triggerRunMinutes, onTriggerRunMinutes = { flags.setTriggerRunMinutes(it); triggerRunMinutes = it },
             tokenBudget = tokenBudget, onTokenBudget = { flags.setTaskTokenBudget(it); tokenBudget = it },
+            usdBudget = usdBudget, onUsdBudget = { flags.setTaskUsdBudget(it); usdBudget = it },
             showTaskCost = showTaskCost, onShowTaskCost = { flags.setShowTaskCost(it); showTaskCost = it },
             compactUiTree = compactUiTree, onCompactUiTree = { flags.setUiTreeCompact(it); compactUiTree = it },
             pocketGuard = pocketGuard, onPocketGuard = { pocketPrefs.edit().putBoolean(com.wangzan101.mika.pocket.PocketGuardManager.ENABLED, it).apply(); pocketGuard = it },

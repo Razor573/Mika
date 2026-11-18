@@ -9,6 +9,7 @@ import com.wangzan101.mika.R
 import com.wangzan101.mika.core.chatgpt.ChatGptAuth
 import com.wangzan101.mika.core.oauth.OpenRouterAuth
 import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.usage.ModelCostEstimator
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.voice.SystemSpeech
 import com.wangzan101.mika.settings.ChatGptSignIns
@@ -185,6 +186,7 @@ fun ModelSetupScreen(
                 },
                 useAsMain = { vm.useAsMain(provider.id) },
                 setDailyBudget = { vm.setDailyTokenBudget(provider.id, it) },
+                setCustomRate = { model, rate -> vm.setCustomModelRate(provider.id, model, rate) },
                 updateVertexSettings = { proj, loc -> vm.updateVertexSettings(provider.id, proj, loc) },
             )
             if (allModels) {
@@ -891,6 +893,7 @@ object ModelSetupCopy {
         }
         if (caps.reasoning) add(tr(R.string.cap_reasoning) to false)
         if (o.contextKnown) add(ModelOptions.contextLabel(caps.contextTokens) to false)
+        if (ModelCostEstimator.isFreeModel(o.id)) add(tr(R.string.cap_free) to true)
     }
 }
 

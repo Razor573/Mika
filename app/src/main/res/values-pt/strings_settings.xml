@@ -245,4 +245,8 @@
     </plurals>
     <string name="settings_compact_ui_tree">Compact UI tree</string>
     <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
+    <string name="settings_task_usd_budget">Limite de gasto por tarefa (USD)</string>
+    <string name="settings_task_usd_budget_sub">Apenas chamadas com preço conhecido ou custo informado são contabilizadas. Ao atingir o limite, Mika pausa para perguntar antes de continuar ou para se estiver sem supervisão.</string>
+    <string name="settings_usd_budget_custom">Limite de gasto personalizado (USD)</string>
+    <string name="settings_usd_budget_invalid">Digite um valor de %1$s a %2$s.</string>
 </resources>

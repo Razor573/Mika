@@ -12,6 +12,7 @@ import com.wangzan101.mika.core.cap.phone.AppPacePlan
 import com.wangzan101.mika.core.cap.phone.OperatingPace
 import com.wangzan101.mika.core.usage.DeepSeekPriceCache
 import com.wangzan101.mika.core.usage.DeepSeekRunCost
+import com.wangzan101.mika.core.usage.RunUsdCost
 import com.wangzan101.mika.core.usage.RunUsageTally
 import com.wangzan101.mika.core.shell.AccessibilityRepair
 import com.wangzan101.mika.core.shell.HelperRestart
@@ -677,7 +678,8 @@ class TaskRun(
                         } else null
                         usage.estimate(table)
                     }
-                    r.event(c.tally.event(System.currentTimeMillis(), cost))
+                    val usdCost = c.tally.usdCost?.snapshot()
+                    r.event(c.tally.event(System.currentTimeMillis(), cost, usdCost))
                     r.close()
                     if (BuildConfig.DEBUG) c.runStore?.mirrorToExternal(r.runId)
                 }
@@ -716,9 +718,18 @@ class TaskRun(
         var record: RunHandle? = null
         var runStore: RunStore? = null
         // 整个运行共用一份已报告 Token 预算；子任务沿用协程上下文里的这份，不另开额度。
-        val tokenBudget = if (conditionCheck) null else FeatureFlags.get(service).taskTokenBudget()
+        val taskFlags = FeatureFlags.get(service)
+        val tokenBudget = if (conditionCheck) null else taskFlags.taskTokenBudget()
+        val usdBudget = if (conditionCheck) null else taskFlags.taskUsdBudget()
+        val showCost = taskFlags.showTaskCost()
+        val rateStore = ProviderStore.get(service)
         // 这次运行里经计量的模型请求(含旁路调用),收尾时记进运行记录
-        val tally = RunUsageTally(tokenBudget, if (FeatureFlags.get(service).showTaskCost()) DeepSeekRunCost() else null)
+        val tally = RunUsageTally(
+            tokenBudget = tokenBudget,
+            deepSeekCost = if (showCost) DeepSeekRunCost() else null,
+            usdBudget = usdBudget,
+            usdCost = if (showCost || usdBudget != null) RunUsdCost(rateOverrides = rateStore::customRateFor) else null,
+        )
         // 第一次打开网址时才建;没建过就不用关
         var webStack: WebStack? = null
         // 当前界面(手机/网页)要看分发器;画中画的画面来源随它切换

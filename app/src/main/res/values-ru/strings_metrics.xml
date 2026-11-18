@@ -80,4 +80,7 @@
         <item quantity="many">%1$d шагов</item>
         <item quantity="other">%1$d шага</item>
     </plurals>
+    <string name="metrics_est_cost">Оценка стоимости</string>
+    <string name="metrics_avg_cost">Средняя стоимость</string>
+    <string name="metrics_total_cost">Общая стоимость</string>
 </resources>

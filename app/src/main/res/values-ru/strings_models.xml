@@ -271,4 +271,12 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
+    <string name="models_custom_rates">Свои тарифы (USD)</string>
+    <string name="models_custom_rates_unset">Не задано</string>
+    <string name="models_rate_summary">$%1$s ввод / $%2$s вывод за 1M</string>
+    <string name="models_rate_free">Бесплатный тариф ($0.00)</string>
+    <string name="models_rate_input">Ввод (USD за 1M токенов)</string>
+    <string name="models_rate_output">Вывод (USD за 1M токенов)</string>
+    <string name="models_rate_cached">Кэшированный ввод (USD за 1M токенов, необязательно)</string>
+    <string name="models_rate_clear">Сбросить свои тарифы</string>
 </resources>

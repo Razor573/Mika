@@ -81,4 +81,5 @@
     <string name="model_probe_tried">Se probó %1$s; ninguno pasó la prueba.</string>
     <string name="model_probe_fallback">%1$s, que se probó primero, no pasó la prueba: %2$s. El modelo principal es “%3$s”, que sí la pasó.</string>
     <string name="model_pick_main">Elegir modelo principal</string>
+    <string name="cap_free">Gratis</string>
 </resources>

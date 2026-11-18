@@ -50,4 +50,5 @@
     <string name="usage_allowance_updated">Последнее обновление: %1$s</string>
     <string name="usage_allowance_self_hosted">Подключение к собственному серверу</string>
     <string name="usage_allowance_unsupported">Проверка квоты недоступна для этого подключения</string>
+    <string name="usage_allowance_free_tier">Бесплатный тариф</string>
 </resources>

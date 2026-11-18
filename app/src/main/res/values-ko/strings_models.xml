@@ -257,4 +257,12 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
+    <string name="models_custom_rates">사용자 지정 USD 단가</string>
+    <string name="models_custom_rates_unset">설정되지 않음</string>
+    <string name="models_rate_summary">입력 $%1$s / 출력 $%2$s (1M당)</string>
+    <string name="models_rate_free">무료 등급 ($0.00)</string>
+    <string name="models_rate_input">입력 (1M 토큰당 USD)</string>
+    <string name="models_rate_output">출력 (1M 토큰당 USD)</string>
+    <string name="models_rate_cached">캐시된 입력 (1M 토큰당 USD, 선택 사항)</string>
+    <string name="models_rate_clear">사용자 지정 단가 지우기</string>
 </resources>

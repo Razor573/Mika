@@ -48,6 +48,7 @@ import com.wangzan101.mika.core.record.RunSink
 import com.wangzan101.mika.core.run.RunEventBus
 import com.wangzan101.mika.core.run.RunInbox
 import com.wangzan101.mika.core.run.RunSpec
+import com.wangzan101.mika.core.run.Attendance
 import com.wangzan101.mika.core.run.RunProvenance
 import com.wangzan101.mika.core.run.RunOrigin
 import com.wangzan101.mika.core.run.Interaction
@@ -84,6 +85,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.time.ZoneId
+import java.util.Locale
 import com.wangzan101.mika.core.userscreen.UserScreenSource
 import com.wangzan101.mika.core.general.HISTORY_READ
 import com.wangzan101.mika.core.general.VIEW_USER_SCREEN
@@ -268,11 +270,12 @@ class AgentLoop(
     /** 本任务的回答已因核对没对上退回过一次;再没对上就标成未确认交出,不再退回。 */
     private var gapsNudged = false
     private var provenance = RunProvenance()
+    private var readOnly = false
     val activeAsk: Delivery.Ask? get() = user.activeAsk
 
     /** 新入口:同一对话里的插话和控制经 [inbox] 进入;旧入口继续使用相同的执行路径。 */
     suspend fun run(spec: RunSpec, inbox: RunInbox): TaskState {
-        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget)
+        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget, spec.readOnly)
         // App 在整个运行外层装好共享 tally,子任务也沿用;直接走核心入口时由这里保证 RunSpec 的预算生效。
         if (spec.tokenBudget == null || currentCoroutineContext()[RunUsageTally] != null) return start()
         return withContext(RunUsageTally(spec.tokenBudget)) { start() }
@@ -283,10 +286,11 @@ class AgentLoop(
 
     private suspend fun runInternal(
         task: String, priorTurns: List<Turn>, inbox: RunInbox?, runProvenance: RunProvenance, threadId: String,
-        tokenBudget: Long? = null,
+        tokenBudget: Long? = null, runReadOnly: Boolean = false,
     ): TaskState {
         cancelRequested = false
         provenance = runProvenance
+        readOnly = runReadOnly
         user.begin(threadId, runProvenance, interaction)
         inbox?.bind(object : RunInbox.Handler {
             override suspend fun answer(text: String, askId: String?) = user.answerInput(text, askId)
@@ -547,13 +551,22 @@ class AgentLoop(
             _state.value = TaskState.Running(step, note, progress = progressState())
             refreshOffer()
             var asked = now()
-            val routed = try {
-                routedOrRedirect(inbox, history, specs, track, step, { asked = it }, previewFor(step))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                return StopRules.modelFailed(e)
+            var pendingRouted: Pair<ModelReply, ChatModel>? = null
+            while (true) {
+                asked = now()
+                try {
+                    pendingRouted = routedOrRedirect(inbox, history, specs, track, step, { asked = it }, previewFor(step))
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ModelError.UsdBudgetExceeded) {
+                    if (!extendUsdBudgetIfAllowed(e)) return StopRules.modelFailed(e)
+                    _state.value = TaskState.Running(step, note, progress = progressState())
+                } catch (e: Exception) {
+                    return StopRules.modelFailed(e)
+                }
             }
+            val routed = pendingRouted
             if (routed == null) {
                 keepInterrupted(history, inbox, step)
                 continue
@@ -809,6 +822,22 @@ class AgentLoop(
         return finalTurn(task, history, specs, maxSteps + 1, labels, place, recorder, facts(), inbox)
     }
 
+    private suspend fun extendUsdBudgetIfAllowed(e: ModelError.UsdBudgetExceeded): Boolean {
+        if (provenance.origin != RunOrigin.Ui || provenance.attendance == Attendance.Unattended || readOnly) return false
+        val tally = currentCoroutineContext()[RunUsageTally] ?: return false
+        val spent = String.format(Locale.ROOT, "%.2f", e.spentUsd)
+        val cap = String.format(Locale.ROOT, "%.2f", e.limitUsd)
+        val prompt = "Spend cap reached (\$$spent / \$$cap). Continue this task?"
+        val answer = user.awaitAnswer(prompt, listOf("+\$0.15", "+\$0.50", "Stop"))?.trim()
+        val delta = when (answer) {
+            "+\$0.15" -> 0.15
+            "+\$0.50" -> 0.50
+            else -> return false
+        }
+        tally.extendUsdBudget(delta)
+        return true
+    }
+
     /** 运行记录里按结果另记的事:报告的障碍(供评测按 barrier 类归因;参数不对被拒的不算)、看过的个人技能、存下的记忆。 */
     private fun noteResultEvents(verb: Verb?, content: JsonObject) {
         if (verb == Verb.HandleObstacle && content["ok"] == JsonPrimitive(true)) {
@@ -1059,6 +1088,8 @@ class AgentLoop(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ModelError.TaskBudgetExceeded) {
+                return StopRules.modelFailed(e)
+            } catch (e: ModelError.UsdBudgetExceeded) {
                 return StopRules.modelFailed(e)
             } catch (e: ModelError.DailyBudgetExceeded) {
                 return StopRules.modelFailed(e)

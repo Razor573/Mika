@@ -47,4 +47,5 @@
     <string name="usage_allowance_updated">最終更新 %1$s</string>
     <string name="usage_allowance_self_hosted">セルフホスト接続</string>
     <string name="usage_allowance_unsupported">この接続では利用枠を確認できません</string>
+    <string name="usage_allowance_free_tier">無料枠</string>
 </resources>
