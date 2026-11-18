@@ -33,7 +33,7 @@ class AppAccessScreenPort(
         val state = appAccess.current()
         if (!state.available) throw AppAccessDenied("app_access_unavailable", null)
         val guarded = protectedUi()
-        if (state.blocked.isEmpty() && !guarded) return
+        if (state.effectiveBlocked.isEmpty() && !guarded) return
         if (stillVerified(state, guarded)) return
         val token = windowToken?.invoke()
         verify(state, packages(), guarded, token)
@@ -51,7 +51,7 @@ class AppAccessScreenPort(
         var s = state
         var targets = found
         var t = token
-        if (s.blocked.isNotEmpty() && targets.any { it.isNullOrBlank() }) {
+        if (s.effectiveBlocked.isNotEmpty() && targets.any { it.isNullOrBlank() }) {
             delay(RETRY_MS)
             t = windowToken?.invoke()
             targets = packages()
@@ -70,7 +70,7 @@ class AppAccessScreenPort(
         val state = appAccess.current()
         if (!state.available) throw AppAccessDenied("app_access_unavailable", null)
         val guarded = protectedUi()
-        if (state.blocked.isEmpty() && !guarded) return read()
+        if (state.effectiveBlocked.isEmpty() && !guarded) return read()
         // 计数先取:读的过程中窗口变了,下一次就不沿用
         val token = windowToken?.invoke()
         val snap = read()

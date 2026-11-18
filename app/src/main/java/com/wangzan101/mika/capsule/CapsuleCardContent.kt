@@ -249,6 +249,9 @@ fun CapsuleCard(
     /** 这个对话明确排队、还没开始的件数;卡片上显示一行,点它到对话页管理。 */
     queuedCount: Int = 0,
     onQueued: (() -> Unit)? = null,
+    bankingPrompt: String? = null,
+    onPauseForBanking: (() -> Unit)? = null,
+    onDismissBankingPrompt: (() -> Unit)? = null,
 ) {
     val field = CapsuleCards.input(card)
     // 任务还在进行(干活中、Mika 问你、等条件)时,停止和对话页一样放在输入框右边,不另占一个按钮
@@ -262,12 +265,49 @@ fun CapsuleCard(
     val inputRow: @Composable () -> Unit = {
         field?.let { InputRow(it, input, actions, stop = stopKey?.let { k -> { actions.stop(k) } }) }
     }
+    val bankingBanner: @Composable () -> Unit = {
+        if (bankingPrompt != null && onPauseForBanking != null) {
+            BankingPromptBanner(bankingPrompt, onPauseForBanking, onDismissBankingPrompt)
+        }
+    }
     Box(modifier.padding(CapsuleShadowRoom)) {
         when {
             zoomed && preview != null -> Zoomed(preview, actions)
-            card is CardView.Detail -> Detail(card, preview, actions, elapsed, h, handle, inputRow, queuedCount, onQueued)
-            card is CardView.Chat -> ChatCard(card, thread, actions, elapsed, h, handle, inputRow, queuedCount, onQueued)
+            card is CardView.Detail -> Detail(card, preview, actions, elapsed, h, handle, inputRow, queuedCount, onQueued, bankingBanner)
+            card is CardView.Chat -> ChatCard(card, thread, actions, elapsed, h, handle, inputRow, queuedCount, onQueued, bankingBanner)
             card is CardView.Kept -> KeptCard(card, preview, actions, h, handle)
+        }
+    }
+}
+
+@Composable
+private fun BankingPromptBanner(appLabel: String, onPause: () -> Unit, onDismiss: (() -> Unit)?) {
+    val c = MikaTheme.colors
+    val actionLabel = androidx.compose.ui.res.stringResource(R.string.banking_prompt_action)
+    Row(
+        Modifier.testTag("capsule-card-banking-prompt")
+            .padding(top = 8.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(c.warnSoft)
+            .border(1.dp, c.warnSolid.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+            .clickable(role = Role.Button, onClickLabel = actionLabel, onClick = onPause)
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(MikaIcons.Shield, null, Modifier.size(16.dp), tint = c.warn)
+        Column(Modifier.weight(1f)) {
+            Text(androidx.compose.ui.res.stringResource(R.string.banking_prompt_title, appLabel), style = Strong.copy(fontSize = 12.5.sp), color = c.warn, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(actionLabel, style = Sub, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (onDismiss != null) {
+            Box(
+                Modifier.size(26.dp).clip(MikaShapes.Pill).clickable(role = Role.Button, onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(MikaIcons.Close, null, Modifier.size(14.dp), tint = c.ink3)
+            }
         }
     }
 }
@@ -657,12 +697,14 @@ internal fun QuitCard(actions: CardActions, height: Dp = Dp.Unspecified) {
 private fun Detail(
     card: CardView.Detail, preview: Bitmap?, actions: CardActions, elapsed: @Composable (Long?) -> String?,
     height: Dp, handle: Modifier, input: @Composable () -> Unit, queuedCount: Int = 0, onQueued: (() -> Unit)? = null,
+    bankingBanner: @Composable () -> Unit = {},
 ) {
     val c = MikaTheme.colors
     val r = card.run
     val sub = listOfNotNull(CapsuleCards.status(r.kind), elapsed(r.startedAt)).joinToString(" · ")
     CardFrame(height, fixed = false) {
         Header(ScreenCopy.plain(r.run.goal).ifBlank { "Mika" }, sub, actions, handle)
+        bankingBanner()
         val screen = preview?.takeIf { CapsuleCards.showsScreen(card.content) }
         // 步骤那段的高度上限 = 小画面的高;还没有画面时按主屏的宽高比算同样的高,画面来了不跳
         val config = LocalConfiguration.current
@@ -792,6 +834,7 @@ internal fun Pinned(content: CardContent?, key: String, actions: CardActions) {
 private fun ChatCard(
     card: CardView.Chat, thread: ChatThread?, actions: CardActions, elapsed: @Composable (Long?) -> String?,
     height: Dp, handle: Modifier, input: @Composable () -> Unit, queuedCount: Int = 0, onQueued: (() -> Unit)? = null,
+    bankingBanner: @Composable () -> Unit = {},
 ) {
     val r = card.run
     CardFrame(height) {
@@ -801,6 +844,7 @@ private fun ChatCard(
             listOfNotNull(CapsuleCards.status(r.kind), elapsed(r.startedAt)).joinToString(" · "),
             actions, handle,
         )
+        bankingBanner()
         Box(Modifier.padding(top = 8.dp).weight(1f).fillMaxWidth()) {
             // 换了对话(空闲卡片切到新对话)时从那个对话的最新一问重新读起
             if (thread != null) key(card.target) { ThreadList(thread, card.conversationId, actions) }

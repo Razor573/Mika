@@ -133,6 +133,7 @@ class CapsuleController(
     private var dock by mutableStateOf(flags.capsuleDock())
     private var edgeHidden by mutableStateOf(false)
     private var inputUi by mutableStateOf(CardInputUi())
+    private var bankingPromptLabel by mutableStateOf<String?>(null)
     /** 截到一屏时加一:一颗上闪一下。 */
     private var flash by mutableIntStateOf(0)
     private val taps = DoubleTap(
@@ -280,6 +281,13 @@ class CapsuleController(
         scope.launch { snapshotFlow { talk.active }.collect { syncPanelWindow() } }
         // 排队条:卡片按自己的对话显示还有几件
         scope.launch { (context.applicationContext as MikaApp).followUpQueue.changes.collect { followUps = it } }
+        scope.launch {
+            tasks.bankingPrompt.collect { prompt ->
+                bankingPromptLabel = prompt
+                if (prompt != null) wake()
+                place()
+            }
+        }
         // 停止后的交代写好(或写不成)时那一轮已改进对话:重读记下的轮次
         scope.launch { tasks.summarizing.collect { threadOf?.let(::loadPast) } }
         // 对话删掉了:见 [forget]
@@ -1437,6 +1445,7 @@ class CapsuleController(
                 LocalCapsuleCardScale provides scale,
             ) {
                 val height = if (cardHeight > 0) with(LocalDensity.current) { cardHeight.toDp() } else Dp.Unspecified
+                val activePrompt = bankingPromptLabel?.takeIf { !com.wangzan101.mika.settings.BankingMode.isPaused(context) }
                 OverlayMotion(open = !closing, origin = ::cardOrigin, onClosed = ::closed, onOpened = {
                     cardOut = true
                     syncWindowVisibility()
@@ -1448,6 +1457,9 @@ class CapsuleController(
                             followUps.count { it.conversationId == id && !it.claimed && it.source == com.wangzan101.mika.task.QueuedSource.Explicit }
                         } ?: 0,
                         onQueued = { CapsuleCards.conversationOf(c)?.let(::open) },
+                        bankingPrompt = activePrompt,
+                        onPauseForBanking = ::pauseForBankingFromCapsule,
+                        onDismissBankingPrompt = ::dismissBankingPromptFromCapsule,
                     )
                 }
             }
@@ -1485,6 +1497,7 @@ class CapsuleController(
             return
         }
         val talking = talk.active && !talk.released
+        val activePrompt = bankingPromptLabel?.takeIf { !com.wangzan101.mika.settings.BankingMode.isPaused(context) }
         MikaTheme(reduceMotion = animationsOff(context)) {
             OverlayMotion(open = true, origin = { TransformOrigin(if (dock.side == DockSide.Right) 1f else 0f, 0.5f) }, onClosed = {}) {
                 CapsuleContent(
@@ -1506,9 +1519,23 @@ class CapsuleController(
                     holding = talking && talk.byTouch,
                     onTalk = if (canTalk()) ::toggleTalk else null,
                     talkLabel = tr(if (talking && !talk.byTouch) R.string.capsule_voice_send else R.string.capsule_voice_talk),
+                    bankingPrompt = activePrompt,
+                    onPauseForBanking = ::pauseForBankingFromCapsule,
+                    onDismissBankingPrompt = ::dismissBankingPromptFromCapsule,
                 )
             }
         }
+    }
+
+    private fun pauseForBankingFromCapsule() {
+        com.wangzan101.mika.settings.BankingMode.create(context).pause()
+        tasks.bankingPrompt.value = null
+        TaskService.dismissBankingPrompt(context)
+    }
+
+    private fun dismissBankingPromptFromCapsule() {
+        tasks.bankingPrompt.value = null
+        TaskService.dismissBankingPrompt(context)
     }
 
     /** 用时,每秒更新;不显示用时时为 null。 */

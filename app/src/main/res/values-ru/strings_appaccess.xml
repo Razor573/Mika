@@ -51,4 +51,16 @@
     <string name="appaccess_share_unblock">Убрать из заблокированных</string>
     <string name="appaccess_share_cancel">Отменить показ</string>
     <string name="appaccess_share_expired">Разрешение на показ экрана истекло. Сделайте новый снимок экрана.</string>
+
+    <string name="appaccess_hard_locked_title">Жёсткая блокировка (Аутентификация, Крипто и Банки)</string>
+    <string name="appaccess_hard_locked_note">Приложения аутентификации, криптовалюты и заблокированные финансовые приложения остаются заблокированными даже после «Разрешить все». Для разблокировки требуется проверка устройства.</string>
+    <string name="appaccess_hard_locked_item_sub">Для разблокировки требуется блокировка устройства</string>
+    <string name="appaccess_hard_locked_auth_title">Разблокировать %1$s</string>
+    <string name="appaccess_hard_locked_auth_sub">Подтвердите личность, чтобы разрешить Mika доступ к этому защищённому приложению</string>
+    <string name="appaccess_hard_locked_auth_failed">Для разблокировки требуется аутентификация</string>
+    <string name="appaccess_hard_locked_unlock_title">Разблокировать защищённое приложение?</string>
+    <string name="appaccess_hard_locked_countdown_wait">На устройстве не задана блокировка экрана. Подождите %2$d с перед разблокировкой %1$s.</string>
+    <string name="appaccess_hard_locked_countdown_ready">На устройстве не задана блокировка экрана. Теперь можно разблокировать %1$s.</string>
+    <string name="appaccess_hard_locked_unlock_confirm">Разблокировать</string>
+    <string name="appaccess_hard_lock_add">Жёстко заблокировать с проверкой устройства</string>
 </resources>

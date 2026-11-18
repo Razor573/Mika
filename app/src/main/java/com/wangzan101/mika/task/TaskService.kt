@@ -343,6 +343,11 @@ class TaskService : Service() {
                 val key = if (intent.hasExtra(ConfirmationNotifier.EXTRA_REQUEST)) intent.getIntExtra(ConfirmationNotifier.EXTRA_REQUEST, 0) else null
                 run?.confirm(if (intent.action == ACTION_APPROVE) ConfirmChoice.Once else ConfirmChoice.Deny, key)
             }
+            ACTION_PAUSE_FOR_BANKING -> {
+                com.wangzan101.mika.settings.BankingMode.create(this).pause()
+                taskState.bankingPrompt.value = null
+                dismissBankingPrompt(this)
+            }
         }
         if (workflowStarts.get() == 0 && !taskState._busy.value && keeper.page.value == null) stopSelf(startId)
         return START_NOT_STICKY
@@ -1019,6 +1024,29 @@ class TaskService : Service() {
 
     private fun openApp(threadId: String? = null) = openApp(this, threadId)
 
+    internal fun notifyBankingPrompt(pkg: String) {
+        val appLabel = ConfirmationNotifier.appLabel(this, pkg)
+        val pauseIntent = PendingIntent.getService(
+            this,
+            REQUEST_PAUSE_FOR_BANKING,
+            Intent(this, TaskService::class.java).setAction(ACTION_PAUSE_FOR_BANKING),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val notification = Notification.Builder(this, CHANNEL_ATTENTION)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(getString(R.string.banking_prompt_title, appLabel))
+            .setContentText(getString(R.string.banking_prompt_body))
+            .setStyle(Notification.BigTextStyle().bigText(getString(R.string.banking_prompt_body)))
+            .setCategory(Notification.CATEGORY_RECOMMENDATION)
+            .setAutoCancel(true)
+            .setContentIntent(openApp())
+            .addAction(Notification.Action.Builder(null, getString(R.string.banking_prompt_action), pauseIntent).build())
+            .build()
+        synchronized(notifyLock) {
+            getSystemService(NotificationManager::class.java).notify(ID_BANKING_PROMPT, notification)
+        }
+    }
+
     override fun onDestroy() {
         pocketGuard.close()
         scope.cancel()
@@ -1114,6 +1142,7 @@ class TaskService : Service() {
         /** 关掉任务结束后留在后台的那一页(通知上的按钮)。 */
         const val ACTION_CLOSE_KEPT_PAGE = "com.wangzan101.mika.task.CLOSE_KEPT_PAGE"
         const val ACTION_DECLINE = "com.wangzan101.mika.task.DECLINE"
+        const val ACTION_PAUSE_FOR_BANKING = "com.wangzan101.mika.task.PAUSE_FOR_BANKING"
         /** 定时任务连着失败到这么多次(含这次)起,结果通知里写明连续失败。 */
         internal const val FAILURE_STREAK_NOTICE = 3
         private const val EXTRA_GOAL = "goal"
@@ -1150,7 +1179,15 @@ class TaskService : Service() {
         private const val ID_ATTENTION = 3
         /** 留在后台的那一页的常驻通知(全局只有一页,不分槽位)。 */
         private const val ID_KEPT = 4
+        internal const val ID_BANKING_PROMPT = 95
+        private const val REQUEST_PAUSE_FOR_BANKING = 96
         private const val REQUEST_CLOSE_KEPT = 99
+
+        internal fun dismissBankingPrompt(context: Context) {
+            runCatching {
+                context.getSystemService(NotificationManager::class.java)?.cancel(ID_BANKING_PROMPT)
+            }
+        }
         /** 第 n 个槽位的任务通知编号与请求码都加 n × 它;第一个槽位与只跑一个任务时一样。 */
         private const val SLOT_STRIDE = 100
         /** 并行时结果通知的编号段,在槽位编号之外;循环使用,最多同时留这么多条。 */

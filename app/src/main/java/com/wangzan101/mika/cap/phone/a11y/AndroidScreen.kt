@@ -1479,7 +1479,7 @@ class AndroidScreen(
      */
     private fun allowedLinkHandler(action: String?, uri: String?): String? {
         val access = appAccess.current()
-        if (access.blocked.isEmpty()) return null
+        if (access.effectiveBlocked.isEmpty()) return null
         val intent = Intent(action ?: Intent.ACTION_VIEW).apply {
             uri?.let { data = android.net.Uri.parse(it) }
             addCategory(Intent.CATEGORY_DEFAULT)
@@ -1536,7 +1536,7 @@ class AndroidScreen(
         val default = runCatching { pm.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName }.getOrNull()
         // 由谁接只有这里知道:跳过被禁用的;能接的全被禁用就拒绝
         val access = appAccess.current()
-        val allowedHandlers = if (access.blocked.isEmpty()) handlers else handlers.filter { access.denial(it.packageName) == null }
+        val allowedHandlers = if (access.effectiveBlocked.isEmpty()) handlers else handlers.filter { access.denial(it.packageName) == null }
         if (handlers.isNotEmpty() && allowedHandlers.isEmpty()) access.denial(handlers.first().packageName)?.let { throw it }
         val handler = SystemIntents.choose(allowedHandlers, default)
             ?: return@withContext SystemActionResult(ActionResult.Failed(SystemActionResult.NOT_SUPPORTED))

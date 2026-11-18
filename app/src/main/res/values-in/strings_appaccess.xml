@@ -51,4 +51,16 @@
     <string name="appaccess_share_unblock">Hapus dari daftar blokir</string>
     <string name="appaccess_share_cancel">Batalkan berbagi</string>
     <string name="appaccess_share_expired">Izin berbagi layar sudah kedaluwarsa. Ambil tangkapan layar baru.</string>
+
+    <string name="appaccess_hard_locked_title">Terkunci keras (Autentikator, Kripto &amp; Bank)</string>
+    <string name="appaccess_hard_locked_note">Aplikasi autentikator, kripto, dan keuangan yang dikunci tetap diblokir meskipun setelah “Izinkan semua”. Autentikasi perangkat diperlukan untuk membuka kunci.</string>
+    <string name="appaccess_hard_locked_item_sub">Kunci perangkat diperlukan untuk membuka</string>
+    <string name="appaccess_hard_locked_auth_title">Buka kunci %1$s</string>
+    <string name="appaccess_hard_locked_auth_sub">Lakukan autentikasi agar Mika dapat mengakses aplikasi yang dilindungi ini</string>
+    <string name="appaccess_hard_locked_auth_failed">Autentikasi diperlukan untuk membuka kunci</string>
+    <string name="appaccess_hard_locked_unlock_title">Buka kunci aplikasi yang dilindungi?</string>
+    <string name="appaccess_hard_locked_countdown_wait">Tidak ada kunci layar yang diatur di perangkat ini. Tunggu %2$d d sebelum membuka kunci %1$s.</string>
+    <string name="appaccess_hard_locked_countdown_ready">Tidak ada kunci layar yang diatur di perangkat ini. Anda sekarang dapat membuka kunci %1$s.</string>
+    <string name="appaccess_hard_locked_unlock_confirm">Buka kunci</string>
+    <string name="appaccess_hard_lock_add">Kunci keras dengan autentikasi perangkat</string>
 </resources>

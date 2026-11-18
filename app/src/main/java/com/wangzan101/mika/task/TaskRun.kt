@@ -498,8 +498,24 @@ class TaskRun(
                 e is RunEvent.State && e.name == "reply_interrupted" -> steerJoin.interrupted(e.detail)
                 e is RunEvent.State && e.name == "reply_finished_before_steer" -> steerJoin.finished(e.detail)
                 e is RunEvent.State && e.name == "steer_received" -> joinSteer(e.detail)
+                e is RunEvent.State && (e.name == "app_blocked_package" || e.name == "screen_protected_package") ->
+                    onProtectedOrBlockedPackage(e.detail)
             }
         }
+    }
+
+    private fun onProtectedOrBlockedPackage(pkg: String) {
+        if (pkg.isBlank()) return
+        val state = (service.application as? MikaApp)?.appAccess?.current() ?: return
+        val classification = state.classifications[pkg]
+        val isBankingOrAuth = pkg in state.hardLocked ||
+            classification?.category == com.wangzan101.mika.core.access.AppCategory.Finance ||
+            com.wangzan101.mika.core.access.isKnownBankingOrAuthPackage(pkg, classification)
+        if (!isBankingOrAuth) return
+        if (!com.wangzan101.mika.settings.BankingMode.isAutoPromptEnabled(service)) return
+        if (com.wangzan101.mika.settings.BankingMode.isPaused(service)) return
+        service.taskState.bankingPrompt.value = ConfirmationNotifier.appLabel(service, pkg)
+        service.notifyBankingPrompt(pkg)
     }
 
     /** 通知和卡片的按钮都带着它所属的申报 [key];点在已经换掉的旧通知、旧卡片上不算数。 */

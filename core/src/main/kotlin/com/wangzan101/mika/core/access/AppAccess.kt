@@ -7,21 +7,51 @@ enum class AppCategory {
 
 data class AppClassification(val category: AppCategory, val reason: String = "", val manual: Boolean = false)
 
+val DEFAULT_HARD_LOCKED: Set<String> = setOf(
+    "com.google.android.apps.authenticator2",
+    "com.authy.authy",
+    "com.azure.authenticator",
+    "com.okta.android.auth",
+    "io.metamask",
+    "com.wallet.crypto.trustapp",
+    "com.coinbase.android",
+)
+
+private val BANKING_AUTH_INDICATORS = listOf(
+    "authenticator", "wallet", "metamask", "coinbase", "bank",
+    "hsbc", "chase", "revolut", "monzo", "wise", "paypal",
+    "venmo", "alipay", "unionpay", "binance", "okx", "ledger",
+)
+
+fun isKnownBankingOrAuthPackage(pkg: String, classification: AppClassification?): Boolean {
+    if (pkg in DEFAULT_HARD_LOCKED) return true
+    if (classification?.category == AppCategory.Finance) return true
+    val lower = pkg.lowercase()
+    return BANKING_AUTH_INDICATORS.any { it in lower }
+}
+
 data class AppAccessState(
     val blocked: Set<String> = emptySet(),
     val shareAllowed: Set<String> = emptySet(),
     val classifications: Map<String, AppClassification> = emptyMap(),
     val available: Boolean = true,
     val revision: Long = 0,
+    val hardLocked: Set<String> = emptySet(),
 ) {
+    val effectiveBlocked: Set<String> get() = blocked + hardLocked
+
     fun denial(packageName: String?): AppAccessDenied? = when {
         !available -> AppAccessDenied("app_access_unavailable", null)
-        packageName.isNullOrBlank() && blocked.isNotEmpty() -> AppAccessDenied("app_access_unverified", null)
-        packageName in blocked -> AppAccessDenied("app_blocked", packageName)
+        packageName.isNullOrBlank() && (blocked.isNotEmpty() || hardLocked.isNotEmpty()) -> AppAccessDenied("app_access_unverified", null)
+        packageName in blocked || packageName in hardLocked -> AppAccessDenied("app_blocked", packageName)
         else -> null
     }
 
-    fun canShare(packageName: String): Boolean = available && (packageName !in blocked || packageName in shareAllowed)
+    fun canShare(packageName: String): Boolean = available && (packageName !in effectiveBlocked || packageName in shareAllowed)
+
+    companion object {
+        val DEFAULT_HARD_LOCKED: Set<String> get() = com.wangzan101.mika.core.access.DEFAULT_HARD_LOCKED
+    }
 }
 
 /** 每次读取最新状态,不在任务开始时冻结权限。 */

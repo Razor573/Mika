@@ -817,6 +817,12 @@ class AgentLoop(
         GuideRecommender.viewedPersonal(verb, content)?.let { emit(RunEvent.SkillUsed(now(), it, "viewed")) }
         if (verb == Verb.MemorySave && content["ok"] == JsonPrimitive(true)) emit(RunEvent.MemorySaved(now(),
             content["id"]?.jsonPrimitive?.content ?: "", content["kind"]?.jsonPrimitive?.content ?: "", content["status"]?.jsonPrimitive?.content ?: ""))
+        val screenObj = content["screen"] as? JsonObject
+        if (content["protected"] == JsonPrimitive(true) || screenObj?.get("protected") == JsonPrimitive(true)) {
+            val pkg = (content["currentApp"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+                ?: (screenObj?.get("currentApp") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+            if (pkg != null) emit(RunEvent.State(now(), "screen_protected_package", pkg))
+        }
     }
 
     /** 前台 App/站点的参考资料补进历史(确定性,不靠关键词猜);技能开局已全部列出,这里不再补。 */

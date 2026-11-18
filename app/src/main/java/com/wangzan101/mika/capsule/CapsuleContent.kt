@@ -147,6 +147,9 @@ fun CapsuleContent(
     holding: Boolean = false,
     onTalk: (() -> Unit)? = null,
     talkLabel: String = "",
+    bankingPrompt: String? = null,
+    onPauseForBanking: (() -> Unit)? = null,
+    onDismissBankingPrompt: (() -> Unit)? = null,
 ) {
     // 淡下去、恢复都慢慢来;关了动画时直接换
     val shown = if (MikaTheme.reduceMotion) alpha else animateFloatAsState(alpha, tween(FADE_MS), label = "fade").value
@@ -158,8 +161,55 @@ fun CapsuleContent(
         )
     }
     Box(modifier.padding(CapsuleShadowRoom)) {
-        if (view.kind == CapsuleKind.HandedOver) TakeoverBar(view, onStop, onHandBack)
-        else Capsule(view, side == DockSide.Right, onTap, tapLabel, a11y, shown, flash, holding)
+        if (bankingPrompt != null && onPauseForBanking != null) {
+            Column(
+                horizontalAlignment = if (side == DockSide.Right) Alignment.End else Alignment.Start,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                if (view.kind == CapsuleKind.HandedOver) TakeoverBar(view, onStop, onHandBack)
+                else Capsule(view, side == DockSide.Right, onTap, tapLabel, a11y, shown, flash, holding)
+                BankingPromptPill(bankingPrompt, onPauseForBanking, onDismissBankingPrompt)
+            }
+        } else {
+            if (view.kind == CapsuleKind.HandedOver) TakeoverBar(view, onStop, onHandBack)
+            else Capsule(view, side == DockSide.Right, onTap, tapLabel, a11y, shown, flash, holding)
+        }
+    }
+}
+
+@Composable
+private fun BankingPromptPill(appLabel: String, onPause: () -> Unit, onDismiss: (() -> Unit)?) {
+    val c = MikaTheme.colors
+    val maxWidth = (LocalConfiguration.current.screenWidthDp - 32).coerceAtLeast(200).dp
+    val actionLabel = stringResource(R.string.banking_prompt_action)
+    Row(
+        Modifier.testTag("capsule-banking-prompt")
+            .glass(c, MikaShapes.Pill, need = true)
+            .widthIn(max = maxWidth)
+            .heightIn(min = 36.dp)
+            .clickable(role = Role.Button, onClickLabel = actionLabel, onClick = onPause)
+            .padding(start = 10.dp, end = if (onDismiss != null) 4.dp else 10.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(MikaIcons.Shield, null, Modifier.size(15.dp), tint = c.warn)
+        Text(
+            "$actionLabel · $appLabel",
+            Modifier.weight(1f, fill = false),
+            style = CapsuleText.copy(fontSize = 12.5.sp),
+            color = c.warn,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (onDismiss != null) {
+            Box(
+                Modifier.size(26.dp).clip(MikaShapes.Pill)
+                    .clickable(role = Role.Button, onClick = onDismiss),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(MikaIcons.Close, null, Modifier.size(13.dp), tint = c.ink3)
+            }
+        }
     }
 }
 

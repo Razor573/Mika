@@ -51,4 +51,16 @@
     <string name="appaccess_share_unblock">ブロックを解除</string>
     <string name="appaccess_share_cancel">共有をやめる</string>
     <string name="appaccess_share_expired">画面共有の権限の期限が切れました。もう一度スクリーンショットを撮ってください。</string>
+
+    <string name="appaccess_hard_locked_title">厳重ロック（認証・暗号資産・銀行）</string>
+    <string name="appaccess_hard_locked_note">認証アプリ、暗号資産、ロックされた金融アプリは「すべて許可」の後もブロックされたままになります。解除には端末認証が必要です。</string>
+    <string name="appaccess_hard_locked_item_sub">解除には端末の画面ロック認証が必要です</string>
+    <string name="appaccess_hard_locked_auth_title">%1$s のロックを解除</string>
+    <string name="appaccess_hard_locked_auth_sub">Mika がこの保護されたアプリにアクセスできるように認証してください</string>
+    <string name="appaccess_hard_locked_auth_failed">解除するには認証が必要です</string>
+    <string name="appaccess_hard_locked_unlock_title">保護されたアプリのロックを解除しますか？</string>
+    <string name="appaccess_hard_locked_countdown_wait">この端末には画面ロックが設定されていません。%1$s を解除するまで %2$d 秒お待ちください。</string>
+    <string name="appaccess_hard_locked_countdown_ready">この端末には画面ロックが設定されていません。%1$s のロックを解除できます。</string>
+    <string name="appaccess_hard_locked_unlock_confirm">解除</string>
+    <string name="appaccess_hard_lock_add">端末認証で厳重ロック</string>
 </resources>

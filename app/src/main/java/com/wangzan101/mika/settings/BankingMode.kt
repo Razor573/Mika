@@ -2,6 +2,7 @@ package com.wangzan101.mika.settings
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
@@ -10,6 +11,7 @@ import com.wangzan101.mika.a11y.MikaAccessibilityService
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.cap.phone.setup.DeveloperSettings
+import com.wangzan101.mika.capsule.BankingTileService
 import com.wangzan101.mika.core.shell.BuiltinShellControl
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.core.shell.PermissionCommands
@@ -38,10 +40,25 @@ class BankingMode private constructor(
     companion object {
         const val PREFS = "banking_mode"
         const val KEY_PAUSED = "paused"
+        const val KEY_AUTO_PROMPT = "auto_prompt_when_blocked"
 
         /** 持久化的暂停开关:进程重启后 App 启动时按它把暂停重设上。 */
         fun isPaused(context: Context): Boolean =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_PAUSED, false)
+
+        fun isAutoPromptEnabled(prefs: SharedPreferences): Boolean =
+            prefs.getBoolean(KEY_AUTO_PROMPT, true)
+
+        fun setAutoPromptEnabled(prefs: SharedPreferences, enabled: Boolean) {
+            prefs.edit().putBoolean(KEY_AUTO_PROMPT, enabled).apply()
+        }
+
+        fun isAutoPromptEnabled(context: Context): Boolean =
+            isAutoPromptEnabled(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
+
+        fun setAutoPromptEnabled(context: Context, enabled: Boolean) {
+            setAutoPromptEnabled(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE), enabled)
+        }
 
         fun create(context: Context): BankingMode {
             val app = context.applicationContext
@@ -57,6 +74,7 @@ class BankingMode private constructor(
 
     private fun setPaused(value: Boolean) {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_PAUSED, value).apply()
+        BankingTileService.refresh(app)
     }
 
     /** 此刻的真实状态,直接读系统,不读缓存。 */
@@ -89,6 +107,8 @@ class BankingMode private constructor(
      */
     fun pause(): PauseResult {
         setPaused(true)
+        (app as? MikaApp)?.taskState?.bankingPrompt?.value = null
+        TaskService.dismissBankingPrompt(app)
         val before = snapshot()
         var tasksStopped = false
         if (before.taskRunning) {

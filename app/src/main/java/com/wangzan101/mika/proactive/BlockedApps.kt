@@ -13,7 +13,7 @@ import com.wangzan101.mika.core.proactive.NoticeRecord
 data class AppGate(val known: Boolean, val blocked: Set<String>) {
     companion object {
         /** 从「应用访问」存着的那份来:连读不读得出来一起带上(只带禁用的那份会把读不出来当成一个都没禁用)。 */
-        fun of(state: AppAccessState) = AppGate(state.available, state.blocked)
+        fun of(state: AppAccessState) = AppGate(state.available, state.effectiveBlocked)
     }
 }
 

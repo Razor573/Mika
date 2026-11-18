@@ -32,4 +32,13 @@
     <string name="banking_paused_row_sub" translatable="false">Paused - your bank app should open</string>
     <string name="banking_active_row_sub" translatable="false">Active - Mika is running</string>
     <string name="banking_shizuku_note" translatable="false">Shizuku is active without Wireless debugging; pause and resume use Shizuku directly.</string>
+    <string name="banking_add_tile" translatable="false">Add Quick Settings tile</string>
+    <string name="banking_add_tile_sub" translatable="false">Pin Banking mode to your quick settings shade for 1-tap pause</string>
+    <string name="banking_tile_requested" translatable="false">Check the system prompt to add the Banking mode tile.</string>
+    <string name="banking_tile_manual" translatable="false">Open the Quick Settings edit panel and drag Banking mode into your tiles.</string>
+    <string name="banking_auto_prompt" translatable="false">Auto-prompt when blocked by banking app</string>
+    <string name="banking_auto_prompt_sub" translatable="false">Show a 1-tap Pause for banking notification when Mika hits a blocked or protected banking, auth, or crypto app.</string>
+    <string name="banking_prompt_title" translatable="false">Pause Mika for %1$s?</string>
+    <string name="banking_prompt_body" translatable="false">Mika hit a protected or blocked banking/security app. Pause accessibility and the phone helper with 1 tap.</string>
+    <string name="banking_prompt_action" translatable="false">Pause for banking</string>
 </resources>
