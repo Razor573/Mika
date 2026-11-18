@@ -247,15 +247,20 @@ class RunUsdCost(
     @Synchronized
     fun add(source: UsageSource, usage: Usage?, httpAttempts: Int) {
         if (httpAttempts <= 0 && usage == null) return
-        if (httpAttempts > 1) partial = true
+        if (httpAttempts > 1) {
+            partial = true
+            allExact = false
+        }
         if (usage == null) {
             partial = true
+            allExact = false
             return
         }
         val override = rateOverrides(source.providerId, source.model)
         val estimate = estimator.estimateCall(source.model, usage, override)
         if (estimate == null) {
             partial = true
+            allExact = false
             return
         }
         hasPricedCall = true

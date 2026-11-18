@@ -45,32 +45,32 @@ class ModelCostEstimatorTest {
 
     @Test fun estimatesBundledGeminiOpenAiAndDeepSeekRates() {
         val usage = Usage(inputTokens = 1_000_000, outputTokens = 500_000, cachedInputTokens = 0)
-        // gemini-3.1-flash-lite-preview: $0.25 in / $1.50 out per 1M -> 0.25 + 0.75 = 1.00
+        // gemini-3.1-flash-lite-preview: $0.075 in / $0.30 out per 1M -> 0.075 + 0.15 = 0.225
         val gemini = checkNotNull(estimator.estimateCall("gemini-3.1-flash-lite-preview", usage))
         assertFalse(gemini.exact)
         assertFalse(gemini.isFree)
-        assertEquals(1.00, gemini.usd, 1e-6)
+        assertEquals(0.225, gemini.usd, 1e-6)
 
         // Vertex AI & Google API prefixes normalize to the same bundled rate
         val vertex = checkNotNull(estimator.estimateCall("publishers/google/models/gemini-3.8-flash", Usage(1_000_000, 1_000_000)))
         val google = checkNotNull(estimator.estimateCall("models/gemini-3.8-flash", Usage(1_000_000, 1_000_000)))
         assertEquals(vertex.usd, google.usd, 1e-9)
 
-        // gpt-6-mini: $0.30 in / $1.20 out
+        // gpt-6-mini: $0.25 in / $2.00 out
         val gpt6 = checkNotNull(estimator.estimateCall("openai/gpt-6-mini", Usage(1_000_000, 1_000_000)))
-        assertEquals(1.50, gpt6.usd, 1e-6)
+        assertEquals(2.25, gpt6.usd, 1e-6)
 
-        // deepseek-v4-flash: $0.30 in / $0.50 out
+        // deepseek-v4-flash: $0.25 in / $0.42 out
         val ds = checkNotNull(estimator.estimateCall("deepseek/deepseek-v4-flash", Usage(1_000_000, 1_000_000)))
-        assertEquals(0.80, ds.usd, 1e-6)
+        assertEquals(0.67, ds.usd, 1e-6)
     }
 
     @Test fun claude55AppliesFivePercentCacheReadDiscount() {
-        // claude-sonnet-5.5: $3.00 in / $15.00 out / cacheReadMultiplier = 0.05 ($0.15 per 1M cached)
+        // claude-sonnet-5.5: $2.00 in / $10.00 out / cacheReadMultiplier = 0.05 ($0.10 per 1M cached)
         // 1,000,000 input of which 800,000 cached + 100,000 output:
-        // non-cached input = 200,000 * 3.0 / 1M = $0.60
-        // cached input = 800,000 * 3.0 * 0.05 / 1M = $0.12
-        // output = 100,000 * 15.0 / 1M = $1.50 -> total = $2.22
+        // non-cached input = 200,000 * 2.0 / 1M = $0.40
+        // cached input = 800,000 * 2.0 * 0.05 / 1M = $0.08
+        // output = 100,000 * 10.0 / 1M = $1.00 -> total = $1.48
         val est = checkNotNull(
             estimator.estimateCall(
                 "anthropic/claude-sonnet-5.5",
@@ -78,7 +78,7 @@ class ModelCostEstimatorTest {
             )
         )
         assertFalse(est.exact)
-        assertEquals(2.22, est.usd, 1e-6)
+        assertEquals(1.48, est.usd, 1e-6)
     }
 
     @Test fun providerReportedCostTakesPrecedenceOverFreeAndOverridesAndTable() {
