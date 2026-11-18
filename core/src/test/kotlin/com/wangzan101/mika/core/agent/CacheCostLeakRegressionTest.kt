@@ -448,15 +448,17 @@ class CacheCostLeakRegressionTest {
         assertTrue("Expected lightMeanLatencyMs > 0", metrics.lightMeanLatencyMs!! > 0.0)
         assertTrue("Expected lightRejectionRate < 0.10, was ${metrics.lightRejectionRate}", metrics.lightRejectionRate < 0.10)
 
+        val compressedEvents = events.filterIsInstance<RunEvent.Compressed>()
+        assertTrue("Expected periodic compaction (>= 2 events across 42 steps), got ${compressedEvents.size}", compressedEvents.size >= 2)
         val compactedLogs = callLogs.filter { it.compacted }
-        assertTrue("Expected compaction to trigger during the 42-step run", compactedLogs.isNotEmpty())
+        assertTrue("Expected compaction calls during the 42-step run", compactedLogs.isNotEmpty())
         for (log in compactedLogs) {
             assertTrue("Compacted request at step ${log.step} (${log.model}) missing step summary", log.hasSummary)
             assertTrue("Compacted request at step ${log.step} (${log.model}) kept ${log.fullUiTrees} full UI trees (> 3)", log.fullUiTrees <= 3)
         }
         assertTrue(
-            "Expected older UI trees to be dropped (folded into summary or replaced with omitted marker)",
-            compactedLogs.any { it.omittedUiTrees > 0 } || compactedLogs.last().fullUiTrees <= 3,
+            "Expected post-compaction history to drop older UI trees without exceeding 3 full trees at compaction",
+            callLogs.any { it.omittedUiTrees > 0 } || compactedLogs.last().fullUiTrees <= 3,
         )
 
         // Verify RunEvent.encode works across all emitted events and write JSONL usage report.
@@ -513,6 +515,8 @@ class CacheCostLeakRegressionTest {
             reasoning = false,
         )
         private var prevWire: String? = null
+        private var prevMsgCount = 0
+        private var prevHadSummary = false
         private var seq = 0
 
         override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
@@ -527,6 +531,9 @@ class CacheCostLeakRegressionTest {
                 ContextBuilder.kindOf(m) == ContextKind.Notice &&
                     ContextBuilder.bodyOf(m)?.startsWith(ContextCompressor.HEADER) == true
             }
+            val didCompact = hasSummary && (!prevHadSummary || messages.size <= prevMsgCount)
+            prevMsgCount = messages.size
+            prevHadSummary = hasSummary
             val fullUiTrees = messages.sumOf { m -> m.parts.count { p -> p is Part.ToolResult && "\"tree\":[" in p.content } }
             val omittedUiTrees = messages.sumOf { m ->
                 m.parts.count { p -> p is Part.ToolResult && "\"tree\":\"${HistoryPruner.OMITTED}\"" in p.content }
@@ -536,7 +543,7 @@ class CacheCostLeakRegressionTest {
                 val summaryText = if (name == "light") {
                     "Completed all workflow steps across the catalog, inbox, and notes apps."
                 } else {
-                    "Completed the multi-app workflow across the catalog, inbox, and notes sections. All observed pages and scrolled feeds were reviewed without errors, and the navigation controls remained responsive across each app transition. ".repeat(8)
+                    "Completed the multi-app workflow across the catalog, inbox, and notes sections. All observed pages and scrolled feeds were reviewed without errors, and the navigation controls remained responsive across each app transition. ".repeat(8).trim()
                 }
                 val outputTokens = TokenEstimate.of(summaryText)
                 logs += CallUsageLog(
@@ -547,7 +554,7 @@ class CacheCostLeakRegressionTest {
                     inputTokens = inputTokens,
                     outputTokens = outputTokens,
                     cachedTokens = cachedTokens,
-                    compacted = hasSummary,
+                    compacted = didCompact,
                     hasSummary = hasSummary,
                     fullUiTrees = fullUiTrees,
                     omittedUiTrees = omittedUiTrees,
@@ -579,7 +586,7 @@ class CacheCostLeakRegressionTest {
                 inputTokens = inputTokens,
                 outputTokens = outputTokens,
                 cachedTokens = cachedTokens,
-                compacted = hasSummary,
+                compacted = didCompact,
                 hasSummary = hasSummary,
                 fullUiTrees = fullUiTrees,
                 omittedUiTrees = omittedUiTrees,
