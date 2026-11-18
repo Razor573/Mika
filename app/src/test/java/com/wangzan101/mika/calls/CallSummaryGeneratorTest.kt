@@ -87,7 +87,7 @@ class CallSummaryGeneratorTest {
             CallTranscriptLine("system", "已提交 3 个按键，等待对方响应"),
             CallTranscriptLine("caller", "请选择业务"),
         ))
-        assertEquals("来电者: 请选择业务", model.received)
+        assertEquals("Caller: 请选择业务", model.received)
         val onlyStatus = FakeModel("{}")
         assertNull(CallSummaryGenerator.generate(onlyStatus, listOf(CallTranscriptLine("system", "已提交按键"))))
         assertTrue(onlyStatus.received.isEmpty())
