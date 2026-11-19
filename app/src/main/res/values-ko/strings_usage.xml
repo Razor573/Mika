@@ -47,5 +47,4 @@
     <string name="usage_allowance_updated">마지막 업데이트 %1$s</string>
     <string name="usage_allowance_self_hosted">자체 호스팅 연결</string>
     <string name="usage_allowance_unsupported">이 연결은 한도 조회를 지원하지 않음</string>
-    <string name="usage_allowance_free_tier">무료 등급</string>
 </resources>

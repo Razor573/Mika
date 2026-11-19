@@ -48,5 +48,4 @@
     <string name="usage_allowance_updated">آخرین به‌روزرسانی %1$s</string>
     <string name="usage_allowance_self_hosted">اتصال با میزبانی شخصی</string>
     <string name="usage_allowance_unsupported">بررسی سهمیه برای این اتصال در دسترس نیست</string>
-    <string name="usage_allowance_free_tier">سطح رایگان</string>
 </resources>

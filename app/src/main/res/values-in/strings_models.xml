@@ -257,12 +257,4 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
-    <string name="models_custom_rates">Tarif USD khusus</string>
-    <string name="models_custom_rates_unset">Belum diatur</string>
-    <string name="models_rate_summary">$%1$s masuk / $%2$s keluar per 1M</string>
-    <string name="models_rate_free">Tingkat gratis ($0.00)</string>
-    <string name="models_rate_input">Input (USD per 1M token)</string>
-    <string name="models_rate_output">Output (USD per 1M token)</string>
-    <string name="models_rate_cached">Input cache (USD per 1M token, opsional)</string>
-    <string name="models_rate_clear">Hapus tarif khusus</string>
 </resources>

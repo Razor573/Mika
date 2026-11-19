@@ -97,22 +97,9 @@ class ContextCompressor(
         val trigger = view?.let {
             maxOf(limits.trigger, UsageMeter.estimate(it.estimate + fixedOverhead, scale) + limits.margin).coerceAtMost(limits.usable)
         } ?: limits.trigger
-        val unfoldedStart = view?.covered?.size ?: 0
-        val unfoldedToolRounds = history.subList(unfoldedStart, history.size)
-            .count { m -> m.role == Role.Assistant && m.parts.any { it is Part.ToolCall } }
-        val uiTreeObservations = sent.sumOf { m ->
-            m.parts.count { p -> p is Part.ToolResult && "\"tree\":[" in p.content }
-        }
-        val compact = (last != null && view == null) ||
-            (aggressive && view?.aggressive != true) ||
-            size > trigger ||
-            size > MAX_INPUT_TOKENS_CAP ||
-            (unfoldedToolRounds >= COMPACT_EVERY_STEPS && uiTreeObservations > KEEP_FULL_OBSERVATIONS)
+        val compact = (last != null && view == null) || (aggressive && view?.aggressive != true) || size > trigger
         if (!compact) return Compressed(HistoryPruner.limitImages(sent, maxImages), view?.folded ?: 0)
-        val pruneOldObservations = unfoldedToolRounds >= COMPACT_EVERY_STEPS ||
-            uiTreeObservations > KEEP_FULL_OBSERVATIONS ||
-            size > MAX_INPUT_TOKENS_CAP
-        val next = compact(history, limits, fixedOverhead, aggressive, pruneOldObservations)
+        val next = compact(history, limits, fixedOverhead, aggressive)
         views[contextTokens] = next
         return Compressed(HistoryPruner.limitImages(next.base, maxImages), next.folded, rewritten = true)
     }
@@ -123,8 +110,7 @@ class ContextCompressor(
      */
     fun overflow(history: List<Message>, contextTokens: Int, fixedOverhead: Int = 0): Boolean {
         val current = sent(valid(views[contextTokens], history), history)
-        val limits = ContextLimits.of(contextTokens, triggerOverride)
-        val next = compact(history, limits, fixedOverhead, aggressive = true, pruneOldObservations = true)
+        val next = compact(history, ContextLimits.of(contextTokens, triggerOverride), fixedOverhead, aggressive = true)
         if (next.estimate >= TokenEstimate.of(current)) return false
         views[contextTokens] = next
         return true
@@ -144,18 +130,10 @@ class ContextCompressor(
      * 最重的一级整份请求仍超过 [ContextLimits.usable](最近的结果本身太大)时,从最新的开始缩短大结果,直到放得下。
      * 比较的是消息的估算:目标和可用窗口先扣掉固定开销(同一个比值),固定开销只算这一次。
      */
-    private fun compact(
-        history: List<Message>,
-        limits: ContextLimits,
-        fixedOverhead: Int,
-        aggressive: Boolean,
-        pruneOldObservations: Boolean = false,
-    ): View {
+    private fun compact(history: List<Message>, limits: ContextLimits, fixedOverhead: Int, aggressive: Boolean): View {
         val overhead = UsageMeter.estimate(fixedOverhead, scale)
-        val effectiveUsable = minOf(limits.usable, MAX_INPUT_TOKENS_CAP)
-        val effectiveTarget = minOf(limits.target, (MAX_INPUT_TOKENS_CAP - ContextLimits.MARGIN_TOKENS).coerceAtLeast(0))
-        val target = effectiveTarget - overhead
-        val window = effectiveUsable - overhead
+        val target = limits.target - overhead
+        val window = limits.usable - overhead
         val ladder = sequence {
             if (!aggressive) {
                 val pruned = HistoryPruner.prune(history, tools, HistoryPruner.Cut(keepRecent))
@@ -167,22 +145,10 @@ class ContextCompressor(
         }
         var chosen = Compressed(history, 0)
         for (c in ladder) {
-            val candidate = if (pruneOldObservations) {
-                val capped = HistoryPruner.pruneOlderObservations(c.messages, tools, KEEP_FULL_OBSERVATIONS)
-                if (capped === c.messages) c else c.copy(messages = capped, estimate = TokenEstimate.of(capped))
-            } else c
-            chosen = candidate
-            if (tokens(candidate.messages) <= target) break
+            chosen = c
+            if (tokens(c.messages) <= target) break
         }
-        if (pruneOldObservations) {
-            val capped = HistoryPruner.pruneOlderObservations(chosen.messages, tools, KEEP_FULL_OBSERVATIONS)
-            if (capped !== chosen.messages) {
-                chosen = chosen.copy(messages = capped, estimate = TokenEstimate.of(capped))
-            }
-        }
-        if (tokens(chosen.messages) > window) {
-            chosen = chosen.copy(messages = HistoryPruner.shrinkOversized(chosen.messages) { tokens(it) <= window })
-        }
+        if (tokens(chosen.messages) > window) chosen = chosen.copy(messages = HistoryPruner.shrinkOversized(chosen.messages) { tokens(it) <= window })
         // 副本:什么都没裁时 chosen 可能就是调用方那份还会追加的历史
         return View(history.toList(), chosen.messages.toList(), chosen.foldedSteps, aggressive)
     }
@@ -351,9 +317,6 @@ class ContextCompressor(
         const val SUMMARY_REMINDER = "Only the latest user message is the current task, and the tools are still available; earlier user messages are for reference only."
         private const val SUMMARY_SOURCE = "earlier steps"
         const val AGGRESSIVE_KEEP = 6
-        const val MAX_INPUT_TOKENS_CAP = 80_000
-        const val COMPACT_EVERY_STEPS = 15
-        const val KEEP_FULL_OBSERVATIONS = 3
         /**
          * 还没有真实用量可校准时估算乘的比值。粗估对英文、JSON 常偏少(分词器切得更碎),宁可早一点压,不要先超长再狠压。
          */

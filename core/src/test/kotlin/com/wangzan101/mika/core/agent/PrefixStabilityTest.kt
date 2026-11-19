@@ -124,8 +124,7 @@ class PrefixStabilityTest {
         val screens = (1..40).map { n -> Screen("com.x", (1..12).map { label("@e$it", "第${n}屏第${it}项$pad", 100 + it * 50) }) }
         val scripted = ScriptedScreen(screens)
         val port: ScreenPort = if (!s.vision) scripted else object : ScreenPort by scripted { override suspend fun screenshotPng() = byteArrayOf(1, 2, 3) }
-        val rows = if (s.contextTokens == 80_000) 6000 else 1800
-        val sb = FakeSandbox().apply { next = { r -> CommandResult(0, false, false, 10, "输出${r.argv}" + "行".repeat(rows), 0, false) } }
+        val sb = FakeSandbox().apply { next = { r -> CommandResult(0, false, false, 10, "输出${r.argv}" + "行".repeat(6000), 0, false) } }
         val main = Wire(s.fail)
         val light = if (s.light) Wire() else null
         val mainModel = main.model(s.vision, s.contextTokens)

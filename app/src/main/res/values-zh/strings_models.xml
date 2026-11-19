@@ -259,12 +259,4 @@
     <string name="tool_audio_save">保存音频</string>
     <string name="tool_share_audio">分享音频到 App</string>
     <string name="tool_audio_transcribe">转写音频</string>
-    <string name="models_custom_rates">自定义美元单价</string>
-    <string name="models_custom_rates_unset">未设置</string>
-    <string name="models_rate_summary">输入 $%1$s / 输出 $%2$s（每百万）</string>
-    <string name="models_rate_free">免费层级（$0.00）</string>
-    <string name="models_rate_input">输入单价（美元 / 百万 Token）</string>
-    <string name="models_rate_output">输出单价（美元 / 百万 Token）</string>
-    <string name="models_rate_cached">缓存读取单价（美元 / 百万 Token，可选）</string>
-    <string name="models_rate_clear">清除自定义单价</string>
 </resources>

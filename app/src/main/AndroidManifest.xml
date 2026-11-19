@@ -20,7 +20,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- 通话功能:拨号、读通话状态,以及安卓 13+ 的「通话助手」框架(伴侣角色经 shell 授予)。 -->
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
@@ -210,17 +209,6 @@
             android:exported="true"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:label="@string/capsule_tile_label"
-            android:icon="@drawable/ic_notification">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-        </service>
-
-        <service android:name=".capsule.BankingTileService"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:label="@string/banking_title"
             android:icon="@drawable/ic_notification">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

@@ -81,5 +81,4 @@
     <string name="model_probe_tried">%1$s を試しましたが、どれもテストに通りませんでした。</string>
     <string name="model_probe_fallback">最初に試した %1$s はテストに通りませんでした: %2$s。メインモデルは、テストに通った「%3$s」です。</string>
     <string name="model_pick_main">メインモデルを選択</string>
-    <string name="cap_free">無料</string>
 </resources>

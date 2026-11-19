@@ -45,16 +45,4 @@
     <string name="appaccess_share_unblock">إزالته من المحظور</string>
     <string name="appaccess_share_cancel">إلغاء المشاركة</string>
     <string name="appaccess_share_expired">انتهى إذن مشاركة الشاشة. التقط لقطة شاشة جديدة.</string>
-
-    <string name="appaccess_hard_locked_title">مقفل بإحكام (المصادقة والعملات الرقمية والبنوك)</string>
-    <string name="appaccess_hard_locked_note">تبقى تطبيقات المصادقة والعملات الرقمية والتمويل المقفلة محظورة حتى بعد «السماح للكل». يلزم مصادقة الجهاز لإلغاء القفل.</string>
-    <string name="appaccess_hard_locked_item_sub">يلزم قفل الجهاز لإلغاء القفل</string>
-    <string name="appaccess_hard_locked_auth_title">إلغاء قفل %1$s</string>
-    <string name="appaccess_hard_locked_auth_sub">أكّد هويتك للسماح لـ Mika بالوصول إلى هذا التطبيق المحمي</string>
-    <string name="appaccess_hard_locked_auth_failed">المصادقة مطلوبة لإلغاء القفل</string>
-    <string name="appaccess_hard_locked_unlock_title">إلغاء قفل التطبيق المحمي؟</string>
-    <string name="appaccess_hard_locked_countdown_wait">لم يُعيّن قفل شاشة على هذا الجهاز. انتظر %2$d ثانية قبل إلغاء قفل %1$s.</string>
-    <string name="appaccess_hard_locked_countdown_ready">لم يُعيّن قفل شاشة على هذا الجهاز. يمكنك الآن إلغاء قفل %1$s.</string>
-    <string name="appaccess_hard_locked_unlock_confirm">إلغاء القفل</string>
-    <string name="appaccess_hard_lock_add">قفل محكم بمصادقة الجهاز</string>
 </resources>

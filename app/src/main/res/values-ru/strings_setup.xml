@@ -81,5 +81,4 @@
     <string name="model_probe_tried">Пробовали: %1$s; ни одна не прошла проверку.</string>
     <string name="model_probe_fallback">%1$s, которую пробовали первой, не прошла проверку: %2$s. Основная модель — «%3$s», она проверку прошла.</string>
     <string name="model_pick_main">Выбрать основную модель</string>
-    <string name="cap_free">Бесплатно</string>
 </resources>

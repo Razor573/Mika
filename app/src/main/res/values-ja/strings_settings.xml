@@ -231,10 +231,4 @@
     <plurals name="settings_trigger_run_minutes_n">
         <item quantity="other">%1$d 分</item>
     </plurals>
-    <string name="settings_compact_ui_tree">Compact UI tree</string>
-    <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
-    <string name="settings_task_usd_budget">タスクあたりの支出上限 (USD)</string>
-    <string name="settings_task_usd_budget_sub">料金が判明している呼び出しまたは報告されたコストのみが計算されます。上限に達すると、続行前に確認するため一時停止します（無人実行時は停止します）。</string>
-    <string name="settings_usd_budget_custom">カスタム支出上限 (USD)</string>
-    <string name="settings_usd_budget_invalid">%1$s から %2$s の間の金額を入力してください。</string>
 </resources>

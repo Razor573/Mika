@@ -9,7 +9,6 @@ import com.wangzan101.mika.core.oauth.AccountSignInException
 import com.wangzan101.mika.core.oauth.AccountSignInFailure
 import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.core.oauth.VertexServiceAccount
-import com.wangzan101.mika.core.usage.ModelCostEstimator
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.i18n.trPlural
@@ -37,13 +36,11 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import com.wangzan101.mika.ui.components.MikaDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -61,7 +58,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +65,6 @@ import androidx.compose.ui.unit.sp
 import com.wangzan101.mika.core.chatgpt.SignInFailure
 import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.ModelRole
-import com.wangzan101.mika.settings.CustomModelRate
 import com.wangzan101.mika.settings.ModelOption
 import com.wangzan101.mika.settings.ModelOptions
 import com.wangzan101.mika.settings.Provider
@@ -334,7 +329,6 @@ class ProviderDetailActions(
     val useAsMain: () -> Unit = {},
     /** 更新 Vertex AI 的 GCP project ID 与 location（非密钥配置）。 */
     val updateVertexSettings: (String, String) -> Boolean = { _, _ -> false },
-    val setCustomRate: (String, CustomModelRate?) -> Boolean = { _, _ -> false },
 )
 
 /**
@@ -459,15 +453,7 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
         onDismiss = { editingBudget = false },
         saveError = if (budgetSaveFailed) stringResource(R.string.models_daily_token_budget_save_failed) else null,
     )
-    using?.let { o ->
-        UseAsSheet(
-            ui, p, o.id,
-            onUse = { role -> actions.use(role, o.id) },
-            onVision = { actions.setVision(o.id, it) },
-            onCustomRate = { rate -> actions.setCustomRate(o.id, rate) },
-            onDismiss = { using = null },
-        )
-    }
+    using?.let { o -> UseAsSheet(ui, p, o.id, onUse = { role -> actions.use(role, o.id) }, onVision = { actions.setVision(o.id, it) }, onDismiss = { using = null }) }
     if (changingKey && p.kind == ProviderConfig.Kind.Vertex) {
         var saJson by remember { mutableStateOf("") }
         var readFailed by remember { mutableStateOf(false) }
@@ -757,15 +743,7 @@ fun AllModelsContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActio
             }
         }
     }
-    using?.let { o ->
-        UseAsSheet(
-            ui, p, o.id,
-            onUse = { role -> actions.use(role, o.id) },
-            onVision = { actions.setVision(o.id, it) },
-            onCustomRate = { rate -> actions.setCustomRate(o.id, rate) },
-            onDismiss = { using = null },
-        )
-    }
+    using?.let { o -> UseAsSheet(ui, p, o.id, onUse = { role -> actions.use(role, o.id) }, onVision = { actions.setVision(o.id, it) }, onDismiss = { using = null }) }
 }
 
 /** 一张卡拆成懒加载的行时,每行的圆角:首行上圆、末行下圆。 */
@@ -800,34 +778,13 @@ private fun ModelRow(label: String, o: ModelOption, roles: List<ModelRole>, firs
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun UseAsSheet(
-    ui: ModelSetupUi,
-    p: Provider,
-    model: String,
-    onUse: (ModelRole) -> Unit,
-    onVision: (Boolean) -> Unit,
-    onCustomRate: (CustomModelRate?) -> Boolean = { false },
-    onDismiss: () -> Unit,
-) {
+private fun UseAsSheet(ui: ModelSetupUi, p: Provider, model: String, onUse: (ModelRole) -> Unit, onVision: (Boolean) -> Unit, onDismiss: () -> Unit) {
     val c = MikaTheme.colors
     val displayLabel = ui.options(p).firstOrNull { it.id == model }?.let { displayModelName(p, it) } ?: model
-    var editingRate by remember(p.id, model) { mutableStateOf(false) }
-    val customRate = p.customRates[model]
-    val bundledRate = remember(model) { ModelCostEstimator.DEFAULT.bundledRateFor(model) }
-    val isFree = remember(model) { ModelCostEstimator.isFreeModel(model) }
-    val rateHint = when {
-        customRate != null -> tr(R.string.models_rate_summary, formatRateValue(customRate.inputPerMUsd), formatRateValue(customRate.outputPerMUsd))
-        isFree -> tr(R.string.models_rate_free)
-        bundledRate != null -> tr(R.string.models_rate_summary, formatRateValue(bundledRate.inputPerM), formatRateValue(bundledRate.outputPerM))
-        else -> null
-    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = c.surface, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 8.dp).testTag("use-as")) {
             Text(displayLabel, Modifier.padding(horizontal = 16.dp), style = ModelIdStyle, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(ModelsCopy.useAsSubtitle(ModelsCopy.providerName(p)), Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = if (rateHint == null) 6.dp else 2.dp), style = MikaType.Caption, color = c.ink3)
-            if (rateHint != null) {
-                Text(rateHint, Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp), style = MikaType.Caption, color = c.ink2)
-            }
+            Text(ModelsCopy.useAsSubtitle(ModelsCopy.providerName(p)), Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp, bottom = 6.dp), style = MikaType.Caption, color = c.ink3)
             ModelRole.entries.forEachIndexed { i, role ->
                 val on = ui.picked(role, p.id, model)
                 RadioRow(
@@ -843,87 +800,9 @@ private fun UseAsSheet(
                     MikaSwitch(sees, onVision, Modifier.testTag("model-sees-images"))
                 }
             }
-            ListRow(
-                null,
-                stringResource(R.string.models_custom_rates),
-                customRate?.let { tr(R.string.models_rate_summary, formatRateValue(it.inputPerMUsd), formatRateValue(it.outputPerMUsd)) }
-                    ?: rateHint
-                    ?: stringResource(R.string.models_custom_rates_unset),
-                onClick = { editingRate = true },
-            ) { RowChevron() }
             ListRow(null, ModelSetupCopy.CANCEL, titleColor = c.ink2, onClick = onDismiss)
         }
     }
-    if (editingRate) {
-        CustomRateDialog(
-            model = displayLabel,
-            initial = customRate,
-            onSave = { rate ->
-                if (onCustomRate(rate)) editingRate = false
-            },
-            onDismiss = { editingRate = false },
-        )
-    }
-}
-
-private fun formatRateValue(value: Double): String =
-    java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
-
-@Composable
-private fun CustomRateDialog(
-    model: String,
-    initial: CustomModelRate?,
-    onSave: (CustomModelRate?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var inputText by rememberSaveable(model) { mutableStateOf(initial?.inputPerMUsd?.let(::formatRateValue).orEmpty()) }
-    var outputText by rememberSaveable(model) { mutableStateOf(initial?.outputPerMUsd?.let(::formatRateValue).orEmpty()) }
-    var cachedText by rememberSaveable(model) { mutableStateOf(initial?.cachedInputPerMUsd?.let(::formatRateValue).orEmpty()) }
-    val inputVal = inputText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
-    val outputVal = outputText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
-    val cachedVal = if (cachedText.isBlank()) null else cachedText.trim().toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
-    val cachedBad = cachedText.isNotBlank() && cachedVal == null
-    val canSave = inputVal != null && outputVal != null && !cachedBad
-    val keyboard = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-    MikaDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.models_custom_rates)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(model, style = ModelIdStyle, color = MikaTheme.colors.ink2)
-                OutlinedTextField(
-                    value = inputText, onValueChange = { inputText = it }, singleLine = true, keyboardOptions = keyboard,
-                    label = { Text(stringResource(R.string.models_rate_input)) },
-                    isError = inputText.isNotBlank() && inputVal == null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = outputText, onValueChange = { outputText = it }, singleLine = true, keyboardOptions = keyboard,
-                    label = { Text(stringResource(R.string.models_rate_output)) },
-                    isError = outputText.isNotBlank() && outputVal == null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = cachedText, onValueChange = { cachedText = it }, singleLine = true, keyboardOptions = keyboard,
-                    label = { Text(stringResource(R.string.models_rate_cached)) },
-                    isError = cachedBad,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (initial != null) {
-                    TextButton(onClick = { onSave(null) }) {
-                        Text(stringResource(R.string.models_rate_clear), color = MikaTheme.colors.bad)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { if (canSave) onSave(CustomModelRate(inputVal!!, outputVal!!, cachedVal)) },
-                enabled = canSave,
-            ) { Text(ModelsCopy.SAVE) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(ModelSetupCopy.CANCEL) } },
-    )
 }
 
 /** 模型页(用途、选择页、服务商详情、全部模型)的文字(纯函数,便于测试)。三个用途的说法全 App 只在这里。 */

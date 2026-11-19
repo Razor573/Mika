@@ -12,12 +12,7 @@ class RunMetricsTest {
     private fun reply(
         at: Long, step: Int, tool: String?, latency: Long = 0, retry: Long = 0, repliedAt: Long? = null,
         input: Int? = 100, output: Int? = 10, cached: Int? = 0, role: String? = null,
-        decisionScore: Double? = null, mainDiff: String? = null,
-    ) = RunEvent.ModelReply(
-        at, step, "", tool, null, input, output, cached, latency,
-        role = role, retryWaitMs = retry, repliedAtMs = repliedAt,
-        decisionScore = decisionScore, mainDiff = mainDiff,
-    )
+    ) = RunEvent.ModelReply(at, step, "", tool, null, input, output, cached, latency, role = role, retryWaitMs = retry, repliedAtMs = repliedAt)
 
     private fun result(at: Long, step: Int, tool: String, duration: Long, callId: String, source: String = "model", wait: Long = 0) =
         RunEvent.ToolResult(at, step, tool, "{\"ok\":true}", true, null, duration, wait, source = source, callId = callId)
@@ -266,74 +261,5 @@ class RunMetricsTest {
         val old = RunEvent.decode("""{"type":"model_calls","atMs":5,"calls":3,"unreported":1,"inputTokens":10,"outputTokens":2,"cachedTokens":0}""") as RunEvent.ModelCalls
         assertNull(old.httpCalls)
         assertNull(old.httpUnreported)
-        assertNull(r.decisionScore)
-        assertNull(r.mainDiff)
-
-        val rich = RunEvent.decode(RunEvent.encode(
-            RunEvent.ModelReply(10, 2, "", "phone_swipe", "{}", 100, 20, 0, 300, model = "light", role = "light_rejected", decisionScore = 0.78, mainDiff = "tool:phone_swipe->phone_observe")
-        )) as RunEvent.ModelReply
-        assertEquals(0.78, rich.decisionScore!!, 1e-9)
-        assertEquals("tool:phone_swipe->phone_observe", rich.mainDiff)
-    }
-
-    @Test fun tracksMainAndLightCallsRejectedRateAndMeanLatencies() {
-        val m = RunMetrics.of(listOf(
-            started(0),
-            reply(1_000, 1, "phone_observe", latency = 1_000, repliedAt = 1_000, role = "main"),
-            reply(1_300, 2, "phone_tap", latency = 200, repliedAt = 1_200, role = "light"),
-            reply(1_700, 3, "phone_observe", latency = 400, repliedAt = 1_600, role = "light"),
-            reply(2_000, 4, "phone_swipe", latency = 300, role = "light_rejected", decisionScore = 0.72, mainDiff = "tool:phone_swipe->phone_observe"),
-            reply(4_000, 4, "phone_observe", latency = 2_000, repliedAt = 4_000, role = "main"),
-            RunEvent.TaskEnded(4_500, "succeeded", "ok"),
-        ))!!
-        assertEquals(5, m.modelCalls)
-        assertEquals(2, m.mainCalls)
-        assertEquals(3, m.lightCalls)
-        assertEquals(1, m.lightRejectedCalls)
-        assertEquals(3_000L, m.mainModelMs)
-        assertEquals(900L, m.lightModelMs)
-        assertEquals(3_900L, m.modelMs)
-        assertEquals(1.0 / 3.0, m.lightRejectionRate, 1e-9)
-        assertEquals(1_500.0, m.mainMeanLatencyMs!!, 1e-9)
-        assertEquals(300.0, m.lightMeanLatencyMs!!, 1e-9)
-    }
-
-    @Test fun zeroMainOrLightCallsGiveNullMeanLatenciesAndZeroRejectionRate() {
-        val m = RunMetrics.of(listOf(
-            started(0),
-            result(500, 0, "phone_launch_app", 500, "r1", source = "replay"),
-            activity(500, 0, "act", "phone_launch_app", "r1", source = "replay"),
-            RunEvent.TaskEnded(600, "succeeded", "ok"),
-        ))!!
-        assertEquals(0, m.mainCalls)
-        assertEquals(0, m.lightCalls)
-        assertEquals(0, m.lightRejectedCalls)
-        assertEquals(0.0, m.lightRejectionRate, 0.0)
-        assertNull(m.mainMeanLatencyMs)
-        assertNull(m.lightMeanLatencyMs)
-    }
-
-    @Test fun legacyRunMetricsJsonDecodesNewFieldsAsZeroAndStatsAggregatesRejectionRate() {
-        val legacy = RunMetricsStore.JSON.decodeFromString(
-            RunMetrics.serializer(),
-            """{"runId":"r0","totalMs":1000,"modelCalls":2,"lightCalls":1}""",
-        )
-        assertEquals(0, legacy.lightRejectedCalls)
-        assertEquals(0, legacy.mainCalls)
-        assertEquals(0L, legacy.mainModelMs)
-        assertEquals(0L, legacy.lightModelMs)
-
-        val stats = RunStats.of(listOf(
-            RunMetrics(lightCalls = 3, lightRejectedCalls = 1, outcome = "succeeded"),
-            RunMetrics(lightCalls = 5, lightRejectedCalls = 1, outcome = "succeeded"),
-        ))
-        assertEquals(8, stats.lightCalls)
-        assertEquals(2, stats.lightRejectedCalls)
-        assertEquals(0.25, stats.lightRejectionRate, 1e-9)
-
-        val emptyStats = RunStats.of(emptyList())
-        assertEquals(0, emptyStats.lightCalls)
-        assertEquals(0, emptyStats.lightRejectedCalls)
-        assertEquals(0.0, emptyStats.lightRejectionRate, 0.0)
     }
 }

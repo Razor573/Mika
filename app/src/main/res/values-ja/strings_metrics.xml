@@ -59,8 +59,4 @@
     <plurals name="chat_steps_n">
         <item quantity="other">%1$d ステップ</item>
     </plurals>
-    <string name="metrics_est_cost">推定コスト</string>
-    <string name="metrics_avg_cost">平均コスト</string>
-    <string name="metrics_total_cost">合計コスト</string>
-    <string name="metrics_light_rejected">軽量モデル拒否</string>
 </resources>

@@ -4,7 +4,6 @@ import com.wangzan101.mika.core.access.AppAccessPolicy
 import com.wangzan101.mika.core.access.AppAccessState
 import com.wangzan101.mika.core.access.AppCategory
 import com.wangzan101.mika.core.access.AppClassification
-import com.wangzan101.mika.core.access.DEFAULT_HARD_LOCKED
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -35,19 +34,6 @@ class AppAccessStore(private val file: File) : AppAccessPolicy {
         it.copy(blocked = if (blocked) it.blocked + pkg else it.blocked - pkg, shareAllowed = it.shareAllowed - pkg)
     }
 
-    @Synchronized fun setHardLocked(pkg: String, locked: Boolean) = update {
-        it.copy(
-            hardLocked = if (locked) it.hardLocked + pkg else it.hardLocked - pkg,
-            shareAllowed = if (locked) it.shareAllowed - pkg else it.shareAllowed,
-        )
-    }
-
-    @Synchronized fun seedHardLockedIfMissing(pkgs: Set<String>) {
-        val missing = pkgs - current().hardLocked
-        if (missing.isEmpty()) return
-        update { it.copy(hardLocked = it.hardLocked + missing, shareAllowed = it.shareAllowed - missing) }
-    }
-
     @Synchronized fun allowAll() = update { it.copy(blocked = emptySet(), shareAllowed = emptySet()) }
     @Synchronized fun setShareAllowed(pkg: String, allowed: Boolean) = update {
         it.copy(shareAllowed = if (allowed) it.shareAllowed + pkg else it.shareAllowed - pkg)
@@ -61,7 +47,7 @@ class AppAccessStore(private val file: File) : AppAccessPolicy {
         it.copy(blocked = it.blocked + packages, shareAllowed = it.shareAllowed - packages)
     }
 
-    @Synchronized fun reset() = persist(AppAccessState(hardLocked = DEFAULT_HARD_LOCKED, revision = current().revision + 1))
+    @Synchronized fun reset() = persist(AppAccessState(revision = current().revision + 1))
 
     private fun update(change: (AppAccessState) -> AppAccessState) {
         check(current().available) { "Application access settings must be reset before editing." }
@@ -73,7 +59,6 @@ class AppAccessStore(private val file: File) : AppAccessPolicy {
         val json = buildJsonObject {
             put("version", 1)
             put("blocked", JsonArray(next.blocked.sorted().map(::JsonPrimitive)))
-            put("hardLocked", JsonArray(next.hardLocked.sorted().map(::JsonPrimitive)))
             put("shareAllowed", JsonArray(next.shareAllowed.sorted().map(::JsonPrimitive)))
             putJsonObject("classifications") {
                 next.classifications.toSortedMap().forEach { (pkg, c) ->
@@ -88,18 +73,17 @@ class AppAccessStore(private val file: File) : AppAccessPolicy {
     }
 
     private fun load(): AppAccessState {
-        if (!file.exists()) return AppAccessState(hardLocked = DEFAULT_HARD_LOCKED)
+        if (!file.exists()) return AppAccessState()
         return runCatching {
             val o = Json.parseToJsonElement(file.readText()).jsonObject
             require(o["version"]?.jsonPrimitive?.int == 1)
             fun strings(key: String) = o.getValue(key).jsonArray.map { it.jsonPrimitive.content }.toSet()
-            val hardLocked = o["hardLocked"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet() ?: DEFAULT_HARD_LOCKED
             val classes = o.getValue("classifications").jsonObject.mapValues { (_, value) ->
                 val c = value.jsonObject
                 AppClassification(AppCategory.valueOf(c.getValue("category").jsonPrimitive.content),
                     c.getValue("reason").jsonPrimitive.content, c.getValue("manual").jsonPrimitive.boolean)
             }
-            AppAccessState(strings("blocked"), strings("shareAllowed"), classes, hardLocked = hardLocked)
+            AppAccessState(strings("blocked"), strings("shareAllowed"), classes)
         }.getOrElse { AppAccessState(available = false) }
     }
 }

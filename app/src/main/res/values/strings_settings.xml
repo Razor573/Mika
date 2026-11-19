@@ -213,7 +213,7 @@
     <string name="mcp_servers_refresh_all">Test all</string>
     <string name="mcp_servers_allowlist">Allowed tools (comma separated, empty = all)</string>
     <string name="settings_show_task_cost">Show task cost</string>
-    <string name="settings_show_task_cost_sub">Show estimated USD cost (and DeepSeek CNY estimate) for new tasks.</string>
+    <string name="settings_show_task_cost_sub">Estimate DeepSeek API charges in Chinese yuan for new tasks.</string>
     <string name="quit_title">Quit Mika completely</string>
     <string name="quit_row_sub">Stops background tasks and hides the floating capsule</string>
     <string name="quit_confirm_body">Tasks that are running will stop, and the floating capsule and notifications will go away. Open Mika again and everything comes back.</string>
@@ -248,10 +248,4 @@
         <item quantity="one">%1$d minute</item>
         <item quantity="other">%1$d minutes</item>
     </plurals>
-    <string name="settings_compact_ui_tree">Compact UI tree</string>
-    <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
-    <string name="settings_task_usd_budget">Spend cap per task (USD)</string>
-    <string name="settings_task_usd_budget_sub">Only calls with known pricing or reported cost count. Once the cap is reached, Mika pauses to ask before continuing, or stops if unattended.</string>
-    <string name="settings_usd_budget_custom">Custom spend cap (USD)</string>
-    <string name="settings_usd_budget_invalid">Enter an amount from %1$s to %2$s.</string>
 </resources>

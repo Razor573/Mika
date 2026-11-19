@@ -3,25 +3,19 @@ package com.wangzan101.mika.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.wangzan101.mika.R
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
-import com.wangzan101.mika.core.usage.UsdBudgetLimits
 import com.wangzan101.mika.ui.components.MikaDialog
 import com.wangzan101.mika.ui.components.RadioRow
 import com.wangzan101.mika.ui.theme.MikaTheme
 import java.text.NumberFormat
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.round
 
 /** 设置与运行记录里都显示完整数字，避免紧凑格式把预算四舍五入成另一个值。 */
 internal fun tokenBudgetNumber(value: Long): String = NumberFormat.getIntegerInstance().format(value)
@@ -73,67 +67,6 @@ internal fun TokenBudgetDialog(
                     )
                 }
                 saveError?.let { Text(it, Modifier.padding(top = 4.dp), color = MikaTheme.colors.bad) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { customValue?.let(onPick) }, enabled = customValue != null) {
-                Text(stringResource(R.string.settings_token_budget_apply))
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-    )
-}
-
-internal fun usdBudgetLabel(value: Double): String {
-    val cents = value * 100.0
-    return if (abs(cents - round(cents)) < 1e-6) String.format(Locale.ROOT, "\$%.2f", value)
-    else String.format(Locale.ROOT, "\$%.3f", value).trimEnd('0').trimEnd('.')
-}
-
-@Composable
-internal fun UsdBudgetDialog(
-    title: String,
-    description: String,
-    current: Double?,
-    custom: String,
-    onCustom: (String) -> Unit,
-    onPick: (Double?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val customValue = custom.trim().toDoubleOrNull()?.takeIf(UsdBudgetLimits::valid)
-    MikaDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                Text(description, Modifier.padding(bottom = 8.dp))
-                RadioRow(
-                    stringResource(R.string.settings_token_budget_unlimited),
-                    selected = current == null, onClick = { onPick(null) }, first = true,
-                )
-                UsdBudgetLimits.PRESETS.forEach { preset ->
-                    RadioRow(
-                        usdBudgetLabel(preset),
-                        selected = current != null && abs(current - preset) < 1e-9,
-                        onClick = { onPick(preset) },
-                    )
-                }
-                OutlinedTextField(
-                    value = custom, onValueChange = onCustom, singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    label = { Text(stringResource(R.string.settings_usd_budget_custom)) },
-                    isError = custom.isNotEmpty() && customValue == null,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                )
-                if (custom.isNotEmpty() && customValue == null) {
-                    Text(
-                        stringResource(
-                            R.string.settings_usd_budget_invalid,
-                            usdBudgetLabel(UsdBudgetLimits.MIN), usdBudgetLabel(UsdBudgetLimits.MAX),
-                        ),
-                        Modifier.padding(top = 4.dp),
-                    )
-                }
             }
         },
         confirmButton = {

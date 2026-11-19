@@ -258,7 +258,7 @@ class AgentLoopVerifyTest {
         )
         val checker = FakeModel(text(FAIL))
         loop(main, checker, screen).run("找搜索")
-        assertTrue(main.requests[1].toString().let { "TOOL_MARKER" in it && "THINK_MARKER" in it && "WORKER_MARKER" !in it })
+        assertTrue(main.requests[1].toString().let { "TOOL_MARKER" in it && "WORKER_MARKER" in it })
         val sent = checker.requests.single()
         assertEquals(Role.User, sent.single().role)
         listOf("TOOL_MARKER", "WORKER_MARKER", "THINK_MARKER", "BASE").forEach { assertTrue(it, it !in sent.toString()) }

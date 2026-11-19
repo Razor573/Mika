@@ -262,12 +262,4 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
-    <string name="models_custom_rates">Custom USD rates</string>
-    <string name="models_custom_rates_unset">Not set</string>
-    <string name="models_rate_summary">$%1$s in / $%2$s out per 1M</string>
-    <string name="models_rate_free">Free tier ($0.00)</string>
-    <string name="models_rate_input">Input ($ per 1M tokens)</string>
-    <string name="models_rate_output">Output ($ per 1M tokens)</string>
-    <string name="models_rate_cached">Cached input ($ per 1M tokens, optional)</string>
-    <string name="models_rate_clear">Clear custom rates</string>
 </resources>

@@ -307,9 +307,4 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
-    <string name="shortcut_pin">Pin to home screen</string>
-    <string name="shortcut_pin_requested">Home screen shortcut requested</string>
-    <string name="shortcut_pin_unsupported">This launcher does not support pinning shortcuts</string>
-    <string name="shortcut_invalid">Invalid or expired shortcut</string>
-    <string name="shortcut_target_missing">This saved task or multi-step task no longer exists</string>
 </resources>

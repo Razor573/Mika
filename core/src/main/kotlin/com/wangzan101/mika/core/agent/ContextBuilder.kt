@@ -9,8 +9,6 @@ import com.wangzan101.mika.core.observation.PlaceKind
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.Role
-import com.wangzan101.mika.core.model.ToolSpec
-import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -176,10 +174,6 @@ class ContextBuilder(
         return Part.Text(envelope(ContextKind.RuntimeState, "runtime", "Current place: $surface\nStep: $steps\nLocal time: $time$language"))
     }
 
-    /** Computes a stable SHA-256 hex digest over the cacheable prompt prefix (system prompt, tools, and messages before the trailing observation). */
-    fun cachePrefixHash(systemPrompt: String, tools: List<ToolSpec>, messages: List<Message>): String =
-        Companion.cachePrefixHash(systemPrompt, tools, messages)
-
     private fun knowledgePiece(e: KnowledgeEntry, note: String, withLinks: Boolean): Piece {
         val links = e.links.takeIf { withLinks && it.isNotEmpty() }?.joinToString("\n", "\n\n$LINKS_HEADER\n") { l ->
             "- ${l.name}: ${l.uri}" + (l.packageName?.let { " (package $it)" } ?: "")
@@ -292,77 +286,6 @@ class ContextBuilder(
         fun sourceOf(m: Message): String? {
             kindOf(m) ?: return null
             return (m.parts.first() as Part.Text).text.substringAfter(" source=\"").substringBefore('"')
-        }
-
-        /**
-         * SHA-256 hex digest over [systemPrompt], [tools] `(name, description, parametersJsonSchema)` in order,
-         * and the [messages] prefix before any trailing runtime state and trailing observation.
-         */
-        fun cachePrefixHash(systemPrompt: String, tools: List<ToolSpec>, messages: List<Message>): String {
-            val prefix = cacheableMessagePrefix(messages)
-            val digest = MessageDigest.getInstance("SHA-256")
-            fun feed(tag: String, value: String) {
-                val bytes = value.toByteArray(Charsets.UTF_8)
-                digest.update("$tag:${bytes.size}:".toByteArray(Charsets.UTF_8))
-                digest.update(bytes)
-                digest.update('\n'.code.toByte())
-            }
-            feed("system", systemPrompt)
-            feed("tools", tools.size.toString())
-            for (t in tools) {
-                feed("tool.name", t.name)
-                feed("tool.desc", t.description)
-                feed("tool.schema", t.parametersJsonSchema)
-            }
-            feed("messages", prefix.size.toString())
-            for (m in prefix) {
-                feed("msg.role", m.role.name)
-                feed("msg.author", m.author.name)
-                feed("msg.parts", m.parts.size.toString())
-                for (p in m.parts) when (p) {
-                    is Part.Text -> feed("part.text", p.text)
-                    is Part.Thinking -> {
-                        feed("part.thinking.text", p.text)
-                        feed("part.thinking.opaque", p.opaque?.let { "1:$it" } ?: "0")
-                    }
-                    is Part.ToolCall -> {
-                        feed("part.call.id", p.id)
-                        feed("part.call.name", p.name)
-                        feed("part.call.args", p.argsJson)
-                        feed("part.call.opaque", p.opaque?.let { "1:$it" } ?: "0")
-                    }
-                    is Part.ToolResult -> {
-                        feed("part.result.id", p.callId)
-                        feed("part.result.err", p.isError.toString())
-                        feed("part.result.content", p.content)
-                    }
-                    is Part.Image -> {
-                        feed("part.image.mime", p.mime)
-                        feed("part.image.dims", "${p.width}x${p.height}")
-                        feed("part.image.shot", p.screenshotId?.let { "1:$it" } ?: "0")
-                        feed("part.image.data", p.pngBase64)
-                    }
-                }
-            }
-            return digest.digest().joinToString("") { "%02x".format(it) }
-        }
-
-        private fun cacheableMessagePrefix(messages: List<Message>): List<Message> {
-            val stripped = messages.map(::withoutRuntimeState).filter { it.parts.isNotEmpty() }
-            if (stripped.isEmpty()) return emptyList()
-            if (stripped.size == 1) {
-                val only = stripped[0]
-                return if (only.role == Role.Tool || only.author == Author.Mika) emptyList() else stripped
-            }
-            var end = stripped.size
-            while (end > 0 && stripped[end - 1].role == Role.User && stripped[end - 1].author == Author.Mika) {
-                end--
-            }
-            if (end > 0 && stripped[end - 1].role == Role.Tool) {
-                while (end > 0 && stripped[end - 1].role == Role.Tool) end--
-                return stripped.subList(0, end)
-            }
-            return stripped.dropLast(1)
         }
 
         private fun attr(s: String) = s.replace("\"", "'").replace("\n", " ")

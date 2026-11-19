@@ -16,7 +16,7 @@ internal object Failover {
      * 服务商身份和每日预算使用同一个 ID。返回下一个要试的下标，不换为 null。
      */
     fun nextIndex(e: ModelError, fromIndex: Int, providerIds: List<String?>, chainSize: Int): Int? = when (e) {
-        is ModelError.TaskBudgetExceeded, is ModelError.UsdBudgetExceeded -> null
+        is ModelError.TaskBudgetExceeded -> null
         is ModelError.DailyBudgetExceeded -> e.providerId?.let { exhausted ->
             (fromIndex + 1 until chainSize).firstOrNull { index ->
                 val candidate = providerIds.getOrNull(index)

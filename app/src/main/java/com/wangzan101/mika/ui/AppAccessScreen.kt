@@ -21,10 +21,8 @@ import com.wangzan101.mika.cap.phone.a11y.launchableApps
 import com.wangzan101.mika.core.access.*
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.ui.components.*
-import com.wangzan101.mika.ui.theme.MikaIcons
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -58,8 +56,7 @@ internal fun classifierLanguage(locale: java.util.Locale): String = when {
 
 @Composable
 fun AppAccessScreen(onBack: () -> Unit, classifyApps: Boolean = true) {
-    val uiContext = LocalContext.current
-    val app = uiContext.applicationContext as MikaApp
+    val app = LocalContext.current.applicationContext as MikaApp
     val store = app.appAccess
     val state by store.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -71,45 +68,15 @@ fun AppAccessScreen(onBack: () -> Unit, classifyApps: Boolean = true) {
     var confirmingClassify by remember { mutableStateOf(false) }
     var recommending by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<String?>(null) }
-    var countdownPkg by remember { mutableStateOf<String?>(null) }
-    var authSignal by remember { mutableStateOf<android.os.CancellationSignal?>(null) }
-    DisposableEffect(store) {
-        val protection = store.protectUi()
-        onDispose {
-            authSignal?.cancel()
-            protection.close()
-        }
-    }
-
-    val appLabels = remember(apps) { apps.toMap() }
-    fun labelOf(pkg: String): String = appLabels[pkg] ?: pkg
+    DisposableEffect(store) { val protection = store.protectUi(); onDispose { protection.close() } }
 
     // 推荐只含还在允许范围内的金融应用:已经禁用的不再重复出现。
     val recommended = apps.filter { (pkg, _) ->
-        state.classifications[pkg]?.category == AppCategory.Finance && pkg !in state.effectiveBlocked
+        state.classifications[pkg]?.category == AppCategory.Finance && pkg !in state.blocked
     }
 
     fun save(action: () -> Unit) {
         runCatching(action).onFailure { failure = Failure(R.string.appaccess_error_save, it.message) }
-    }
-
-    fun requestUnlockHardLocked(pkg: String) {
-        failure = null
-        authSignal?.cancel()
-        val label = labelOf(pkg)
-        authSignal = AppAccessAuth.authenticateUnlock(
-            uiContext,
-            uiContext.getString(R.string.appaccess_hard_locked_auth_title, label),
-            uiContext.getString(R.string.appaccess_hard_locked_auth_sub),
-        ) { result ->
-            authSignal = null
-            when (result) {
-                AppAccessAuthResult.Authenticated -> save { store.setHardLocked(pkg, false) }
-                AppAccessAuthResult.NeedsCountdownFallback -> countdownPkg = pkg
-                is AppAccessAuthResult.Failed ->
-                    failure = Failure(R.string.appaccess_hard_locked_auth_failed, result.message)
-            }
-        }
     }
     suspend fun loadApps() {
         apps = withContext(Dispatchers.IO) { launchableApps(app.packageManager, app.packageName) }
@@ -185,27 +152,6 @@ fun AppAccessScreen(onBack: () -> Unit, classifyApps: Boolean = true) {
                 )
             }
             TextButton({ save { store.allowAll() } }) { Text(stringResource(R.string.appaccess_allow_all)) }
-            val hardLockedRows = state.hardLocked.sorted().map { it to labelOf(it) }.filter { (pkg, label) ->
-                pkg.contains(search, true) || label.contains(search, true)
-            }
-            if (hardLockedRows.isNotEmpty()) {
-                GroupLabel("${stringResource(R.string.appaccess_hard_locked_title)} · ${hardLockedRows.size}")
-                Text(stringResource(R.string.appaccess_hard_locked_note))
-                GroupCard {
-                    hardLockedRows.forEachIndexed { index, (pkg, label) ->
-                        ListRow(
-                            MikaIcons.Lock,
-                            label,
-                            pkg,
-                            first = index == 0,
-                            detail = stringResource(R.string.appaccess_hard_locked_item_sub),
-                        ) {
-                            Text(stringResource(R.string.appaccess_blocked))
-                            Switch(true, { locked -> if (!locked) requestUnlockHardLocked(pkg) })
-                        }
-                    }
-                }
-            }
             AppCategory.entries.forEach { category ->
                 val rows = apps.filter { (pkg, label) ->
                     (state.classifications[pkg]?.category ?: AppCategory.Unknown) == category &&
@@ -217,28 +163,14 @@ fun AppAccessScreen(onBack: () -> Unit, classifyApps: Boolean = true) {
                     GroupCard {
                         rows.forEachIndexed { index, (pkg, label) ->
                             val classification = state.classifications[pkg]
-                            val hardLocked = pkg in state.hardLocked
-                            val isBlocked = pkg in state.effectiveBlocked
                             val detail = when {
-                                hardLocked -> stringResource(R.string.appaccess_hard_locked_item_sub)
                                 classification == null -> null
                                 classification.manual -> stringResource(R.string.appaccess_category_manual)
                                 else -> classification.reason.ifBlank { null }
                             }
                             ListRow(null, label, pkg, first = index == 0, detail = detail, onClick = { editing = pkg }) {
-                                Text(stringResource(if (isBlocked) R.string.appaccess_blocked else R.string.appaccess_allowed))
-                                Switch(!isBlocked, { allowed ->
-                                    if (hardLocked) {
-                                        if (allowed) requestUnlockHardLocked(pkg)
-                                    } else {
-                                        save { store.setBlocked(pkg, !allowed) }
-                                    }
-                                })
-                            }
-                            if (category == AppCategory.Finance && pkg in state.blocked && !hardLocked) {
-                                TextButton({ save { store.setHardLocked(pkg, true) } }) {
-                                    Text(stringResource(R.string.appaccess_hard_lock_add))
-                                }
+                                Text(stringResource(if (pkg in state.blocked) R.string.appaccess_blocked else R.string.appaccess_allowed))
+                                Switch(pkg !in state.blocked, { allowed -> save { store.setBlocked(pkg, !allowed) } })
                             }
                             if (pkg in state.shareAllowed) {
                                 TextButton({ save { store.setShareAllowed(pkg, false) } }) {
@@ -295,52 +227,12 @@ fun AppAccessScreen(onBack: () -> Unit, classifyApps: Boolean = true) {
     }
     editing?.let { pkg ->
         MikaDialog(onDismissRequest = { editing = null }, title = { Text(stringResource(R.string.appaccess_edit_category)) }, text = {
-            Column {
-                AppCategory.entries.forEach { category ->
-                    TextButton({
-                        save { store.classify(mapOf(pkg to AppClassification(category, "", manual = true))) }
-                        editing = null
-                    }) { Text(category.title()) }
-                }
-                if (pkg !in state.hardLocked && (pkg in state.blocked || state.classifications[pkg]?.category == AppCategory.Finance)) {
-                    TextButton({
-                        save { store.setHardLocked(pkg, true) }
-                        editing = null
-                    }) { Text(stringResource(R.string.appaccess_hard_lock_add)) }
-                }
-            }
+            Column { AppCategory.entries.forEach { category ->
+                TextButton({
+                    save { store.classify(mapOf(pkg to AppClassification(category, "", manual = true))) }
+                    editing = null
+                }) { Text(category.title()) }
+            } }
         }, confirmButton = { TextButton({ editing = null }) { Text(stringResource(R.string.appaccess_cancel)) } })
-    }
-    countdownPkg?.let { pkg ->
-        var secondsLeft by remember(pkg) { mutableIntStateOf(5) }
-        LaunchedEffect(pkg) {
-            while (secondsLeft > 0) {
-                delay(1_000L)
-                secondsLeft--
-            }
-        }
-        val label = labelOf(pkg)
-        MikaDialog(
-            onDismissRequest = { countdownPkg = null },
-            title = { Text(stringResource(R.string.appaccess_hard_locked_unlock_title)) },
-            text = {
-                Text(
-                    if (secondsLeft > 0) stringResource(R.string.appaccess_hard_locked_countdown_wait, label, secondsLeft)
-                    else stringResource(R.string.appaccess_hard_locked_countdown_ready, label),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    {
-                        save { store.setHardLocked(pkg, false) }
-                        countdownPkg = null
-                    },
-                    enabled = secondsLeft == 0,
-                ) { Text(stringResource(R.string.appaccess_hard_locked_unlock_confirm)) }
-            },
-            dismissButton = {
-                TextButton({ countdownPkg = null }) { Text(stringResource(R.string.appaccess_cancel)) }
-            },
-        )
     }
 }

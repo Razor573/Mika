@@ -73,8 +73,4 @@
         <item quantity="many">%1$d passos</item>
         <item quantity="other">%1$d passos</item>
     </plurals>
-    <string name="metrics_est_cost">Custo est.</string>
-    <string name="metrics_avg_cost">Custo médio</string>
-    <string name="metrics_total_cost">Custo total</string>
-    <string name="metrics_light_rejected">Modelo leve rejeitado</string>
 </resources>

@@ -15,7 +15,6 @@ import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.net.LocalHosts
 import com.wangzan101.mika.settings.ModelOption
 import com.wangzan101.mika.settings.ModelOptions
-import com.wangzan101.mika.settings.CustomModelRate
 import com.wangzan101.mika.settings.Provider
 import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderConnection
@@ -1139,12 +1138,6 @@ class ModelSetupViewModel(
     fun setModelVision(providerId: String, model: String, sees: Boolean) {
         store.setModelVision(providerId, model, sees)
         sync()
-    }
-
-    fun setCustomModelRate(providerId: String, model: String, rate: CustomModelRate?): Boolean {
-        val saved = store.setCustomModelRate(providerId, model, rate)
-        sync()
-        return saved
     }
 
     /** 把 [providerId] 下的 [model] 用作 [role](选择页和「用作」面板都走这里):没有配置的当场建一条。 */

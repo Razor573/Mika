@@ -148,7 +148,6 @@ fun SettingsScreen(
     var personalStart by remember { mutableStateOf(flags.personalStart()) }
     var parallelMax by remember { mutableIntStateOf(flags.parallelMax()) }
     var keepScreenOn by remember { mutableStateOf(flags.keepScreenOn()) }
-    var compactUiTree by remember { mutableStateOf(flags.uiTreeCompact()) }
     val pocketPrefs = remember { context.getSharedPreferences(com.wangzan101.mika.pocket.PocketGuardManager.PREFS, 0) }
     var pocketGuard by remember { mutableStateOf(pocketPrefs.getBoolean(com.wangzan101.mika.pocket.PocketGuardManager.ENABLED, false)) }
     var pocketCompletionLock by remember { mutableStateOf(pocketPrefs.getBoolean(com.wangzan101.mika.pocket.PocketGuardManager.LOCK_ON_COMPLETION, false)) }
@@ -158,7 +157,6 @@ fun SettingsScreen(
     var stepLimit by remember { mutableStateOf(flags.taskStepLimit()) }
     var triggerRunMinutes by remember { mutableStateOf(flags.triggerRunMinutes()) }
     var tokenBudget by remember { mutableStateOf(flags.taskTokenBudget()) }
-    var usdBudget by remember { mutableStateOf(flags.taskUsdBudget()) }
     var selfConfig by remember { mutableStateOf(flags.selfConfig()) }
     var selfOperate by remember { mutableStateOf(flags.selfOperate()) }
     var deviceFiles by remember { mutableStateOf(flags.deviceFiles()) }
@@ -307,9 +305,7 @@ fun SettingsScreen(
             stepLimit = stepLimit, onStepLimit = { flags.setTaskStepLimit(it); stepLimit = it },
             triggerRunMinutes = triggerRunMinutes, onTriggerRunMinutes = { flags.setTriggerRunMinutes(it); triggerRunMinutes = it },
             tokenBudget = tokenBudget, onTokenBudget = { flags.setTaskTokenBudget(it); tokenBudget = it },
-            usdBudget = usdBudget, onUsdBudget = { flags.setTaskUsdBudget(it); usdBudget = it },
             showTaskCost = showTaskCost, onShowTaskCost = { flags.setShowTaskCost(it); showTaskCost = it },
-            compactUiTree = compactUiTree, onCompactUiTree = { flags.setUiTreeCompact(it); compactUiTree = it },
             pocketGuard = pocketGuard, onPocketGuard = { pocketPrefs.edit().putBoolean(com.wangzan101.mika.pocket.PocketGuardManager.ENABLED, it).apply(); pocketGuard = it },
             pocketCompletionLock = pocketCompletionLock, onPocketCompletionLock = { pocketPrefs.edit().putBoolean(com.wangzan101.mika.pocket.PocketGuardManager.LOCK_ON_COMPLETION, it).apply(); pocketCompletionLock = it },
             selfConfig = selfConfig, onSelfConfig = { flags.setSelfConfig(it); selfConfig = it },

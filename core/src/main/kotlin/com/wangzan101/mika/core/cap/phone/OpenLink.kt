@@ -1,6 +1,5 @@
 package com.wangzan101.mika.core.cap.phone
 
-import com.wangzan101.mika.core.access.AppAccessDenied
 import com.wangzan101.mika.core.gate.IrreversibleDetector
 import com.wangzan101.mika.core.prompt.Feedback
 import com.wangzan101.mika.core.prompt.Prompts
@@ -47,30 +46,7 @@ internal object OpenLink : PhoneTool {
         val pkg = a.str("package")?.trim()
         LinkPolicy.check(action, uri, pkg)?.let { return fail("invalid_link", it) }
         if (action == null && (uri to pkg) !in ctx.allowedLinks) {
-            val access = ctx.phone.screen.appAccess.current()
-            when (val decision = VerifiedIntentRouter.classify(action, uri, pkg, listedInKnowledge = false, access = access)) {
-                is IntentRouteDecision.DirectAllowed -> Unit
-                is IntentRouteDecision.ConfirmRequired -> {
-                    val answer = ctx.ask?.awaitAnswer(
-                        "Open ${decision.scheme} link (${decision.uri})?",
-                        listOf("Allow", "Cancel"),
-                    )
-                    if (answer != "Allow") {
-                        return fail("confirmation_required", "User confirmation is required to open call or message links.")
-                    }
-                }
-                is IntentRouteDecision.Denied -> {
-                    if (AppAccessDenied.isAppAccessCode(decision.code)) {
-                        return fail(decision.code, decision.message, recoverable = false)
-                    }
-                    val message = if (VerifiedIntentRouter.isDirectSafeScheme(uri) || VerifiedIntentRouter.requiresConfirmation(uri)) {
-                        decision.message
-                    } else {
-                        Feedback["link_not_listed"]
-                    }
-                    return fail("invalid_link", message)
-                }
-            }
+            return fail("invalid_link", Feedback["link_not_listed"])
         }
         // 换了页面,之前被拒的付款申报就不是这次的了
         ctx.refusedPay = null

@@ -31,9 +31,7 @@ import com.wangzan101.mika.settings.Provider
 import com.wangzan101.mika.settings.ProviderStore
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.ListRow
-import com.wangzan101.mika.ui.components.PillTone
 import com.wangzan101.mika.ui.components.RowChevron
-import com.wangzan101.mika.ui.components.StatusPill
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.theme.MikaType
 import kotlinx.coroutines.Dispatchers
@@ -118,9 +116,6 @@ private fun AllowanceRow(
     val detail = listOfNotNull(lastUpdated, link?.takeIf { source != null }).joinToString("\n")
     ListRow(icon = null, title = provider.name, subtitle = subtitle, detail = detail, first = first,
         onClick = route.dashboard?.let { url -> { onOpenUrl(url) } }) {
-        if ((current as? ProviderAllowance.KeyLimit)?.isFreeTier == true) {
-            StatusPill(tr(R.string.usage_allowance_free_tier), PillTone.Neutral)
-        }
         if (route.dashboard != null) RowChevron()
     }
 }

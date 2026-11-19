@@ -5,7 +5,6 @@ import com.wangzan101.mika.core.guard.GuardVerdict
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.tool.Outcome
 import kotlinx.serialization.json.JsonPrimitive
-import java.util.Locale
 
 /**
  * 停止规则:任务什么时候、以什么结局结束(放弃、守卫叫停、模型出错、没给出回答、步数用完)。办完不在这里:
@@ -42,7 +41,6 @@ internal object StopRules {
     /** 模型调用失败(重试过仍不行,或重试也没用)。 */
     fun modelFailed(e: Throwable): TaskState.Failed = when (e) {
         is ModelError.TaskBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
-        is ModelError.UsdBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
         is ModelError.DailyBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
         is ModelError.ProactiveBudgetExceeded -> TaskState.Failed(userReason(e), FailKind.TokenLimit)
         is ModelError.RateLimited -> TaskState.Failed(userReason(e), FailKind.Model, FailureCode.ModelRateLimited)
@@ -70,8 +68,6 @@ internal fun userReason(e: ModelError): String = when (e) {
     is ModelError.IllegalHeader -> "API key contains unusable characters. In Settings › Models, paste only the key itself without labels, line breaks, or emoji."
     is ModelError.QuotaExceeded -> "Model account quota exhausted. Check your provider account balance or plan."
     is ModelError.TaskBudgetExceeded -> "Reached this task's budget limit of ${e.limit} tokens; the task is not finished."
-    is ModelError.UsdBudgetExceeded ->
-        "Reached this task's spend cap of \$${String.format(Locale.ROOT, "%.2f", e.limitUsd)} (spent \$${String.format(Locale.ROOT, "%.2f", e.spentUsd)}); the task is not finished."
     is ModelError.DailyBudgetExceeded ->
         "Provider \"${e.providerName}\" has reached today's budget limit of ${e.limit} tokens; the task is not finished. It will reset when the local calendar date changes."
     // 主动能力的调用不在任务里发,正常不会走到这里;万一走到,只如实说明,不提示用户去改什么

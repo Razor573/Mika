@@ -29,6 +29,4 @@
     <string name="dev_screen_tables_sub">首次读取屏幕时，把重复字段写成表格；保留元素引用和完整界面树。</string>
     <string name="dev_device_files">导入手机文件</string>
     <string name="dev_device_files_sub">允许 Mika 将手机共享存储中的文件复制到工作区。更改对新任务生效。</string>
-    <string name="dev_full_raw_tree">Full raw tree dump</string>
-    <string name="dev_full_raw_tree_sub">Send unpruned UI tree and full screenMap instead of compact skeleton</string>
 </resources>

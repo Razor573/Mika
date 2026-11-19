@@ -91,7 +91,7 @@ internal class Interfaces(
 
     val focus = SurfaceFocus(surfaces)
     val sessions: Map<String, ScreenSession> = focus.surfaces.associate { s ->
-        s.id to ScreenSession(s, stableRefs, config.visionEnabled, config.recordFrames, lastRead, shots, config.vision, config.adaptiveVision, config.compactUiTree, config.fullRawTreeDump)
+        s.id to ScreenSession(s, stableRefs, config.visionEnabled, config.recordFrames, lastRead, shots, config.vision, config.adaptiveVision)
     }
     private val gateView = GateView()
 

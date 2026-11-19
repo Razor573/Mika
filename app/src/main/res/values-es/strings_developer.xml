@@ -29,6 +29,4 @@
     <string name="dev_screen_tables_sub">Al leer una pantalla por primera vez, envía los campos repetidos como columnas. Conserva las referencias y el árbol completo.</string>
     <string name="dev_device_files">Importar archivos del dispositivo</string>
     <string name="dev_device_files_sub">Permite que Mika copie archivos del almacenamiento compartido del dispositivo al espacio de trabajo. Los cambios se aplican a las tareas nuevas.</string>
-    <string name="dev_full_raw_tree">Full raw tree dump</string>
-    <string name="dev_full_raw_tree_sub">Send unpruned UI tree and full screenMap instead of compact skeleton</string>
 </resources>

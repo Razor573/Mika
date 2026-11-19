@@ -48,7 +48,6 @@ import com.wangzan101.mika.core.record.RunSink
 import com.wangzan101.mika.core.run.RunEventBus
 import com.wangzan101.mika.core.run.RunInbox
 import com.wangzan101.mika.core.run.RunSpec
-import com.wangzan101.mika.core.run.Attendance
 import com.wangzan101.mika.core.run.RunProvenance
 import com.wangzan101.mika.core.run.RunOrigin
 import com.wangzan101.mika.core.run.Interaction
@@ -76,10 +75,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -88,7 +84,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.time.ZoneId
-import java.util.Locale
 import com.wangzan101.mika.core.userscreen.UserScreenSource
 import com.wangzan101.mika.core.general.HISTORY_READ
 import com.wangzan101.mika.core.general.VIEW_USER_SCREEN
@@ -96,16 +91,16 @@ import com.wangzan101.mika.core.general.VIEW_USER_SCREEN
 /** 批做完后另看的一眼:内容和画面同一时刻。 */
 private fun batchViewNote(content: String) = Feedback.format("batch_view_note", "screen" to content)
 
-/** 进度块取出后，其余文字在最终回答时保持一条助手消息；带工具调用的中途轮次只留工具调用并受输出上限约束。 */
-private fun cleanReplyParts(parts: List<Part>, text: String): List<Part> =
-    capToolCallParts(parts, text)
-
-/** 规范化助手回复片段：含工具调用时剥除正文并限制工具参数与非私有思考在 [maxToolTokens] 以内；无工具调用时完整保留最终回答。 */
-internal fun capToolCallParts(
-    parts: List<Part>,
-    text: String,
-    maxToolTokens: Int = AgentLoop.MAX_TOOL_CALL_OUTPUT_TOKENS,
-): List<Part> = AgentLoop.capToolCallParts(parts, text, maxToolTokens)
+/** 进度块取出后，其余文字保持一条助手消息；调用及其私有数据原样保留。 */
+private fun cleanReplyParts(parts: List<Part>, text: String): List<Part> {
+    var textWritten = false
+    return parts.mapNotNull { part ->
+        if (part !is Part.Text) part else if (textWritten) null else {
+            textWritten = true
+            Part.Text(text).takeIf { text.isNotEmpty() }
+        }
+    }
+}
 
 /**
  * 写、改 Mika 自己的记忆不先问「是讨论还是要操作」。那个判断管的是要不要去读、去动 App 和网站;这两个工具只动 Mika 自己的记忆,
@@ -213,7 +208,7 @@ class AgentLoop(
         tools.observer = { record { order.observed(RunEvent.Observed.of(it)) } }
     }
 
-    private val caller = ModelCaller(model, tools, router, flags, retry, ::emit, ::now, autonomous, trace, modelFallbacks, modelChainProviderIds, decision = intentDecision)
+    private val caller = ModelCaller(model, tools, router, flags, retry, ::emit, ::now, autonomous, trace, modelFallbacks, modelChainProviderIds)
     private val intentGate = intentJudge?.let {
         IntentGate(it, model.takeUnless { main -> main === it }, intentDecision) { detail ->
             emit(RunEvent.State(now(), "jev_intent", detail))
@@ -273,12 +268,11 @@ class AgentLoop(
     /** 本任务的回答已因核对没对上退回过一次;再没对上就标成未确认交出,不再退回。 */
     private var gapsNudged = false
     private var provenance = RunProvenance()
-    private var readOnly = false
     val activeAsk: Delivery.Ask? get() = user.activeAsk
 
     /** 新入口:同一对话里的插话和控制经 [inbox] 进入;旧入口继续使用相同的执行路径。 */
     suspend fun run(spec: RunSpec, inbox: RunInbox): TaskState {
-        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget, spec.readOnly)
+        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget)
         // App 在整个运行外层装好共享 tally,子任务也沿用;直接走核心入口时由这里保证 RunSpec 的预算生效。
         if (spec.tokenBudget == null || currentCoroutineContext()[RunUsageTally] != null) return start()
         return withContext(RunUsageTally(spec.tokenBudget)) { start() }
@@ -289,11 +283,10 @@ class AgentLoop(
 
     private suspend fun runInternal(
         task: String, priorTurns: List<Turn>, inbox: RunInbox?, runProvenance: RunProvenance, threadId: String,
-        tokenBudget: Long? = null, runReadOnly: Boolean = false,
+        tokenBudget: Long? = null,
     ): TaskState {
         cancelRequested = false
         provenance = runProvenance
-        readOnly = runReadOnly
         user.begin(threadId, runProvenance, interaction)
         inbox?.bind(object : RunInbox.Handler {
             override suspend fun answer(text: String, askId: String?) = user.answerInput(text, askId)
@@ -547,31 +540,20 @@ class AgentLoop(
             }
         }
 
-        var pendingToolCapNotice: Message? = null
         for (step in 1..maxSteps) {
-            pendingToolCapNotice?.let { history += it; pendingToolCapNotice = null }
             appendSteers(history, inbox)
             if (maxSteps != Int.MAX_VALUE) TurnPolicy.beforeStep(TurnSnapshot(step, maxSteps))?.let { history += ctx.notice(it.source, it.text) }
             appendRuntimeState(history, place, labels, step)
             _state.value = TaskState.Running(step, note, progress = progressState())
             refreshOffer()
             var asked = now()
-            var pendingRouted: Pair<ModelReply, ChatModel>? = null
-            while (true) {
-                asked = now()
-                try {
-                    pendingRouted = routedOrRedirect(inbox, history, specs, track, step, { asked = it }, previewFor(step))
-                    break
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: ModelError.UsdBudgetExceeded) {
-                    if (!extendUsdBudgetIfAllowed(e)) return StopRules.modelFailed(e)
-                    _state.value = TaskState.Running(step, note, progress = progressState())
-                } catch (e: Exception) {
-                    return StopRules.modelFailed(e)
-                }
+            val routed = try {
+                routedOrRedirect(inbox, history, specs, track, step, { asked = it }, previewFor(step))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return StopRules.modelFailed(e)
             }
-            val routed = pendingRouted
             if (routed == null) {
                 keepInterrupted(history, inbox, step)
                 continue
@@ -596,19 +578,6 @@ class AgentLoop(
             val cleanParts = cleanReplyParts(reply.parts, text)
             history += Message(Role.Assistant, cleanParts, Author.Mika).also { caller.noteReply(it, used, reply.usage) }
             val calls = reply.parts.filterIsInstance<Part.ToolCall>()
-            if (calls.isNotEmpty()) {
-                val rawTextTokens = TokenEstimate.of(text)
-                val rawToolTokens = rawTextTokens + calls.sumOf { TokenEstimate.of(it.name + it.argsJson) }
-                if (rawToolTokens > MAX_TOOL_CALL_OUTPUT_TOKENS) {
-                    emit(RunEvent.State(now(), "tool_output_capped", "step=$step raw=$rawToolTokens max=$MAX_TOOL_CALL_OUTPUT_TOKENS"))
-                }
-                if (rawTextTokens > MAX_TOOL_CALL_OUTPUT_TOKENS) {
-                    pendingToolCapNotice = ctx.notice(
-                        "tool_only_cap",
-                        "Mid-task tool calls must not include prose; call tools directly with concise arguments only.",
-                    )
-                }
-            }
             note = text.ifEmpty { calls.firstOrNull()?.name ?: note }
             val tool = calls.firstOrNull()?.name
             val reason = calls.firstOrNull()?.let { tools.callReason(it.name, parseArgs(it.argsJson)) }
@@ -840,22 +809,6 @@ class AgentLoop(
         return finalTurn(task, history, specs, maxSteps + 1, labels, place, recorder, facts(), inbox)
     }
 
-    private suspend fun extendUsdBudgetIfAllowed(e: ModelError.UsdBudgetExceeded): Boolean {
-        if (provenance.origin != RunOrigin.Ui || provenance.attendance == Attendance.Unattended || readOnly) return false
-        val tally = currentCoroutineContext()[RunUsageTally] ?: return false
-        val spent = String.format(Locale.ROOT, "%.2f", e.spentUsd)
-        val cap = String.format(Locale.ROOT, "%.2f", e.limitUsd)
-        val prompt = "Spend cap reached (\$$spent / \$$cap). Continue this task?"
-        val answer = user.awaitAnswer(prompt, listOf("+\$0.15", "+\$0.50", "Stop"))?.trim()
-        val delta = when (answer) {
-            "+\$0.15" -> 0.15
-            "+\$0.50" -> 0.50
-            else -> return false
-        }
-        tally.extendUsdBudget(delta)
-        return true
-    }
-
     /** 运行记录里按结果另记的事:报告的障碍(供评测按 barrier 类归因;参数不对被拒的不算)、看过的个人技能、存下的记忆。 */
     private fun noteResultEvents(verb: Verb?, content: JsonObject) {
         if (verb == Verb.HandleObstacle && content["ok"] == JsonPrimitive(true)) {
@@ -864,12 +817,6 @@ class AgentLoop(
         GuideRecommender.viewedPersonal(verb, content)?.let { emit(RunEvent.SkillUsed(now(), it, "viewed")) }
         if (verb == Verb.MemorySave && content["ok"] == JsonPrimitive(true)) emit(RunEvent.MemorySaved(now(),
             content["id"]?.jsonPrimitive?.content ?: "", content["kind"]?.jsonPrimitive?.content ?: "", content["status"]?.jsonPrimitive?.content ?: ""))
-        val screenObj = content["screen"] as? JsonObject
-        if (content["protected"] == JsonPrimitive(true) || screenObj?.get("protected") == JsonPrimitive(true)) {
-            val pkg = (content["currentApp"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-                ?: (screenObj?.get("currentApp") as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-            if (pkg != null) emit(RunEvent.State(now(), "screen_protected_package", pkg))
-        }
     }
 
     /** 前台 App/站点的参考资料补进历史(确定性,不靠关键词猜);技能开局已全部列出,这里不再补。 */
@@ -1107,8 +1054,6 @@ class AgentLoop(
                 throw e
             } catch (e: ModelError.TaskBudgetExceeded) {
                 return StopRules.modelFailed(e)
-            } catch (e: ModelError.UsdBudgetExceeded) {
-                return StopRules.modelFailed(e)
             } catch (e: ModelError.DailyBudgetExceeded) {
                 return StopRules.modelFailed(e)
             } catch (e: Exception) {
@@ -1160,156 +1105,6 @@ class AgentLoop(
 
         /** 用户点了「我自己做完了」。 */
         val USER_FINISHED_NOTE: String get() = Feedback["user_finished_note"]
-
-        const val MAX_TOOL_CALL_OUTPUT_TOKENS = 200
-        private val VERBOSE_TOOL_ARG_KEYS = listOf("explanation", "note", "reason")
-        private val OWN_REASON_TOOLS = setOf("hand_to_user", "handle_obstacle")
-
-        /**
-         * Strips prose on mid-task tool-call turns and caps tool-call arguments and non-opaque thinking to [maxToolTokens].
-         * Final text replies without tool calls are returned unchanged (collapsed to a single non-empty [Part.Text]).
-         */
-        internal fun capToolCallParts(
-            parts: List<Part>,
-            text: String,
-            maxToolTokens: Int = MAX_TOOL_CALL_OUTPUT_TOKENS,
-        ): List<Part> {
-            if (parts.none { it is Part.ToolCall }) {
-                var textWritten = false
-                return parts.mapNotNull { part ->
-                    if (part !is Part.Text) part else if (textWritten) null else {
-                        textWritten = true
-                        Part.Text(text).takeIf { text.isNotEmpty() }
-                    }
-                }
-            }
-            val budget = maxToolTokens.coerceAtLeast(0)
-            val toolCalls = parts.filterIsInstance<Part.ToolCall>()
-            val cappedCalls = capToolCalls(toolCalls, budget)
-            val callQueue = ArrayDeque(cappedCalls)
-            val fixedTokens = cappedCalls.sumOf { TokenEstimate.of(it.name + it.argsJson) } +
-                parts.filterIsInstance<Part.Thinking>().filter { it.opaque != null }.sumOf { TokenEstimate.of(it.text) }
-            var remainingThinkBudget = (budget - fixedTokens).coerceAtLeast(0)
-            return parts.mapNotNull { part ->
-                when (part) {
-                    is Part.Text -> null
-                    is Part.ToolCall -> callQueue.removeFirst()
-                    is Part.Thinking -> {
-                        if (part.opaque != null) part
-                        else {
-                            val tokens = TokenEstimate.of(part.text)
-                            when {
-                                tokens <= remainingThinkBudget -> {
-                                    remainingThinkBudget -= tokens
-                                    part
-                                }
-                                remainingThinkBudget >= 4 -> {
-                                    val clipped = TokenEstimate.clip(part.text, remainingThinkBudget, "…")
-                                    remainingThinkBudget = 0
-                                    if (clipped.isEmpty()) null else part.copy(text = clipped)
-                                }
-                                else -> null
-                            }
-                        }
-                    }
-                    is Part.Image, is Part.ToolResult -> part
-                }
-            }
-        }
-
-        private fun capToolCalls(calls: List<Part.ToolCall>, budget: Int): List<Part.ToolCall> {
-            val singlePass = calls.map { trimToolCall(it, budget) }
-            if (singlePass.sumOf { TokenEstimate.of(it.name + it.argsJson) } <= budget) return singlePass
-            val perCallBudget = (budget / calls.size.coerceAtLeast(1)).coerceAtLeast(1)
-            return singlePass.map { trimToolCall(it, perCallBudget) }
-        }
-
-        private fun trimToolCall(call: Part.ToolCall, limit: Int): Part.ToolCall {
-            if (TokenEstimate.of(call.name + call.argsJson) <= limit) return call
-            val parsed = try {
-                Json.parseToJsonElement(call.argsJson) as? JsonObject
-            } catch (_: SerializationException) {
-                null
-            }
-            if (parsed == null) {
-                val room = (limit - TokenEstimate.of(call.name)).coerceAtLeast(0)
-                val clipped = if (room <= 2) "{}" else TokenEstimate.clip(call.argsJson, room, "…")
-                return call.copy(argsJson = clipped)
-            }
-            var current: JsonObject = parsed
-            for (key in VERBOSE_TOOL_ARG_KEYS) {
-                if (key !in current) continue
-                if (key == "reason" && call.name in OWN_REASON_TOOLS) {
-                    val v = (current[key] as? JsonPrimitive)?.contentOrNull
-                    if (v != null && v.length <= 40) continue
-                }
-                current = JsonObject(current - key)
-                val serialized = current.toString()
-                if (TokenEstimate.of(call.name + serialized) <= limit) {
-                    return call.copy(argsJson = serialized)
-                }
-            }
-            var lo = 0
-            var hi = limit
-            var best: JsonObject? = null
-            while (lo <= hi) {
-                val mid = (lo + hi) / 2
-                val candidate = clipJsonStrings(current, mid) as JsonObject
-                if (TokenEstimate.of(call.name + candidate.toString()) <= limit) {
-                    best = candidate
-                    lo = mid + 1
-                } else {
-                    hi = mid - 1
-                }
-            }
-            if (best != null) return call.copy(argsJson = best.toString())
-            val shrunk = clipJsonStrings(current, 4) as JsonObject
-            var arrLo = 0
-            var arrHi = maxArraySize(shrunk)
-            var bestArr: JsonObject? = null
-            while (arrLo <= arrHi) {
-                val mid = (arrLo + arrHi) / 2
-                val candidate = capJsonArrays(shrunk, mid) as JsonObject
-                if (TokenEstimate.of(call.name + candidate.toString()) <= limit) {
-                    bestArr = candidate
-                    arrLo = mid + 1
-                } else {
-                    arrHi = mid - 1
-                }
-            }
-            if (bestArr != null) return call.copy(argsJson = bestArr.toString())
-            val minimal = linkedMapOf<String, JsonElement>()
-            for ((k, v) in capJsonArrays(shrunk, 1) as JsonObject) {
-                val next = JsonObject(minimal + (k to v))
-                if (TokenEstimate.of(call.name + next.toString()) <= limit) {
-                    minimal[k] = v
-                }
-            }
-            return call.copy(argsJson = JsonObject(minimal).toString())
-        }
-
-        private fun clipJsonStrings(element: JsonElement, maxStrTokens: Int): JsonElement = when (element) {
-            is JsonPrimitive -> {
-                if (element.isString && TokenEstimate.of(element.content) > maxStrTokens) {
-                    val clipped = if (maxStrTokens <= 1) "…" else TokenEstimate.clip(element.content, maxStrTokens, "…")
-                    JsonPrimitive(clipped)
-                } else element
-            }
-            is JsonObject -> JsonObject(element.mapValues { (_, v) -> clipJsonStrings(v, maxStrTokens) })
-            is JsonArray -> JsonArray(element.map { clipJsonStrings(it, maxStrTokens) })
-        }
-
-        private fun maxArraySize(element: JsonElement): Int = when (element) {
-            is JsonArray -> maxOf(element.size, element.maxOfOrNull(::maxArraySize) ?: 0)
-            is JsonObject -> element.values.maxOfOrNull(::maxArraySize) ?: 0
-            else -> 0
-        }
-
-        private fun capJsonArrays(element: JsonElement, maxItems: Int): JsonElement = when (element) {
-            is JsonArray -> JsonArray(element.take(maxItems).map { capJsonArrays(it, maxItems) })
-            is JsonObject -> JsonObject(element.mapValues { (_, v) -> capJsonArrays(v, maxItems) })
-            else -> element
-        }
     }
 
     private fun now() = clock()

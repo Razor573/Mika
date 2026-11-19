@@ -259,12 +259,4 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
-    <string name="models_custom_rates">カスタム USD 単価</string>
-    <string name="models_custom_rates_unset">未設定</string>
-    <string name="models_rate_summary">入力 $%1$s / 出力 $%2$s（1M あたり）</string>
-    <string name="models_rate_free">無料枠 ($0.00)</string>
-    <string name="models_rate_input">入力（USD / 1M トークン）</string>
-    <string name="models_rate_output">出力（USD / 1M トークン）</string>
-    <string name="models_rate_cached">キャッシュ入力（USD / 1M トークン・任意）</string>
-    <string name="models_rate_clear">カスタム単価をクリア</string>
 </resources>

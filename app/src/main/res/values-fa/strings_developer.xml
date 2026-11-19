@@ -29,6 +29,4 @@
     <string name="dev_screen_tables_sub">در نخستین خواندن صفحه، فیلدهای تکراری به شکل ستون فرستاده می‌شوند. ارجاع عناصر و درخت کامل حفظ می‌شوند.</string>
     <string name="dev_device_files">وارد کردن فایل‌های دستگاه</string>
     <string name="dev_device_files_sub">به میکا اجازه دهید فایل‌ها را از فضای ذخیره‌سازی مشترک دستگاه به فضای کاری کپی کند. تغییرات برای کارهای جدید اعمال می‌شوند.</string>
-    <string name="dev_full_raw_tree">Full raw tree dump</string>
-    <string name="dev_full_raw_tree_sub">Send unpruned UI tree and full screenMap instead of compact skeleton</string>
 </resources>

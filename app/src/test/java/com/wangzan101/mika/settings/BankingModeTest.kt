@@ -1,11 +1,8 @@
 package com.wangzan101.mika.settings
 
-import android.service.quicksettings.Tile
-import com.wangzan101.mika.capsule.BankingTileService
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.core.shell.ShellTransport
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,21 +117,5 @@ class BankingModeTest {
                 ),
             ).isEmpty(),
         )
-    }
-
-    @Test
-    fun bankingTileStateMapsPausedToActiveAndRunningToInactive() {
-        assertEquals(Tile.STATE_ACTIVE, BankingTileService.tileState(paused = true))
-        assertEquals(Tile.STATE_INACTIVE, BankingTileService.tileState(paused = false))
-    }
-
-    @Test
-    fun autoPromptDefaultsOnAndPersistsToggle() {
-        val prefs = FeatureFlagsCapsuleTest.MemoryPrefs()
-        assertTrue(BankingMode.isAutoPromptEnabled(prefs))
-        BankingMode.setAutoPromptEnabled(prefs, false)
-        assertFalse(BankingMode.isAutoPromptEnabled(prefs))
-        BankingMode.setAutoPromptEnabled(prefs, true)
-        assertTrue(BankingMode.isAutoPromptEnabled(prefs))
     }
 }

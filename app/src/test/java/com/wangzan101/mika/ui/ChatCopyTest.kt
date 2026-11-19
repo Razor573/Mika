@@ -5,7 +5,6 @@ import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.chat.BranchOrigin
 import com.wangzan101.mika.chat.ConversationSummary
 import com.wangzan101.mika.core.usage.DeepSeekCost
-import com.wangzan101.mika.core.usage.UsdCost
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -265,13 +264,5 @@ class ChatCopyTest {
         assertEquals("继续说点什么…", ChatCopy.placeholder(ComposerMode.Idle, hasHistory = true))
         assertEquals("回答 Mika 的问题", ChatCopy.placeholder(ComposerMode.Answer, hasHistory = true))
         assertEquals("补充或改要求…", ChatCopy.placeholder(ComposerMode.Busy, hasHistory = true))
-    }
-
-    @Test fun usdCostFormatsFreeSmallEstimatedExactAndPartialWithoutFabricatingZero() {
-        assertNull(ChatTokensCopy.usdCost(UsdCost(usd = null, exact = false, partial = false)))
-        assertEquals("$0.00", ChatTokensCopy.usdCost(UsdCost(usd = 0.0, exact = true)))
-        assertEquals("~$0.004", ChatTokensCopy.usdCost(UsdCost(usd = 0.004, exact = false)))
-        assertEquals("$0.15", ChatTokensCopy.usdCost(UsdCost(usd = 0.15, exact = true)))
-        assertEquals("~$0.05（部分）", ChatTokensCopy.usdCost(UsdCost(usd = 0.05, exact = false, partial = true)))
     }
 }

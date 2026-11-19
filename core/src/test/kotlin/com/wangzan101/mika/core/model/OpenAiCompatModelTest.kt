@@ -407,10 +407,4 @@ class OpenAiCompatModelTest {
         assertEquals(InterruptedHistory.STEER, msgs[3]["content"]!!.jsonPrimitive.content)
         assertEquals(InterruptedHistory.RUNTIME, msgs[4]["content"]!!.jsonPrimitive.content)
     }
-
-    @Test fun parsesOpenRouterUsageCostWhenPresent() = runTest {
-        server.enqueue(ok("""{"choices":[{"finish_reason":"stop","message":{"content":"ok"}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"cost":0.00125}}"""))
-        val r = model().complete("s", user, emptyList())
-        assertEquals(Usage(100, 20, costUsd = 0.00125), r.usage)
-    }
 }

@@ -9,7 +9,6 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -329,7 +328,6 @@ private class ResponsesStream(
         val cached = int(u["input_tokens_details"] as? JsonObject, "cached_tokens") ?: 0
         val output = int(u, "output_tokens") ?: 0
         val reasoning = (int(u["output_tokens_details"] as? JsonObject, "reasoning_tokens") ?: 0).coerceIn(0, output)
-        val costUsd = (u["cost"] as? JsonPrimitive)?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 }
-        return Usage(input, output, cached.coerceAtMost(input), reasoning, costUsd)
+        return Usage(input, output, cached.coerceAtMost(input), reasoning)
     }
 }

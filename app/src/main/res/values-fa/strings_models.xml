@@ -263,12 +263,4 @@
     <string name="tool_audio_save">Save audio</string>
     <string name="tool_share_audio">Share audio to app</string>
     <string name="tool_audio_transcribe">Transcribe audio</string>
-    <string name="models_custom_rates">نرخ دلخواه (دلار)</string>
-    <string name="models_custom_rates_unset">تنظیم نشده</string>
-    <string name="models_rate_summary">$%1$s ورودی / $%2$s خروجی به ازای هر 1M</string>
-    <string name="models_rate_free">سطح رایگان ($0.00)</string>
-    <string name="models_rate_input">ورودی (دلار به ازای هر 1M توکن)</string>
-    <string name="models_rate_output">خروجی (دلار به ازای هر 1M توکن)</string>
-    <string name="models_rate_cached">ورودی کش‌شده (دلار به ازای هر 1M توکن، اختیاری)</string>
-    <string name="models_rate_clear">پاک کردن نرخ دلخواه</string>
 </resources>

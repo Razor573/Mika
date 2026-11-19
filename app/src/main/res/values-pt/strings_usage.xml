@@ -49,5 +49,4 @@
     <string name="usage_allowance_updated">Última atualização: %1$s</string>
     <string name="usage_allowance_self_hosted">Conexão com hospedagem própria</string>
     <string name="usage_allowance_unsupported">Esta conexão não permite consultar a cota</string>
-    <string name="usage_allowance_free_tier">Nível gratuito</string>
 </resources>

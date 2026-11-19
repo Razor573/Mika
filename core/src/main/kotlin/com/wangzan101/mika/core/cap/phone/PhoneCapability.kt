@@ -68,7 +68,7 @@ internal class PhoneCapability(
         val access = screen.appAccess.current()
         return listOfNotNull(
             env.gate(Prompts.capability(PHONE)),
-            Prompts.capability(APP_ACCESS).takeIf { !access.available || access.effectiveBlocked.isNotEmpty() },
+            Prompts.capability(APP_ACCESS).takeIf { !access.available || access.blocked.isNotEmpty() },
         )
     }
 

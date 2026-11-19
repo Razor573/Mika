@@ -47,5 +47,4 @@
     <string name="usage_allowance_updated">上次更新 %1$s</string>
     <string name="usage_allowance_self_hosted">自行託管的連線</string>
     <string name="usage_allowance_unsupported">此連線未提供額度查詢</string>
-    <string name="usage_allowance_free_tier">免費層級</string>
 </resources>

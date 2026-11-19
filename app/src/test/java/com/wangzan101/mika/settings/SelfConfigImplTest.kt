@@ -49,9 +49,5 @@ class SelfConfigImplTest {
         assertNotNull(s.set("mute_apps", "maybe"))
         assertEquals("there is no such setting", s.set("api_key", "sk-123"))
         assertEquals("there is no such setting", s.set("container_network", "on"))
-        assertEquals("there is no such setting", s.set("app_access", "allow_all"))
-        assertEquals("there is no such setting", s.set("hard_locked", "off"))
-        assertEquals("there is no such setting", s.set("unblock_app", "com.google.android.apps.authenticator2"))
-        assertEquals("there is no such setting", s.set("banking_mode", "pause"))
     }
 }

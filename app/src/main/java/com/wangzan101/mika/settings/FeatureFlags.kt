@@ -15,7 +15,6 @@ import com.wangzan101.mika.core.knowledge.GuideCatalog
 import com.wangzan101.mika.chat.AutoArchive
 import com.wangzan101.mika.core.usage.ProactiveBudget
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
-import com.wangzan101.mika.core.usage.UsdBudgetLimits
 import com.wangzan101.mika.task.ParallelCapability
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -90,26 +89,6 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         prefs.edit().putLong(TASK_TOKEN_BUDGET, limit?.takeIf(TokenBudgetLimits::valid) ?: 0L).commit()
     }
 
-    /** Per-task USD spend cap; null means unlimited. */
-    fun taskUsdBudget(): Double? =
-        prefs.getString(TASK_USD_BUDGET, null)?.toDoubleOrNull()?.takeIf(UsdBudgetLimits::valid)
-
-    fun setTaskUsdBudget(limitUsd: Double?) {
-        val valid = limitUsd?.takeIf(UsdBudgetLimits::valid)
-        val edit = prefs.edit()
-        if (valid == null) edit.remove(TASK_USD_BUDGET) else edit.putString(TASK_USD_BUDGET, valid.toString())
-        edit.commit()
-    }
-
-    fun taskUsdBudgetChanges(): Flow<Double?> = callbackFlow {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == null || key == TASK_USD_BUDGET) trySend(taskUsdBudget())
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        send(taskUsdBudget())
-        awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-    }.distinctUntilChanged()
-
     /** 主动能力每天(本地日历日,各服务商合计)允许已报告的 Token;没设或不合法时按默认值,没有「不限制」。 */
     fun proactiveDailyTokenBudget(): Long =
         ProactiveBudget.limitOf(prefs.getLong(PROACTIVE_DAILY_TOKEN_BUDGET, 0L))
@@ -124,13 +103,6 @@ class FeatureFlags(private val prefs: SharedPreferences) {
 
     fun setKeepScreenOn(on: Boolean) {
         prefs.edit().putBoolean(KEEP_SCREEN_ON, on).commit()
-    }
-
-    /** 精简手机 UI 树;默认开,用户可以关。 */
-    fun uiTreeCompact(): Boolean = prefs.getBoolean(UI_TREE_COMPACT, true)
-
-    fun setUiTreeCompact(on: Boolean) {
-        prefs.edit().putBoolean(UI_TREE_COMPACT, on).commit()
     }
 
     fun showTaskCost(): Boolean = prefs.getBoolean(SHOW_TASK_COST, false)
@@ -474,10 +446,8 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         private const val TASK_STEP_LIMIT = "task_step_limit"
         private const val TRIGGER_RUN_LIMIT = "trigger_run_limit_minutes"
         private const val TASK_TOKEN_BUDGET = "task_token_budget"
-        private const val TASK_USD_BUDGET = "task_usd_budget"
         private const val PROACTIVE_DAILY_TOKEN_BUDGET = "proactive_daily_token_budget"
         private const val KEEP_SCREEN_ON = "keep_screen_on"
-        private const val UI_TREE_COMPACT = "ui_tree_compact"
         private const val SHOW_TASK_COST = "show_task_cost"
         private const val MUTE_TARGET = "mute_target"
         private const val OPERATING_PACE = "operating_pace"

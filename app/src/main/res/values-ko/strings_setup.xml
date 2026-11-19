@@ -81,5 +81,4 @@
     <string name="model_probe_tried">%1$s을(를) 시도했지만 테스트를 통과한 모델이 없어요.</string>
     <string name="model_probe_fallback">먼저 시도한 %1$s이(가) 테스트를 통과하지 못했어요: %2$s. 메인 모델은 테스트를 통과한 “%3$s”이에요.</string>
     <string name="model_pick_main">메인 모델 선택</string>
-    <string name="cap_free">무료</string>
 </resources>

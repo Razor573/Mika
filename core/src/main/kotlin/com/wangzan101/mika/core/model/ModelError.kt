@@ -13,7 +13,6 @@ sealed class ModelError(message: String, cause: Throwable? = null) : Exception(m
     class QuotaExceeded : ModelError("Account quota exceeded")
     /** 本任务的已报告用量达到预算；不再发起任何收尾或重试请求。 */
     class TaskBudgetExceeded(val limit: Long, val used: Long) : ModelError("Token budget for this task exceeded")
-    class UsdBudgetExceeded(val limitUsd: Double, val spentUsd: Double) : ModelError("USD spend cap for this task exceeded")
     /** 这家服务商今天在本地已报告的用量达到预算；[providerName] 只用于给用户说明是哪一家。 */
     class DailyBudgetExceeded(
         val providerName: String, val limit: Long, val used: Long, val providerId: String? = null,

@@ -3,7 +3,6 @@ package com.wangzan101.mika.core.record
 import com.wangzan101.mika.core.replay.Anchors
 import com.wangzan101.mika.core.replay.Selector
 import com.wangzan101.mika.core.usage.DeepSeekCost
-import com.wangzan101.mika.core.usage.UsdCost
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -80,10 +79,6 @@ sealed interface RunEvent {
          * 改派掉的轻量模型回复和旧记录里没有。
          */
         val repliedAtMs: Long? = null,
-        /** 路由决策模型对轻量模型动作的置信度分数;未查决策模型或旧记录为 null。 */
-        val decisionScore: Double? = null,
-        /** 改派主模型后与轻量模型回复的对比结果;未改派或旧记录为 null。 */
-        val mainDiff: String? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
         val acted: Boolean get() = role != "light_rejected"
@@ -267,7 +262,6 @@ sealed interface RunEvent {
         override val atMs: Long, val calls: Int, val unreported: Int, val inputTokens: Long, val outputTokens: Long, val cachedTokens: Long,
         val httpCalls: Int? = null, val httpUnreported: Int? = null,
         val deepSeekCost: DeepSeekCost? = null,
-        val usdCost: UsdCost? = null,
     ) : RunEvent
 
     /**

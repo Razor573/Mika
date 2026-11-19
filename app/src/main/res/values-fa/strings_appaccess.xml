@@ -51,16 +51,4 @@
     <string name="appaccess_share_unblock">خارج کردن از فهرست مسدودشده‌ها</string>
     <string name="appaccess_share_cancel">لغو اشتراک‌گذاری</string>
     <string name="appaccess_share_expired">مجوز اشتراک‌گذاری صفحه منقضی شد. یک عکس جدید از صفحه بگیرید.</string>
-
-    <string name="appaccess_hard_locked_title">قفل سخت (احراز هویت، رمزارز و بانک‌ها)</string>
-    <string name="appaccess_hard_locked_note">برنامه‌های احراز هویت، رمزارز و مالی قفل‌شده حتی پس از «اجازه به همه» نیز مسدود می‌مانند. برای باز کردن قفل، احراز هویت دستگاه لازم است.</string>
-    <string name="appaccess_hard_locked_item_sub">برای باز کردن قفل، تأیید قفل دستگاه لازم است</string>
-    <string name="appaccess_hard_locked_auth_title">باز کردن قفل %1$s</string>
-    <string name="appaccess_hard_locked_auth_sub">برای اجازه دسترسی میکا به این برنامهٔ محافظت‌شده احراز هویت کنید</string>
-    <string name="appaccess_hard_locked_auth_failed">برای باز کردن قفل، احراز هویت لازم است</string>
-    <string name="appaccess_hard_locked_unlock_title">قفل برنامهٔ محافظت‌شده باز شود؟</string>
-    <string name="appaccess_hard_locked_countdown_wait">قفل صفحه‌ای روی این دستگاه تنظیم نشده است. %2$d ثانیه پیش از باز کردن قفل %1$s صبر کنید.</string>
-    <string name="appaccess_hard_locked_countdown_ready">قفل صفحه‌ای روی این دستگاه تنظیم نشده است. اکنون می‌توانید قفل %1$s را باز کنید.</string>
-    <string name="appaccess_hard_locked_unlock_confirm">باز کردن قفل</string>
-    <string name="appaccess_hard_lock_add">قفل سخت با احراز هویت دستگاه</string>
 </resources>

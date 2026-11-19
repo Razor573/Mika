@@ -321,9 +321,4 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
-    <string name="shortcut_pin">Fixar na tela inicial</string>
-    <string name="shortcut_pin_requested">Atalho na tela inicial solicitado</string>
-    <string name="shortcut_pin_unsupported">Este iniciador não oferece suporte para fixar atalhos</string>
-    <string name="shortcut_invalid">Atalho inválido ou expirado</string>
-    <string name="shortcut_target_missing">Esta tarefa salva ou de várias etapas não existe mais</string>
 </resources>

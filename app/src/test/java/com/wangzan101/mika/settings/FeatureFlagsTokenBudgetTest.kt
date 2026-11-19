@@ -1,7 +1,6 @@
 package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
-import com.wangzan101.mika.core.usage.UsdBudgetLimits
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -42,21 +41,6 @@ class FeatureFlagsTokenBudgetTest {
         for (invalid in listOf(-1L, 0L, TokenBudgetLimits.MIN - 1, TokenBudgetLimits.MAX + 1)) {
             f.setProactiveDailyTokenBudget(invalid)
             assertEquals("非法值按默认值处理: $invalid", 200_000L, f.proactiveDailyTokenBudget())
-        }
-    }
-
-    @Test fun usdBudgetDefaultsToUnlimitedAndValidatesBounds() {
-        val f = flags()
-        assertNull(f.taskUsdBudget())
-        f.setTaskUsdBudget(0.15)
-        assertEquals(0.15, f.taskUsdBudget()!!, 1e-9)
-        f.setTaskUsdBudget(UsdBudgetLimits.MIN)
-        assertEquals(UsdBudgetLimits.MIN, f.taskUsdBudget()!!, 1e-9)
-        f.setTaskUsdBudget(UsdBudgetLimits.MAX)
-        assertEquals(UsdBudgetLimits.MAX, f.taskUsdBudget()!!, 1e-9)
-        for (invalid in listOf(0.0, -1.0, UsdBudgetLimits.MIN - 0.001, UsdBudgetLimits.MAX + 1.0, Double.NaN, Double.POSITIVE_INFINITY)) {
-            f.setTaskUsdBudget(invalid)
-            assertNull("Invalid USD budget clears to unlimited: $invalid", f.taskUsdBudget())
         }
     }
 }

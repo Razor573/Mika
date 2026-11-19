@@ -20,13 +20,7 @@ private const val DEFAULT_MAX_ELEMENTS = 200
  * 手机快照有窗口树时,全量结果带 tree,差异结果带 treeChanges;调用方给手机传完整元素数。
  */
 object InterfaceUpdate {
-    fun between(
-        base: ModelSnapshot?,
-        current: ModelSnapshot,
-        baseVisible: Boolean,
-        maxElements: Int = DEFAULT_MAX_ELEMENTS,
-        compactTree: Boolean = false,
-    ): JsonObject {
+    fun between(base: ModelSnapshot?, current: ModelSnapshot, baseVisible: Boolean, maxElements: Int = DEFAULT_MAX_ELEMENTS): JsonObject {
         val (all, _) = ScreenJson.elements(current.screen, Int.MAX_VALUE)
         fun full() = buildJsonObject {
             put("snapshotId", current.snapshotId)
@@ -35,16 +29,7 @@ object InterfaceUpdate {
             flags(current)
             put("elements", JsonArray(all.take(maxElements)))
             put("truncated", all.size > maxElements)
-            if (current.screen.windows.isNotEmpty()) {
-                val tree = if (compactTree) {
-                    UiTreeJson.prunedWindows(current.screen).let {
-                        if (it.meaningfulCount >= 3) it.windows else UiTreeJson.windows(current.screen)
-                    }
-                } else {
-                    UiTreeJson.windows(current.screen)
-                }
-                put("tree", tree)
-            }
+            if (current.screen.windows.isNotEmpty()) put("tree", UiTreeJson.windows(current.screen))
         }
         if (base == null || !baseVisible || base.port.packageName != current.port.packageName) return full()
         if (current.screen.windows.isNotEmpty() && !UiTreeJson.sameWindows(base.screen, current.screen)) return full()

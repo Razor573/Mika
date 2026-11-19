@@ -5,7 +5,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -76,57 +75,5 @@ class UiTreeJsonTest {
         val output = UiTreeJson.windows(model.screen).single().jsonObject["nodes"]!!.jsonArray.single().jsonObject["children"]!!.jsonArray
         assertEquals(model.elements.map { it.ref }, output.map { it.jsonObject["ref"]!!.jsonPrimitive.content })
         assertFalse(output[0].jsonObject.containsKey("children"))
-    }
-
-    @Test fun prunedWindowsCollapsesWrappersDropsOffscreenAndShrinksDenseTree() {
-        val items = (1..12).map { i ->
-            val ref = "@e$i"
-            // Deeply nested single-child FrameLayout -> LinearLayout -> ViewGroup wrappers
-            val title = UiTreeNode("TextView", listOf(40, i * 70, 600, i * 70 + 30), text = "Item $i")
-            val price = UiTreeNode("TextView", listOf(620, i * 70, 900, i * 70 + 30), text = "$$i.99")
-            val row = UiTreeNode("LinearLayout", listOf(20, i * 70, 960, i * 70 + 60), ref = ref, clickable = true, children = listOf(title, price))
-            UiTreeNode("FrameLayout", listOf(0, i * 70, 1000, i * 70 + 60), children = listOf(
-                UiTreeNode("LinearLayout", listOf(0, i * 70, 1000, i * 70 + 60), children = listOf(
-                    UiTreeNode("ViewGroup", listOf(0, i * 70, 1000, i * 70 + 60), children = listOf(row))
-                ))
-            ))
-        }
-        val offscreen = UiTreeNode("TextView", listOf(1050, 100, 1200, 150), text = "Offscreen")
-        val zeroArea = UiTreeNode("View", listOf(10, 10, 10, 50), text = "ZeroWidth")
-        val root = UiTreeNode("RecyclerView", listOf(0, 0, 999, 999), scrollable = true, children = items + offscreen + zeroArea)
-        val snap = screen().copy(windows = listOf(UiWindowTree(7, "application", 0, "Shop", "com.shop", active = true, focused = true, nodes = listOf(root))))
-
-        val rawJson = UiTreeJson.windows(snap).toString()
-        val pruned = UiTreeJson.prunedWindows(snap)
-        val prunedJson = pruned.windows.toString()
-
-        assertTrue("Expected >=40% reduction: raw=${rawJson.length}, pruned=${prunedJson.length}", prunedJson.length <= rawJson.length * 0.6)
-        assertFalse(prunedJson.contains("Offscreen"))
-        assertFalse(prunedJson.contains("ZeroWidth"))
-        for (i in 1..12) {
-            assertTrue("Missing ref @e$i", prunedJson.contains("\"@e$i\""))
-            assertTrue("Missing price for item $i", prunedJson.contains("$$i.99"))
-        }
-        assertTrue(pruned.meaningfulCount >= 12)
-    }
-
-    @Test fun subtreeReturnsFullUnprunedDescendantsForRootRef() {
-        val inner = UiTreeNode("TextView", listOf(10, 10, 100, 40), text = "Detail")
-        val wrapper = UiTreeNode("FrameLayout", listOf(10, 10, 100, 40), children = listOf(inner))
-        val container = UiTreeNode("LinearLayout", listOf(10, 10, 200, 80), ref = "@e12", clickable = true, children = listOf(wrapper))
-        val snap = screen().copy(windows = listOf(UiWindowTree(7, "application", 0, "Shop", "com.shop", active = true, focused = true, nodes = listOf(container))))
-
-        val subtree = UiTreeJson.subtree(snap, "@e12")!!
-        assertEquals("@e12", subtree["ref"]!!.jsonPrimitive.content)
-        val child = subtree["children"]!!.jsonArray.single().jsonObject
-        assertEquals("FrameLayout", child["role"]!!.jsonPrimitive.content)
-        assertNull(UiTreeJson.subtree(snap, "@e999"))
-    }
-
-    @Test fun prunedWindowsReportsFewerThanThreeMeaningfulNodes() {
-        val single = UiTreeNode("TextView", listOf(10, 10, 100, 40), text = "Only one")
-        val snap = screen().copy(windows = listOf(UiWindowTree(7, "application", 0, "App", "com.app", active = true, focused = true, nodes = listOf(single))))
-        val pruned = UiTreeJson.prunedWindows(snap)
-        assertTrue(pruned.meaningfulCount < 3)
     }
 }

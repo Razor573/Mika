@@ -293,9 +293,4 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
-    <string name="shortcut_pin">Sematkan ke layar utama</string>
-    <string name="shortcut_pin_requested">Pintasan layar utama diminta</string>
-    <string name="shortcut_pin_unsupported">Peluncur ini tidak mendukung penyematan pintasan</string>
-    <string name="shortcut_invalid">Pintasan tidak valid atau kedaluwarsa</string>
-    <string name="shortcut_target_missing">Tugas tersimpan atau tugas multilangkah ini sudah tidak ada</string>
 </resources>

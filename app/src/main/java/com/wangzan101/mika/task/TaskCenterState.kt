@@ -116,6 +116,4 @@ class TaskCenterState {
     /** 显示中任务的小窗目标声音是否被用户恢复过:按钮据此显示「恢复声音」或「静音」。 */
     val _pipSoundOn = MutableStateFlow(false)
     val pipSoundOn: StateFlow<Boolean> = _pipSoundOn.asStateFlow()
-    /** 触发银行/安全应用提醒时置为对应应用名(用于胶囊 1-tap「Pause for banking」提示),暂停或关闭后清为 null。 */
-    val bankingPrompt = MutableStateFlow<String?>(null)
 }

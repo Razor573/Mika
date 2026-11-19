@@ -17,7 +17,6 @@ import androidx.compose.ui.unit.dp
 import com.wangzan101.mika.R
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
-import com.wangzan101.mika.capsule.BankingTileService
 import com.wangzan101.mika.core.shell.BuiltinShellStatus
 import com.wangzan101.mika.core.shell.ShellTransport
 import com.wangzan101.mika.settings.BankingMode
@@ -27,7 +26,6 @@ import com.wangzan101.mika.ui.components.FooterNote
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.GroupLabel
 import com.wangzan101.mika.ui.components.ListRow
-import com.wangzan101.mika.ui.components.MikaSwitch
 import com.wangzan101.mika.ui.components.PageScaffold
 import com.wangzan101.mika.ui.components.RowValue
 import com.wangzan101.mika.ui.components.StateCard
@@ -58,7 +56,6 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
     val shizukuState by phone.shellManager.shizuku.state.collectAsState()
     val a11yInstance by ScreenAccessibility.instance.collectAsState()
     var state by remember { mutableStateOf(mode.snapshot()) }
-    var autoPrompt by remember { mutableStateOf(BankingMode.isAutoPromptEnabled(context)) }
     var notice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(shellStatus, a11yInstance, shizukuState) { state = mode.snapshot() }
 
@@ -188,32 +185,6 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
                     MikaIcons.Refresh, stringResource(R.string.banking_reconnect), null, first = true,
                     onClick = { onFix(Fix.RetryPhoneHelper) },
                 ) { }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        GroupCard {
-            ListRow(
-                MikaIcons.Apps,
-                stringResource(R.string.banking_add_tile),
-                stringResource(R.string.banking_add_tile_sub),
-                first = true,
-                onClick = {
-                    val requested = BankingTileService.requestAddTile(context)
-                    notice = context.getString(
-                        if (requested) R.string.banking_tile_requested else R.string.banking_tile_manual,
-                    )
-                },
-            ) { }
-            ListRow(
-                MikaIcons.Bell,
-                stringResource(R.string.banking_auto_prompt),
-                stringResource(R.string.banking_auto_prompt_sub),
-            ) {
-                MikaSwitch(autoPrompt, { on ->
-                    autoPrompt = on
-                    BankingMode.setAutoPromptEnabled(context, on)
-                })
             }
         }
 

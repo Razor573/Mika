@@ -293,9 +293,4 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
-    <string name="shortcut_pin">ホーム画面に固定</string>
-    <string name="shortcut_pin_requested">ホーム画面へのショートカット追加をリクエストしました</string>
-    <string name="shortcut_pin_unsupported">このランチャーはショートカットの固定に対応していません</string>
-    <string name="shortcut_invalid">ショートカットが無効か期限切れです</string>
-    <string name="shortcut_target_missing">この保存したタスクまたはマルチステップタスクは存在しません</string>
 </resources>

@@ -94,8 +94,4 @@
         <item quantity="many">%1$d خطوة</item>
         <item quantity="other">%1$d خطوة</item>
     </plurals>
-    <string name="metrics_est_cost">التكلفة التقديرية</string>
-    <string name="metrics_avg_cost">متوسط التكلفة</string>
-    <string name="metrics_total_cost">التكلفة الإجمالية</string>
-    <string name="metrics_light_rejected">رفض النموذج الخفيف</string>
 </resources>

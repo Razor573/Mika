@@ -88,9 +88,6 @@ class ActionExecutor(
         try {
             return aimed(call, origin, followUp, reads, args, offScreen, verb)
         } catch (e: com.wangzan101.mika.core.access.AppAccessDenied) {
-            if (e.code == "app_blocked" && !e.packageName.isNullOrBlank()) {
-                recorder.event(RunEvent.State(recorder.now(), "app_blocked_package", e.packageName))
-            }
             val content = buildJsonObject {
                 put("ok", false); put("error", e.code); put("message", e.message); put("retryable", false)
                 e.packageName?.let { put("package", it) }

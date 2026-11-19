@@ -35,8 +35,6 @@ import com.wangzan101.mika.core.tool.okObj
 import com.wangzan101.mika.core.net.UrlHost
 
 internal const val MAX_ELEMENTS = 200
-internal const val DEFAULT_PHONE_ELEMENTS = 250
-private const val MIN_PRUNED_MEANINGFUL = 3
 /** 一次全量屏幕之后最多接几次差异。 */
 private const val MAX_CHAIN_DIFFS = 5
 /** 写操作后读屏前等界面稳定的上限。 */
@@ -69,12 +67,9 @@ internal class ScreenSession(
     val shots: Shots,
     vision: VisionService? = null,
     private val adaptiveVision: Boolean = false,
-    private val compactUiTree: Boolean = false,
-    private val fullRawTreeDump: Boolean = false,
-    private val phoneElementsLimit: Int = DEFAULT_PHONE_ELEMENTS,
 ) {
-    private val modelElementsLimit get() = if (surface.id == "phone") (if (useCompactTree) phoneElementsLimit else Int.MAX_VALUE) else MAX_ELEMENTS
-    private val useCompactTree get() = compactUiTree && !fullRawTreeDump && surface.id == "phone"
+    /** 手机模型结果不按元素数量截断;网页仍沿用自己的输出预算。 */
+    private val modelElementsLimit get() = if (surface.id == "phone") Int.MAX_VALUE else MAX_ELEMENTS
     val screen: ScreenPort get() = surface.screen
     private var textOnlyDepth = 0
 
@@ -92,13 +87,6 @@ internal class ScreenSession(
     /** 模型此刻还看得到的读屏 snapshotId;null 表示循环还没告诉过(都看得到)。 */
     var visible: Set<String>? = null
     var lastSnapshot: ScreenSnapshot? = null
-    private var lastPortCanonicalHash: String? = null
-    private var lastCanonicalHash: String? = null
-    private var lastPrunedResult: UiTreeJson.PrunedResult? = null
-    private var lastCanonicalElements: Pair<JsonArray, Int>? = null
-    private var lastCanonicalElementsLimit: Int? = null
-    private var lastElementRefs: List<String>? = null
-    private var lastTreeRefs: List<String?>? = null
     val recentSnapshots = ArrayDeque<ScreenSnapshot>()
     val readAt = mutableMapOf<String, Long>()
     /** 这块屏发出过的 snapshotId(比 [RECENT_SNAPSHOTS] 长:模型可能拿很早的编号来用)。 */
@@ -123,13 +111,6 @@ internal class ScreenSession(
             clearLocated()
             clearPrimed()
             lastSnapshot = null
-            lastPortCanonicalHash = null
-            lastCanonicalHash = null
-            lastPrunedResult = null
-            lastCanonicalElements = null
-            lastCanonicalElementsLimit = null
-            lastElementRefs = null
-            lastTreeRefs = null
             recentSnapshots.clear()
             readAt.clear()
             shown = null
@@ -161,17 +142,7 @@ internal class ScreenSession(
      * 端口原样的这一屏留作接着那个动作的「动作前」([probe] 用它,不再读一次)。
      */
     suspend fun snapshot(internal: Boolean = false): ScreenSnapshot = screen.snapshot().let { p ->
-        val portHash = UiTreeJson.canonicalHash(p)
-        val model = if (stabilizer != null) {
-            val prev = stabilizer.latest
-            if (prev != null && portHash == lastPortCanonicalHash && prev.elements.size == p.elements.size) {
-                stabilizer.reuse(p)
-            } else {
-                stabilizer.next(p)
-            }
-        } else null
-        lastPortCanonicalHash = portHash
-        (model?.screen ?: p).also { primed = if (internal) it.snapshotId to p else null }
+        (stabilizer?.next(p)?.screen ?: p).also { primed = if (internal) it.snapshotId to p else null }
     }.also {
         reads++
         if (!internal) stale = false
@@ -185,60 +156,14 @@ internal class ScreenSession(
     /** 此刻重新读一屏,不登记编号、不改模型手里的读屏;读不到为 null。 */
     suspend fun peek(): ScreenSnapshot? = screenAttempt { screen.peek() }
 
-    private data class CanonicalScreenData(
-        val pruned: UiTreeJson.PrunedResult?,
-        val elements: Pair<JsonArray, Int>,
-    )
-
-    private fun treeRefs(s: ScreenSnapshot): List<String?> {
-        if (s.windows.isEmpty()) return emptyList()
-        val refs = mutableListOf<String?>()
-        fun walk(n: UiTreeNode) {
-            refs += n.ref
-            n.children.forEach(::walk)
-        }
-        s.windows.forEach { w -> w.nodes.forEach(::walk) }
-        return refs
-    }
-
-    /** Reuse cached pruned tree and canonical element array when the screen is canonically unchanged. */
-    private fun canonicalData(s: ScreenSnapshot): CanonicalScreenData {
-        val hash = UiTreeJson.canonicalHash(s)
-        val wantPruned = useCompactTree && s.windows.isNotEmpty()
-        val limit = modelElementsLimit
-        val elRefs = s.elements.map { it.ref }
-        val tRefs = if (wantPruned) treeRefs(s) else null
-        val cachedElements = lastCanonicalElements
-        if (hash == lastCanonicalHash &&
-            cachedElements != null &&
-            lastCanonicalElementsLimit == limit &&
-            elRefs == lastElementRefs &&
-            (!wantPruned || (lastPrunedResult != null && tRefs == lastTreeRefs))
-        ) {
-            return CanonicalScreenData(if (wantPruned) lastPrunedResult else null, cachedElements)
-        }
-        val pruned = if (wantPruned) UiTreeJson.prunedWindows(s) else null
-        val elements = ScreenJson.elements(s, limit)
-        lastCanonicalHash = hash
-        lastPrunedResult = pruned
-        lastCanonicalElements = elements
-        lastCanonicalElementsLimit = limit
-        lastElementRefs = elRefs
-        lastTreeRefs = tRefs
-        return CanonicalScreenData(pruned, elements)
-    }
-
     suspend fun observe(withImage: Boolean, adaptiveImage: Boolean = false, recordFrame: Boolean = true): ToolExecution {
         val s = snapshot()
         val (tree, ocr, ocrStatus) = readTree(s)
-        val canonical = canonicalData(s)
-        val pruned = canonical.pruned
-        val fallbackToRaw = pruned != null && (pruned.meaningfulCount < MIN_PRUNED_MEANINGFUL || tree.poor)
-        val imageReason = if (adaptiveImage && (tree.poor || fallbackToRaw)) tree.reason ?: "sparse_pruned_tree" else null
+        val imageReason = if (adaptiveImage && tree.poor) tree.reason else null
         val sendImage = withImage || imageReason != null
         stabilizer?.latest?.let { shown = it; chain.clear(); chain += it.snapshotId }
         val seen = interfaceRead(s, ocr.orEmpty())
-        val (elements, hidden) = canonical.elements
+        val (elements, hidden) = ScreenJson.elements(s, modelElementsLimit)
         val shotId = shots.next()
         val content = okObj {
             val w = s.web
@@ -267,17 +192,12 @@ internal class ScreenSession(
             else treeHint(tree, ocrStatus)?.let { put("hint", it) }
             put("viewport", buildJsonObject { put("width", s.width); put("height", s.height) })
             put("elements", elements)
-            if (surface.id == "phone" && s.windows.isNotEmpty()) {
-                put("tree", if (pruned != null && !fallbackToRaw) pruned.windows else UiTreeJson.windows(s))
-            }
-            val omitVisibleText = useCompactTree && !fallbackToRaw && ocr.isNullOrEmpty()
-            if (!omitVisibleText) ocr?.let { put("visibleText", VisibleText.json(it)) }
-            if (surface.id == "phone" && (!useCompactTree || fallbackToRaw)) {
-                ScreenMap.json(s, ocr.orEmpty())?.let { put("screenMap", it) }
-            }
-            val omitted = hidden + (s.web?.omitted ?: 0)
-            put("truncated", omitted > 0)
-            if (omitted > 0) put("omitted", omitted)
+            if (surface.id == "phone" && s.windows.isNotEmpty()) put("tree", UiTreeJson.windows(s))
+            ocr?.let { put("visibleText", VisibleText.json(it)) }
+            if (surface.id == "phone") ScreenMap.json(s, ocr.orEmpty())?.let { put("screenMap", it) }
+            val omitted = s.web?.omitted ?: 0
+            put("truncated", hidden > 0 || omitted > 0)
+            if (omitted > 0) put("omitted", hidden + omitted)
         }
         // 受保护或持续全黑的帧都不给视觉模型;后者仍保留可读控件供降级操作。
         val png = if ((sendImage && textOnlyDepth == 0 || (recordFrames && recordFrame && textOnlyDepth == 0)) &&
@@ -374,9 +294,6 @@ internal class ScreenSession(
         val seen = chain.isNotEmpty() && chain.size - 1 < MAX_CHAIN_DIFFS && (v == null || chain.all { it in v })
         val s = cur.screen
         val (tree, ocr, ocrStatus) = readTree(s)
-        val canonical = canonicalData(s)
-        val pruned = canonical.pruned
-        val fallbackToRaw = pruned != null && (pruned.meaningfulCount < MIN_PRUNED_MEANINGFUL || tree.poor)
         val shotId = shots.next()
         val diff = if (s.protected) {
             // 受保护页面看不到画面和元素；下一次从全量重新开始
@@ -387,14 +304,13 @@ internal class ScreenSession(
                 put("screenshotId", shotId)
             }
         } else {
-            val d = InterfaceUpdate.between(shown, cur, seen, modelElementsLimit, compactTree = useCompactTree && !fallbackToRaw)
+            val d = InterfaceUpdate.between(shown, cur, seen, modelElementsLimit)
             shown = cur
             if (d["full"] == JsonPrimitive(true)) chain.clear()
             chain += cur.snapshotId
-            val omitVisibleText = useCompactTree && !fallbackToRaw && ocr.isNullOrEmpty()
             JsonObject(d + ("screenshotId" to JsonPrimitive(shotId)) +
-                (if (!omitVisibleText) ocr?.let { mapOf("visibleText" to VisibleText.json(it)) } ?: emptyMap() else emptyMap()) +
-                (if (surface.id == "phone" && (!useCompactTree || fallbackToRaw)) ScreenMap.json(s, ocr.orEmpty())?.let { mapOf("screenMap" to it) } ?: emptyMap() else emptyMap()) +
+                (ocr?.let { mapOf("visibleText" to VisibleText.json(it)) } ?: emptyMap()) +
+                (if (surface.id == "phone") ScreenMap.json(s, ocr.orEmpty())?.let { mapOf("screenMap" to it) } ?: emptyMap() else emptyMap()) +
                 (if (s.changedDuringRead) mapOf("note" to JsonPrimitive(NOTE_CHANGED_DURING_READ)) else emptyMap()) +
                 (s.opened?.let { mapOf("opened" to openedJson(it)) } ?: emptyMap()) +
                 (s.web?.dialog?.let { mapOf("dialog" to dialogJson(it)) } ?: emptyMap()) +
@@ -421,7 +337,7 @@ internal class ScreenSession(
         val shownDiff = if (imageReason == null) diff else JsonObject(diff + ("imageReason" to JsonPrimitive(imageReason)))
         return r.with(content = JsonObject(r.content + ("screen" to onSurface(shownDiff))),
             frame = r.frame ?: png?.takeIf { recordFrames }, images = attach?.let { listOf(it) } ?: r.images,
-            screenElements = canonical.elements.first, imageIds = if (attach != null) listOf(shotId) else r.imageIds).observing(read)
+            screenElements = ScreenJson.elements(s, modelElementsLimit).first, imageIds = if (attach != null) listOf(shotId) else r.imageIds).observing(read)
     }
 
     /** 动作之前的界面状态(不登记编号)和一帧画面,判效果用;读不到的为 null。 */

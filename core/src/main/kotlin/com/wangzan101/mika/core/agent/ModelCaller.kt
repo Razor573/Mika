@@ -2,8 +2,6 @@ package com.wangzan101.mika.core.agent
 
 import com.wangzan101.mika.core.trace.RunTrace
 import com.wangzan101.mika.core.action.ConfirmDecision
-import com.wangzan101.mika.core.decision.DecisionModel
-import com.wangzan101.mika.core.decision.DecisionPolicy
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelError
@@ -19,15 +17,11 @@ import com.wangzan101.mika.core.tool.ToolDispatcher
 import com.wangzan101.mika.core.tool.parseArgs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.put
-import java.util.Locale
 
 /**
  * 一次模型调用:历史只追加,估算越过触发点才压缩一次([ContextCompressor],完整历史不动)、主模型一时的故障按 [retry] 重试、上下文超长时压得更狠再发一次,
@@ -47,7 +41,6 @@ internal class ModelCaller(
     private val fallbacks: List<ChatModel> = emptyList(),
     /** 与主模型链平行的服务商 ID，用来判断每日预算是否适用于备援。 */
     private val chainProviderIds: List<String?> = emptyList(),
-    private val decision: DecisionModel? = null,
 ) {
     /** 每个模型一份压缩状态:各自的上下文、各自发出的那份历史,轻量模型那次压缩不连累主模型的请求前缀。 */
     private val compressors = java.util.IdentityHashMap<ChatModel, ContextCompressor>()
@@ -139,8 +132,6 @@ internal class ModelCaller(
         } catch (e: ModelError.TaskBudgetExceeded) {
             // 整个运行共用一份预算；轻量失败后不能再改问主模型。
             throw e
-        } catch (e: ModelError.UsdBudgetExceeded) {
-            throw e
         } catch (e: Exception) {
             // Key、额度、模型名、请求本身不对,重试也没用:本任务余下的步都用主模型
             if (e is ModelError.Auth || e is ModelError.IllegalHeader || e is ModelError.QuotaExceeded || e is ModelError.DailyBudgetExceeded || e is ModelError.ModelNotFound ||
@@ -149,115 +140,23 @@ internal class ModelCaller(
                 (e is ModelError.Server && e.status in 400..499)) r.disable()
             null
         }
-        val lightDoneAt = now()
-        val lightElapsed = (lightDoneAt - asked).coerceAtLeast(0)
         val first = light?.parts?.filterIsInstance<Part.ToolCall>()?.firstOrNull()
-        val firstVerb = first?.let { tools.verb(it.name) }
-        var decisionScore: Double? = null
-        var decisionAllowed = false
-        if (first != null && firstVerb in ModelRouter.DECISION_GATED_MAIN_VERBS && decision != null) {
-            val choice = try {
-                withTimeoutOrNull(DECISION_TIMEOUT_MS) {
-                    decision.choose(
-                        state = buildJsonObject {
-                            put("step", step)
-                            put("tool", first.name)
-                            put("verb", firstVerb?.name ?: "")
-                            put("args", Redactor.args(firstVerb, first.argsJson, secretField = true))
-                            put("model", picked.name)
-                        },
-                        instructions = LIGHT_ROUTE_INSTRUCTIONS,
-                        options = LIGHT_ROUTE_OPTIONS,
-                        applicability = null,
-                    )
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
-            }
-            decisionScore = choice?.probability?.takeIf { it.isFinite() }
-            decisionAllowed = choice?.choice == ALLOW_LIGHT &&
-                decisionScore != null && decisionScore >= DecisionPolicy.MIN_PROBABILITY
-        }
-        if (first != null && !needsMain(first, decisionAllowed)) {
-            if (firstVerb in ModelRouter.DECISION_GATED_MAIN_VERBS) {
-                track.noteDecision(decisionScore, decisionAllowed)
-            }
-            return light to picked
-        }
+        if (first != null && !needsMain(first)) return light to picked
         r.noteTrouble()
-        onText?.invoke("")
-        val restartedAt = now()
-        restarted(restartedAt)
-        val mainReply = try {
-            ask(history, specs, step, onText = onText)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val fallbackDiff = when {
-                light == null -> "light_error"
-                first == null -> "no_tool"
-                else -> "main_error"
-            }
-            emitLightRejected(step, picked, light, first, lightDoneAt, lightElapsed, restartedAt, decisionScore, fallbackDiff)
-            throw e
-        }
-        val mainDiff = computeMainDiff(light, first, mainReply)
-        emitLightRejected(step, picked, light, first, lightDoneAt, lightElapsed, restartedAt, decisionScore, mainDiff)
-        return mainReply to lastMainUsed
-    }
-
-    private fun emitLightRejected(
-        step: Int,
-        picked: ChatModel,
-        light: ModelReply?,
-        first: Part.ToolCall?,
-        lightDoneAt: Long,
-        lightElapsed: Long,
-        restartedAt: Long,
-        decisionScore: Double?,
-        mainDiff: String,
-    ) {
         val text = light?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }?.trim().orEmpty()
         emit(RunEvent.ModelReply(
-            lightDoneAt, step, RunEvent.clip(Redactor.text(text)), first?.name,
-            first?.let { Redactor.args(tools.verb(it.name), it.argsJson, secretField = true) },
-            light?.usage?.inputTokens, light?.usage?.outputTokens, light?.usage?.cachedInputTokens, lightElapsed,
+            now(), step, RunEvent.clip(Redactor.text(text)), first?.name, first?.let { Redactor.args(tools.verb(it.name), it.argsJson, secretField = true) },
+            light?.usage?.inputTokens, light?.usage?.outputTokens, light?.usage?.cachedInputTokens, now() - asked,
             picked.name, ROLE_LIGHT_REJECTED,
-            decisionScore = decisionScore, mainDiff = mainDiff,
         ))
-        val toolLabel = first?.name ?: if (light == null) "light_error" else "no_tool"
-        emit(RunEvent.State(restartedAt, "light_to_main", toolLabel))
-        val scoreLabel = decisionScore?.let { String.format(Locale.ROOT, "%.2f", it) } ?: "n/a"
-        emit(RunEvent.State(
-            restartedAt,
-            "light_rejection_detail",
-            "step=$step tool=$toolLabel model=${picked.name} score=$scoreLabel diff=$mainDiff",
-        ))
+        emit(RunEvent.State(now(), "light_to_main", first?.name ?: if (light == null) "light_error" else "no_tool"))
+        onText?.invoke("")
+        restarted(now())
+        return ask(history, specs, step, onText = onText) to lastMainUsed
     }
 
-    private fun computeMainDiff(light: ModelReply?, first: Part.ToolCall?, mainReply: ModelReply): String {
-        if (light == null) return "light_error"
-        if (first == null) return "no_tool"
-        val mainFirst = mainReply.parts.filterIsInstance<Part.ToolCall>().firstOrNull()
-            ?: return "tool:${first.name}->no_tool"
-        if (first.name != mainFirst.name) return "tool:${first.name}->${mainFirst.name}"
-        val lightArgs = parsedArgsOrNull(first.argsJson)
-        val mainArgs = parsedArgsOrNull(mainFirst.argsJson)
-        val sameArgs = if (lightArgs != null && mainArgs != null) lightArgs == mainArgs
-            else first.argsJson.trim() == mainFirst.argsJson.trim()
-        return if (sameArgs) "same_call:${first.name}" else "args:${first.name}"
-    }
-
-    private fun parsedArgsOrNull(json: String): JsonObject? = try {
-        Json.parseToJsonElement(json.ifBlank { "{}" }) as? JsonObject
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun needsMain(call: Part.ToolCall, decisionAllowedLight: Boolean = false): Boolean =
-        ModelRouter.mainOnly(call.name, tools.verb(call.name), decisionAllowedLight) ||
+    private fun needsMain(call: Part.ToolCall): Boolean =
+        ModelRouter.mainOnly(call.name, tools.verb(call.name)) ||
             (!autonomous && ConfirmDecision.mayBeIrreversible(tools, call.name, parseArgs(call.argsJson)))
 
     /**
@@ -290,9 +189,9 @@ internal class ModelCaller(
     /** 链上不再换了,决定交出哪个错误:预算错误原样;只试过一个模型原样;试过整条链包成 [ModelError.ChainFailed]。 */
     private fun terminalError(e: ModelError): ModelError {
         // 当前错误就是预算错误时以它为准;否则链上较早的预算错误优先于包装(审 T-1112-74a8f2 D1):预算错误不包 ChainFailed,原样交出
-        if (e is ModelError.TaskBudgetExceeded || e is ModelError.UsdBudgetExceeded || e is ModelError.DailyBudgetExceeded) return e
+        if (e is ModelError.TaskBudgetExceeded || e is ModelError.DailyBudgetExceeded) return e
         trialLog.map { it.second }.firstOrNull {
-            it is ModelError.TaskBudgetExceeded || it is ModelError.UsdBudgetExceeded || it is ModelError.DailyBudgetExceeded
+            it is ModelError.TaskBudgetExceeded || it is ModelError.DailyBudgetExceeded
         }?.let { return it }
         return if (trialLog.size < 2) e
         else ModelError.ChainFailed(headError ?: e, trialLog.map { (index, err) -> chain[index].name to err })
@@ -392,15 +291,6 @@ internal class ModelCaller(
         const val ROLE_LIGHT = "light"
         /** 轻量模型的回复没执行,这一步改问了主模型;仍是一次模型调用,用量照记。 */
         const val ROLE_LIGHT_REJECTED = "light_rejected"
-        const val DECISION_TIMEOUT_MS = 3_000L
-        const val ALLOW_LIGHT = "ALLOW_LIGHT"
-        const val USE_MAIN = "USE_MAIN"
-        private const val LIGHT_ROUTE_INSTRUCTIONS =
-            "Decide whether the light model's proposed screen-describe or swipe tool call is safe and straightforward enough to proceed directly, or should be escalated to the main model."
-        private val LIGHT_ROUTE_OPTIONS = linkedMapOf(
-            ALLOW_LIGHT to "The proposed screen-describe or swipe call is simple, safe, and clearly targeted; let the light model's call proceed.",
-            USE_MAIN to "The proposed screen-describe or swipe call is ambiguous, sensitive, or needs stronger reasoning; escalate to the main model.",
-        )
     }
 }
 

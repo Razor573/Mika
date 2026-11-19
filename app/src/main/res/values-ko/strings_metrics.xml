@@ -59,8 +59,4 @@
     <plurals name="chat_steps_n">
         <item quantity="other">%1$d단계</item>
     </plurals>
-    <string name="metrics_est_cost">예상 비용</string>
-    <string name="metrics_avg_cost">평균 비용</string>
-    <string name="metrics_total_cost">총 비용</string>
-    <string name="metrics_light_rejected">경량 모델 거부됨</string>
 </resources>

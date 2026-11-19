@@ -34,34 +34,11 @@ object ScreenText {
 }
 
 object ScreenJson {
-    private val READING_ORDER: Comparator<UiElement> = compareBy<UiElement>(
-        { it.bounds.getOrElse(1) { 0 } },
-        { it.bounds.getOrElse(0) { 0 } },
-        { it.bounds.getOrElse(3) { 0 } },
-        { it.bounds.getOrElse(2) { 0 } },
-        { it.role },
-    ).thenByDescending { it.hint }
-        .thenByDescending { it.clickable }
-        .thenBy { it.name }
-        .thenBy { it.resourceId.orEmpty() }
-        .thenBy { it.ref }
-
     /** observe 的元素数组;center 换成与 tap 坐标相同的 0–999(像素只在端口内部用);返回数组与被截掉的元素数。 */
     fun elements(s: ScreenSnapshot, maxElements: Int): Pair<JsonArray, Int> {
         val all = s.elements.filter { it.meaningful }
-        val selected = if (all.size <= maxElements) {
-            all
-        } else {
-            val cx = if (s.width > 0) s.width / 2 else 500
-            val cy = if (s.height > 0) s.height / 2 else 500
-            all.sortedWith(
-                compareByDescending<UiElement> { it.clickable || it.editable || it.scrollable || it.focused || UiStates.CHECKED in it.states || UiStates.SELECTED in it.states }
-                    .thenBy { kotlin.math.abs(it.centerX - cx) + kotlin.math.abs(it.centerY - cy) }
-                    .then(READING_ORDER)
-            ).take(maxElements)
-        }.sortedWith(READING_ORDER)
         val arr = buildJsonArray {
-            for (e in selected) add(buildJsonObject {
+            for (e in all.take(maxElements)) add(buildJsonObject {
                 put("ref", e.ref)
                 put("role", e.role)
                 put("name", e.name)

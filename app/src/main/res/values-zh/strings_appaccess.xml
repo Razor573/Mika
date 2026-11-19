@@ -51,16 +51,4 @@
     <string name="appaccess_share_unblock">允许此应用</string>
     <string name="appaccess_share_cancel">取消分享</string>
     <string name="appaccess_share_expired">屏幕分享许可已失效，请重新截屏</string>
-
-    <string name="appaccess_hard_locked_title">强锁保护（验证器、加密钱包与银行）</string>
-    <string name="appaccess_hard_locked_note">验证器、加密钱包和已强锁的金融应用即使点击“全部允许”仍保持禁用，解除需要设备验证。</string>
-    <string name="appaccess_hard_locked_item_sub">解除需要设备锁屏验证</string>
-    <string name="appaccess_hard_locked_auth_title">解除 %1$s 的强锁</string>
-    <string name="appaccess_hard_locked_auth_sub">验证身份以允许 Mika 访问此受保护应用</string>
-    <string name="appaccess_hard_locked_auth_failed">需要身份验证才能解除</string>
-    <string name="appaccess_hard_locked_unlock_title">解除受保护应用？</string>
-    <string name="appaccess_hard_locked_countdown_wait">当前设备未设置锁屏密码，请等待 %2$d 秒后再解除 %1$s。</string>
-    <string name="appaccess_hard_locked_countdown_ready">当前设备未设置锁屏密码，现在可以解除 %1$s。</string>
-    <string name="appaccess_hard_locked_unlock_confirm">解除</string>
-    <string name="appaccess_hard_lock_add">加入设备验证强锁</string>
 </resources>

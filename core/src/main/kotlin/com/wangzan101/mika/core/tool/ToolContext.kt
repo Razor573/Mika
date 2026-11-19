@@ -31,8 +31,6 @@ internal class ToolConfig(
     val utterances: UserUtterances?,
     val conversationId: String?,
     val imageOps: ImageOps?,
-    val compactUiTree: Boolean = false,
-    val fullRawTreeDump: Boolean = false,
     /** 存下一个定时任务,并说明能不能准时(见 [Scheduled])。 */
     val scheduleTrigger: ((TriggerDefinition) -> Scheduled)? = null,
     val scheduleAdmin: ScheduleAdmin? = null,

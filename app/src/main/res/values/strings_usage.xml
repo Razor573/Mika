@@ -48,5 +48,4 @@
     <string name="usage_allowance_updated">Last updated %1$s</string>
     <string name="usage_allowance_self_hosted">Self-hosted connection</string>
     <string name="usage_allowance_unsupported">Allowance lookup unavailable for this connection</string>
-    <string name="usage_allowance_free_tier">Free tier</string>
 </resources>

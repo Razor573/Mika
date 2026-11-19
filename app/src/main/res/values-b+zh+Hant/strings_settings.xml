@@ -231,10 +231,4 @@
     <plurals name="settings_trigger_run_minutes_n">
         <item quantity="other">%1$d 分鐘</item>
     </plurals>
-    <string name="settings_compact_ui_tree">Compact UI tree</string>
-    <string name="settings_compact_ui_tree_sub">Prune empty layout wrappers and offscreen nodes to save tokens</string>
-    <string name="settings_task_usd_budget">單任務花費上限（美元）</string>
-    <string name="settings_task_usd_budget_sub">僅統計已知定價或服務商回傳費用的呼叫。達到上限時，Mika 會暫停詢問是否繼續，無人值守時則直接停止。</string>
-    <string name="settings_usd_budget_custom">自訂花費上限（美元）</string>
-    <string name="settings_usd_budget_invalid">請輸入 %1$s 到 %2$s 之間的金額。</string>
 </resources>

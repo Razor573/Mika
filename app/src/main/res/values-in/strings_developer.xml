@@ -29,6 +29,4 @@
     <string name="dev_screen_tables_sub">Saat layar pertama kali dibaca, kirim kolom untuk bidang berulang. Referensi elemen dan pohon lengkap tetap tersedia.</string>
     <string name="dev_device_files">Impor file perangkat</string>
     <string name="dev_device_files_sub">Izinkan Mika menyalin file dari penyimpanan bersama perangkat ke ruang kerja. Perubahan berlaku untuk tugas baru.</string>
-    <string name="dev_full_raw_tree">Full raw tree dump</string>
-    <string name="dev_full_raw_tree_sub">Send unpruned UI tree and full screenMap instead of compact skeleton</string>
 </resources>

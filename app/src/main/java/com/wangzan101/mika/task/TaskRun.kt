@@ -12,7 +12,6 @@ import com.wangzan101.mika.core.cap.phone.AppPacePlan
 import com.wangzan101.mika.core.cap.phone.OperatingPace
 import com.wangzan101.mika.core.usage.DeepSeekPriceCache
 import com.wangzan101.mika.core.usage.DeepSeekRunCost
-import com.wangzan101.mika.core.usage.RunUsdCost
 import com.wangzan101.mika.core.usage.RunUsageTally
 import com.wangzan101.mika.core.shell.AccessibilityRepair
 import com.wangzan101.mika.core.shell.HelperRestart
@@ -499,24 +498,8 @@ class TaskRun(
                 e is RunEvent.State && e.name == "reply_interrupted" -> steerJoin.interrupted(e.detail)
                 e is RunEvent.State && e.name == "reply_finished_before_steer" -> steerJoin.finished(e.detail)
                 e is RunEvent.State && e.name == "steer_received" -> joinSteer(e.detail)
-                e is RunEvent.State && (e.name == "app_blocked_package" || e.name == "screen_protected_package") ->
-                    onProtectedOrBlockedPackage(e.detail)
             }
         }
-    }
-
-    private fun onProtectedOrBlockedPackage(pkg: String) {
-        if (pkg.isBlank()) return
-        val state = (service.application as? MikaApp)?.appAccess?.current() ?: return
-        val classification = state.classifications[pkg]
-        val isBankingOrAuth = pkg in state.hardLocked ||
-            classification?.category == com.wangzan101.mika.core.access.AppCategory.Finance ||
-            com.wangzan101.mika.core.access.isKnownBankingOrAuthPackage(pkg, classification)
-        if (!isBankingOrAuth) return
-        if (!com.wangzan101.mika.settings.BankingMode.isAutoPromptEnabled(service)) return
-        if (com.wangzan101.mika.settings.BankingMode.isPaused(service)) return
-        service.taskState.bankingPrompt.value = ConfirmationNotifier.appLabel(service, pkg)
-        service.notifyBankingPrompt(pkg)
     }
 
     /** 通知和卡片的按钮都带着它所属的申报 [key];点在已经换掉的旧通知、旧卡片上不算数。 */
@@ -678,8 +661,7 @@ class TaskRun(
                         } else null
                         usage.estimate(table)
                     }
-                    val usdCost = c.tally.usdCost?.snapshot()
-                    r.event(c.tally.event(System.currentTimeMillis(), cost, usdCost))
+                    r.event(c.tally.event(System.currentTimeMillis(), cost))
                     r.close()
                     if (BuildConfig.DEBUG) c.runStore?.mirrorToExternal(r.runId)
                 }
@@ -718,18 +700,9 @@ class TaskRun(
         var record: RunHandle? = null
         var runStore: RunStore? = null
         // 整个运行共用一份已报告 Token 预算；子任务沿用协程上下文里的这份，不另开额度。
-        val taskFlags = FeatureFlags.get(service)
-        val tokenBudget = if (conditionCheck) null else taskFlags.taskTokenBudget()
-        val usdBudget = if (conditionCheck) null else taskFlags.taskUsdBudget()
-        val showCost = taskFlags.showTaskCost()
-        val rateStore = ProviderStore.get(service)
+        val tokenBudget = if (conditionCheck) null else FeatureFlags.get(service).taskTokenBudget()
         // 这次运行里经计量的模型请求(含旁路调用),收尾时记进运行记录
-        val tally = RunUsageTally(
-            tokenBudget = tokenBudget,
-            deepSeekCost = if (showCost) DeepSeekRunCost() else null,
-            usdBudget = usdBudget,
-            usdCost = if (showCost || usdBudget != null) RunUsdCost(rateOverrides = rateStore::customRateFor) else null,
-        )
+        val tally = RunUsageTally(tokenBudget, if (FeatureFlags.get(service).showTaskCost()) DeepSeekRunCost() else null)
         // 第一次打开网址时才建;没建过就不用关
         var webStack: WebStack? = null
         // 当前界面(手机/网页)要看分发器;画中画的画面来源随它切换
@@ -1080,9 +1053,7 @@ class TaskRun(
                         appPacing = { pace.appPacing() }, appTempo = { pace.of(it).tempo }, appCapped = { pace.capped(it) }, appIdleScroll = { IdleScroll(Random.Default) },
                         sandbox = sandbox, workspace = { conversationId }, runSpec = childSpec,
                         conversationId = conversationId, inlineScreen = speed.inlineScreen,
-                        adaptiveVision = speed.adaptiveVision,
-                        compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
-                        fullRawTreeDump = speed.fullRawTreeDump)
+                        adaptiveVision = speed.adaptiveVision)
                     AgentLoop(model, childTools, basePrompt, maxSteps = childSpec.stepBudget ?: AgentLoop.UNLIMITED_STEPS,
                         // 子任务跟着询问 / 自主;询问时它也过关卡,子任务里花钱的一步一律不做
                         confirmations = runApproval.gate(), approvals = runApproval, autonomous = runApproval.startedAutonomous,
@@ -1110,8 +1081,6 @@ class TaskRun(
                 } else null,
                 stableRefs = speed.inlineScreen, inlineScreen = speed.inlineScreen,
                 adaptiveVision = speed.adaptiveVision,
-                compactUiTree = FeatureFlags.get(service).uiTreeCompact(),
-                fullRawTreeDump = speed.fullRawTreeDump,
                 deepLinks = speed.deepLinks, memory = memory, profile = if (memory != null) memoryRuntime.profile() else null,
                 taskMemory = taskMemory,
                 utterances = utterances, conversationId = conversationId,

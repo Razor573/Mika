@@ -48,9 +48,9 @@ class ProviderAllowanceTest {
 
     @Test fun openRouterDistinguishesZeroFromAnUnsetLimit() = runTest {
         respond("""{"data":{"limit":10,"limit_remaining":0,"limit_reset":"weekly"}}""")
-        respond("""{"data":{"limit":null,"is_free_tier":true}}""")
-        assertEquals(ProviderAllowance.KeyLimit(money("0", "USD"), ResetPeriod.Weekly, isFreeTier = null), client.query(AllowanceSource.OpenRouter, "test-key"))
-        assertEquals(ProviderAllowance.KeyLimit(null, isFreeTier = true), client.query(AllowanceSource.OpenRouter, "test-key"))
+        respond("""{"data":{"limit":null}}""")
+        assertEquals(ProviderAllowance.KeyLimit(money("0", "USD"), ResetPeriod.Weekly), client.query(AllowanceSource.OpenRouter, "test-key"))
+        assertEquals(ProviderAllowance.KeyLimit(null), client.query(AllowanceSource.OpenRouter, "test-key"))
         assertEquals("/api/v1/key", server.takeRequest().path)
     }
 

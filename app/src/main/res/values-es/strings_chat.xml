@@ -321,9 +321,4 @@
     <string name="chat_audio">Audio</string>
     <string name="chat_audio_play">Play</string>
     <string name="chat_audio_stop">Stop</string>
-    <string name="shortcut_pin">Fijar en la pantalla de inicio</string>
-    <string name="shortcut_pin_requested">Acceso directo solicitado en la pantalla de inicio</string>
-    <string name="shortcut_pin_unsupported">Este lanzador no admite fijar accesos directos</string>
-    <string name="shortcut_invalid">Acceso directo no válido o caducado</string>
-    <string name="shortcut_target_missing">Esta tarea guardada o multipaso ya no existe</string>
 </resources>
