@@ -189,6 +189,8 @@ class AgentLoop(
     private val modelFallbacks: List<ChatModel> = emptyList(),
     private val modelChainProviderIds: List<String?> = emptyList(),
     private val trace: RunTrace? = null,
+    /** 插件提示词钩子:拼好的系统提示词发模型前过它;为 null 时原样发。 */
+    private val promptTransform: (suspend (String) -> String)? = null,
     /** 这一轮用的人格(名字 · 修订号);只写进运行记录,不参与提示词拼装。没有人格为 null。 */
     private val personaLabel: String? = null,
 ) {
@@ -295,6 +297,7 @@ class AgentLoop(
             override fun cancel() = this@AgentLoop.cancel()
         })
         caller.reset(basePrompt)
+        caller.promptTransform = promptTransform
         // 同意只在一次任务内有效
         confirmations?.reset()
         utterances?.clear()

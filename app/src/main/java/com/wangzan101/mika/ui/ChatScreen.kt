@@ -4,14 +4,13 @@ import androidx.compose.foundation.gestures.scrollBy
 import com.wangzan101.mika.cap.sandbox.AttachmentFailure
 import com.wangzan101.mika.cap.sandbox.AttachmentFailureReason
 import com.wangzan101.mika.core.agent.QuoteMessage
-import com.wangzan101.mika.core.record.ConversationTokens
-import com.wangzan101.mika.core.usage.DeepSeekCost
-import com.wangzan101.mika.settings.FeatureFlags
 import com.wangzan101.mika.core.agent.AttachedPage
 import com.wangzan101.mika.ui.components.DirectionalIcon
 import com.wangzan101.mika.ui.components.GlassSurface
 import com.wangzan101.mika.ui.components.keepsKeyboard
 import com.wangzan101.mika.ui.components.pageBackground
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -268,7 +267,6 @@ fun ChatScreen(
     val input = ui.input
     // 推荐任务可以直接填进空输入框;已有内容时先确认,不能因误触把草稿换掉。
     var pendingExample by rememberSaveable(ui.conversationId) { mutableStateOf<String?>(null) }
-    var showSavedTasks by remember(ui.conversationId) { mutableStateOf(false) }
     var showChecklists by remember(ui.conversationId) { mutableStateOf(false) }
     var checklistIncoming by remember(ui.conversationId) { mutableStateOf<ChecklistSource?>(null) }
     var pendingChecklistDraft by remember(ui.conversationId) { mutableStateOf<String?>(null) }
@@ -383,12 +381,7 @@ fun ChatScreen(
         if (grown > 0 && followingTail && !listState.isScrollInProgress) listState.scrollBy(grown.toFloat())
     }
 
-    // 已结束各轮的运行小结:每轮结束那一行写这一轮的 token,顶栏闲着时写这个对话合起来的
-    val endedRuns = ui.exchanges.filter { !it.status.isActive() }.mapNotNull { it.recordedRun }
-    val runMetrics = rememberRunMetrics(endedRuns)
     val context = LocalContext.current
-    val flags = remember(context) { FeatureFlags.get(context) }
-    val showTaskCost by remember(flags) { flags.showTaskCostChanges() }.collectAsState(initial = flags.showTaskCost())
 
     val c = MikaTheme.colors
     val backdrop = rememberGlassBackdrop()
@@ -445,12 +438,9 @@ fun ChatScreen(
                 }
                 ui.exchanges.forEachIndexed { i, ex ->
                     val backgroundNote = i == ui.exchanges.lastIndex && ui.operatingPhone
-                    val metrics = ex.runId?.let(runMetrics::get)
-                    val cost = metrics?.deepSeekCost?.takeIf { showTaskCost }
                     exchange(
                         i, ex, ui.conversationId, ui.takeoverStage, vm, reduceMotion, backgroundNote, openRun, loadSource, openSource, kept,
                         highlightKey = highlightKey,
-                        tokens = ConversationTokens.turn(metrics, includeSideCalls = cost != null), cost = cost,
                         recover = { resume ->
                             val label = if (resume) R.string.chat_resume_request else R.string.chat_restart_request
                             vm.send(context.getString(label, ex.goal), check)
@@ -523,7 +513,6 @@ fun ChatScreen(
             mode = ui.composer,
             hasHistory = ui.exchanges.isNotEmpty(),
             onSend = { vm.send(input, check) },
-            onSavedTasks = if (recommendationStore != null) ({ showSavedTasks = true }) else null,
             onTeach = if (ui.composer == ComposerMode.Idle) ({ onOpenTeach(input.trim()) }) else null,
             onStop = vm::cancel,
             queued = ui.queued,
@@ -750,20 +739,6 @@ fun ChatScreen(
         )
     }
 
-    if (showSavedTasks && recommendationStore != null) androidx.compose.ui.window.Dialog(
-        onDismissRequest = { showSavedTasks = false },
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
-            RecommendedTasksScreen(recommendationStore, onBack = { showSavedTasks = false },
-                onOpenChecklists = if (checklistStore != null) ({ showSavedTasks = false; checklistIncoming = null; showChecklists = true }) else null,
-                onOpenWorkflows = if (workflowRuntime != null) ({ showSavedTasks = false; showWorkflows = true }) else null,
-                onPick = { task ->
-                showSavedTasks = false
-                pickTask(task)
-            })
-        }
-    }
     if (showChecklists && checklistStore != null) androidx.compose.ui.window.Dialog(
         onDismissRequest = { showChecklists = false; checklistIncoming = null },
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
@@ -923,9 +898,6 @@ private fun LazyListScope.exchange(
     kept: KeptPage? = null,
     /** 从搜索或文件库跳过来时要高亮的行 key。 */
     highlightKey: String? = null,
-    /** 这一轮用了多少 token(结束后、读到运行小结时才有)。 */
-    tokens: Long? = null,
-    cost: DeepSeekCost? = null,
     /** 终态后的两个新运行入口:true 从摘要断点继续,false 按原目标重新开始。 */
     recover: (Boolean) -> Unit = {},
     openReport: (String) -> Unit = {}, openPlayback: (String) -> Unit = {},
@@ -965,14 +937,10 @@ private fun LazyListScope.exchange(
     joined.forEach(::steer)
     ex.draft?.takeIf(String::isNotBlank)?.let { draft -> item("d$index") { DraftText(draft, ex.waitingForModel) } }
     waiting.forEach(::steer)
-    val receipt = if (ex.steps.isNotEmpty() || ex.recordedRun != null) {
-        val usage = listOfNotNull(tokens?.let(ChatTokensCopy::amount), cost?.let(ChatTokensCopy::cost)).joinToString(" · ")
-        if (ex.steps.isNotEmpty()) listOf(stepsSummary(ex), usage).filter(String::isNotEmpty).joinToString(" · ") else usage
-    } else ""
     item("r$index") {
         JumpHighlight(highlightKey == "r$index", reduceMotion) {
             StatusCard(ex.status, stage, vm, ex.recordedRun, loadSource, openSource, openRun, "r$index",
-                recover = recover, goal = ex.goal, receipt = receipt, openReport = openReport, openPlayback = openPlayback)
+                recover = recover, goal = ex.goal, openReport = openReport, openPlayback = openPlayback)
         }
     }
     // 这一轮结束后留在后台运行的那一页:还开着是绿色一行(能关),关了是一句原因
@@ -1340,8 +1308,10 @@ private fun StatusCard(
     /** 回答的长按菜单认这一条用的(见 [MessageArea])。 */
     key: String,
     recover: (Boolean) -> Unit = {},
-    goal: String, receipt: String, openReport: (String) -> Unit, openPlayback: (String) -> Unit,
+    goal: String, openReport: (String) -> Unit, openPlayback: (String) -> Unit,
 ) {
+    var shareRequest by remember { mutableStateOf<ShareRequest?>(null) }
+    ShareCardHost(shareRequest, onDone = { shareRequest = null })
     when (status) {
         ExchangeStatus.Working -> Unit
         ExchangeStatus.WaitingUnlock -> NeedCard(stringResource(R.string.chat_wait_unlock), stringResource(R.string.chat_unlock_body))
@@ -1402,8 +1372,7 @@ private fun StatusCard(
                         }
                     }
                     MarkdownText(status.answer, AnswerText.copy(color = MikaTheme.colors.ink))
-                    ReadAloudRow(status.answer, vm)
-                    ReplyActions(runId, openRun, loadSource, openSource, status.evidence, receipt, openReport, openPlayback)
+                    ReplyActions(runId, status.answer, goal, vm, { shareRequest = ShareRequest(goal, status.answer) }, openRun, loadSource, openSource, status.evidence, openReport, openPlayback)
                 }
             }
         }
@@ -1412,9 +1381,9 @@ private fun StatusCard(
                 Box(Modifier.size(8.dp).background(MikaTheme.colors.bad, CircleShape))
                 Text(stringResource(R.string.chat_not_done), style = MikaType.BodyStrong, color = MikaTheme.colors.ink)
             }
-            Text(status.reason, Modifier.padding(top = 4.dp), style = CardBody, color = MikaTheme.colors.ink2)
+            MarkdownText(status.reason, AnswerText.copy(color = MikaTheme.colors.ink), Modifier.fillMaxWidth().padding(top = 6.dp).answerSurface())
             RecoveryActions(runId, recover)
-            ReplyActions(runId, openRun, loadSource, openSource, null, receipt, openReport, openPlayback)
+            ReplyActions(runId, null, goal, vm, {}, openRun, loadSource, openSource, null, openReport, openPlayback)
         }
         // 停止后补上的交代当作这一轮的回答,排在「已停止」下面;还在写时一行小字
         is ExchangeStatus.Cancelled -> Column(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
@@ -1430,32 +1399,24 @@ private fun StatusCard(
                 }
             }
             RecoveryActions(runId, recover)
-            ReplyActions(runId, openRun, loadSource, openSource, null, receipt, openReport, openPlayback)
+            ReplyActions(runId, null, goal, vm, {}, openRun, loadSource, openSource, null, openReport, openPlayback)
         }
     }
 }
 
-/** 回答下面的「朗读/停止」;没有配置声音模型时不显示。 */
+/** 操作区里的「朗读/停止」图标;没有配置声音模型时不显示。 */
 @Composable
-private fun ReadAloudRow(answer: String, vm: ChatViewModel) {
+private fun ReadAloudIcon(answer: String, vm: ChatViewModel) {
     val ready by vm.canSpeak.collectAsState()
     if (!ready) return
     val playback by vm.voice.collectAsState()
     val playing = playback is VoicePlayback.Playing || playback is VoicePlayback.Loading
     val c = MikaTheme.colors
-    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            Modifier.clip(MikaShapes.Pill).clickable(role = Role.Button) { if (playing) vm.stopSpeaking() else vm.speak(answer) }
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-            Icon(MikaIcons.Sound, null, Modifier.size(14.dp), tint = if (playing) c.accent else c.ink3)
-            Text(
-                stringResource(if (playing) R.string.chat_stop_speaking else R.string.chat_read_aloud),
-                style = MikaType.Caption, color = if (playing) c.accent else c.ink3,
-            )
-        }
-    }
+    ReplyIcon(
+        MikaIcons.Sound,
+        stringResource(if (playing) R.string.chat_stop_speaking else R.string.chat_read_aloud),
+        tint = if (playing) c.accent else c.ink2,
+    ) { if (playing) vm.stopSpeaking() else vm.speak(answer) }
 }
 
 /** 这一轮生成的音频:名字/稿子开头、时长、播放/停止;点整张卡播放,再点停止。 */
@@ -1508,51 +1469,71 @@ private fun RecoveryActions(runId: String?, recover: (Boolean) -> Unit) {
     }
 }
 
-/** 回答正文下方的操作区:一条淡分隔线 + 一排中性小胶囊(查看过程 / 来源 / 任务报告 / 操作回放)。 */
-@OptIn(ExperimentalLayoutApi::class)
+/** 回答正文下方的操作区:一条淡分隔线 + 一排纯图标按钮(朗读/复制/分享 | 查看过程/来源/任务报告/操作回放)。 */
 @Composable
 private fun ReplyActions(
     runId: String?,
+    answer: String?,
+    goal: String,
+    vm: ChatViewModel,
+    onShare: () -> Unit,
     openRun: (String) -> Unit,
     loadSource: suspend (String) -> EvidenceSource?,
     openSource: (String?, String?) -> Unit,
     evidence: String?,
-    receipt: String,
     openReport: (String) -> Unit,
     openPlayback: (String) -> Unit,
 ) {
-    if (runId == null) return
-    val source by produceState<EvidenceSource?>(null, runId) { value = loadSource(runId) }
+    if (runId == null && answer == null) return
+    val source by produceState<EvidenceSource?>(null, runId) { value = if (runId == null) null else loadSource(runId) }
     val hasSource = evidence != null || !source?.items.isNullOrEmpty() || !source?.screenshots.isNullOrEmpty()
     val c = MikaTheme.colors
+    val context = LocalContext.current
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(c.hair))
         Spacer(Modifier.height(11.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            ReplyChip(MikaIcons.ListChecks, stringResource(R.string.chat_view_process)) { openRun(runId) }
-            if (hasSource) ReplyChip(MikaIcons.Link, sourceLabel(source)) { openSource(runId, evidence) }
-            ReplyChip(MikaIcons.Doc, stringResource(R.string.report_title)) { openReport(runId) }
-            ReplyChip(MikaIcons.Route, stringResource(R.string.playback_title)) { openPlayback(runId) }
-        }
-        if (receipt.isNotEmpty()) {
-            Text(receipt, Modifier.fillMaxWidth().padding(top = 8.dp), style = ChipText.copy(fontWeight = FontWeight.Normal), color = c.ink3, textAlign = TextAlign.End)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (answer != null) {
+                ReadAloudIcon(answer, vm)
+                Spacer(Modifier.width(4.dp))
+                ReplyIcon(MikaIcons.Copy, stringResource(R.string.chat_copy)) { copyAnswer(context, answer) }
+                Spacer(Modifier.width(4.dp))
+                ReplyIcon(MikaIcons.Share, stringResource(R.string.share)) { onShare() }
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.width(0.5.dp).height(18.dp).background(c.hair))
+                Spacer(Modifier.width(8.dp))
+            }
+            if (runId != null) {
+                ReplyIcon(MikaIcons.Clock, stringResource(R.string.chat_view_process)) { openRun(runId) }
+                if (hasSource) {
+                    Spacer(Modifier.width(4.dp))
+                    ReplyIcon(MikaIcons.Link, sourceLabel(source)) { openSource(runId, evidence) }
+                }
+                Spacer(Modifier.width(4.dp))
+                ReplyIcon(MikaIcons.Doc, stringResource(R.string.report_title)) { openReport(runId) }
+                Spacer(Modifier.width(4.dp))
+                ReplyIcon(MikaIcons.Play, stringResource(R.string.playback_title)) { openPlayback(runId) }
+            }
         }
     }
 }
 
-/** 操作区里的一枚中性小胶囊:浅灰底 + 细描边 + 灰色小图标与文字,不抢正文的视觉。 */
+/** 操作区里的一枚纯图标按钮:30dp 触达区、17dp 图标,[label] 只作无障碍描述。 */
 @Composable
-private fun ReplyChip(icon: ImageVector, label: String, onClick: () -> Unit) {
-    val c = MikaTheme.colors
-    Row(
-        Modifier.clip(MikaShapes.Pill).background(c.fill).border(0.5.dp, c.edge, MikaShapes.Pill)
-            .clickable(onClickLabel = label, onClick = onClick).padding(horizontal = 11.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+private fun ReplyIcon(icon: ImageVector, label: String, tint: Color = MikaTheme.colors.ink2, onClick: () -> Unit) {
+    Box(
+        Modifier.size(30.dp).clip(MikaShapes.Tile).clickable(onClickLabel = label, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, null, Modifier.size(13.dp), tint = c.ink2)
-        Text(label, style = ChipText, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Icon(icon, label, Modifier.size(17.dp), tint = tint)
     }
+}
+
+/** 复制回答正文的纯文字到剪贴板。 */
+private fun copyAnswer(context: Context, answer: String) {
+    val clip = ClipData.newPlainText("Mika", MarkdownModel.toPlainText(answer))
+    context.getSystemService(ClipboardManager::class.java).setPrimaryClip(clip)
+    Toast.makeText(context, R.string.chat_copied, Toast.LENGTH_SHORT).show()
 }
 
 /**
@@ -1663,7 +1644,6 @@ internal fun Composer(
     attachBlocked: Boolean = false,
     /** 「＋」面板里的「教 Mika」。点了先收起面板。 */
     onTeach: (() -> Unit)? = null,
-    onSavedTasks: (() -> Unit)? = null,
     attachments: List<PendingAttachment> = emptyList(),
     importing: Boolean = false,
     rejected: List<AttachmentFailure> = emptyList(),
@@ -1822,12 +1802,6 @@ internal fun Composer(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(MikaIcons.Plus, label, Modifier.size(20.dp).graphicsLayer { rotationZ = turn }, tint = c.ink)
-                    }
-                }
-                if (onSavedTasks != null) {
-                    androidx.compose.material3.IconButton(onClick = { keyboard?.hide(); onSavedTasks() },
-                        modifier = Modifier.testTag("composer-saved-tasks")) {
-                        Icon(MikaIcons.Star, stringResource(R.string.recommendations_title), Modifier.size(MikaSize.Icon), tint = c.ink)
                     }
                 }
                 Box(Modifier.weight(1f).padding(start = if (showAttach) 2.dp else 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)) {
