@@ -18,6 +18,7 @@ import com.wangzan101.mika.core.model.AnthropicModel
 import com.wangzan101.mika.core.model.AntigravityModel
 import com.wangzan101.mika.core.model.ApiKeyText
 import com.wangzan101.mika.core.model.BearerToken
+import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.ChatModel
@@ -294,6 +295,7 @@ data class ClientSetup(
     val reasoningEffort: String? = null,
     val thinkingTypes: List<String>? = null,
     val readTimeoutSeconds: Int? = null,
+    val forceToolCall: Boolean = false,
 )
 
 /** 「测试并保存」试调用(见 [ProviderStore.probe])的结果。 */
@@ -830,12 +832,16 @@ class ProviderStore(
         val configured = applyContextSettings(cfg, settings)
         val roleEffort = _roles.value.reasoningEffort(role)
         // 主动能力:思考取服务商写明的最低档;回复短的那两种请求另设上限(见 ProactiveModelSetup)
-        val (effort, cap) = if (purpose == UsagePurpose.Proactive) {
-            ProactiveModelSetup.of(adapterFor(cfg, listed?.endpoint).first, ReasoningOptions.of(cfg, listed), roleEffort, call)
-        } else roleEffort to null
+        val (effort, cap) = when (purpose) {
+            UsagePurpose.Proactive -> ProactiveModelSetup.of(adapterFor(cfg, listed?.endpoint).first, ReasoningOptions.of(cfg, listed), roleEffort, call)
+            UsagePurpose.Light -> roleEffort to CallOptions.LIGHT_MAX_OUTPUT_TOKENS
+            else -> roleEffort to null
+        }
+        val forceToolCall = purpose == UsagePurpose.Light
         return modelFactory(configured, apiKey(cfg.id), listed?.endpoint, ClientSetup(
             headers(p?.sessionHeader, session), maxOutputTokens = cap, reasoningEffort = effort,
             thinkingTypes = listed?.thinkingTypes, readTimeoutSeconds = settings?.readTimeoutSeconds,
+            forceToolCall = forceToolCall,
         )).metered(source, usage, beforeRetry = beforeRetry, beforeCall = beforeCall)
     }
 
@@ -1411,24 +1417,25 @@ class ProviderStore(
         return when (kind) {
             ProviderConfig.Kind.OpenAiCompat ->
                 OpenAiCompatModel(baseUrl, apiKey, cfg.model, cfg.capabilities, http, endpoint?.reasoningField, setup.headers,
-                    reasoningEffort = setup.reasoningEffort)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Anthropic -> AnthropicModel(
                 baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http,
                 maxTokens = setup.maxOutputTokens,
                 headers = setup.headers, reasoningEffort = setup.reasoningEffort, thinkingTypes = setup.thinkingTypes,
+                forceToolCall = setup.forceToolCall,
             )
             ProviderConfig.Kind.Gemini ->
                 GeminiModel(baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http, setup.headers, setup.maxOutputTokens,
-                    reasoningEffort = setup.reasoningEffort)
+                    reasoningEffort = setup.reasoningEffort, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.OpenAiResponses ->
                 ResponsesModel(baseUrl, BearerToken.fixed(apiKey), cfg.model, cfg.capabilities, http, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.ChatGpt ->
                 ResponsesModel(baseUrl, tokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, chatGptPlan = true, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Xai ->
                 ResponsesModel(baseUrl, accountTokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT)
+                    reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Vertex -> {
                 val p = provider(cfg.providerId)
                 val project = cfg.projectId.ifBlank { p?.projectId.orEmpty() }
@@ -1446,6 +1453,7 @@ class ProviderStore(
                     maxOutputTokens = setup.maxOutputTokens,
                     reasoningEffort = setup.reasoningEffort,
                     baseUrl = vertexBaseOverride(baseUrl),
+                    forceToolCall = setup.forceToolCall,
                 )
             }
             ProviderConfig.Kind.Antigravity ->

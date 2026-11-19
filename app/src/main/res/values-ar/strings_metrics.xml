@@ -48,6 +48,7 @@
     <string name="metrics_steps">الخطوات</string>
     <string name="metrics_observe_act">القراءات / الإجراءات</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">رفض النموذج الخفيف</string>
     <string name="metrics_counted">المحتسب</string>
     <plurals name="metrics_n_runs">
         <item quantity="zero">%1$d عملية تشغيل</item>

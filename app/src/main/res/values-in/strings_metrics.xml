@@ -33,6 +33,7 @@
     <string name="metrics_steps">Langkah</string>
     <string name="metrics_observe_act">Pembacaan / tindakan</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">Model ringan ditolak</string>
     <string name="metrics_counted">Dihitung</string>
     <plurals name="metrics_n_runs">
         <item quantity="other">%1$d eksekusi</item>

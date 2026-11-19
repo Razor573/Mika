@@ -33,6 +33,7 @@
     <string name="metrics_steps">步數</string>
     <string name="metrics_observe_act">讀取螢幕 / 操作</string>
     <string name="metrics_observe_act_value">%1$d 次 / %2$d 次</string>
+    <string name="metrics_light_rejected">輕量模型被拒</string>
     <string name="metrics_counted">統計了</string>
     <plurals name="metrics_n_runs">
         <item quantity="other">%1$d 次執行</item>

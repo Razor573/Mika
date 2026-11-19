@@ -59,23 +59,48 @@ class ResponsesModel(
     /** null 使用服务端默认;服务端拒绝所选档位时照常报错,不悄悄换档重试。 */
     private val reasoningEffort: String? = null,
     private val accountLogin: String? = null,
+    private val maxOutputTokens: Int? = null,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trim().trimEnd('/') + "/responses"
     private val json = Json { ignoreUnknownKeys = true }
 
     override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
-        completeStreaming(system, messages, tools) {}
+        completeStreaming(system, messages, tools, CallOptions.DEFAULT) {}
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply = completeStreaming(system, messages, tools, options) {}
 
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        var effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        var effectiveMaxOut = (options.maxOutputTokens ?: maxOutputTokens)?.takeIf { !chatGptPlan }
         var includeReasoning = true
         var fresh = false
         while (true) {
             val stream = ResponsesStream(onText, ::errorOf)
             val bearer = token.get(fresh)
-            val (status, retryAfter, text) = HttpSupport.stream(http, request(bearer, system, messages, tools, includeReasoning), stream::accept)
+            val (status, retryAfter, text) = HttpSupport.stream(
+                http,
+                request(bearer, effectiveSystem, messages, tools, includeReasoning, effectiveForce, effectiveMaxOut),
+                stream::accept,
+            )
             if (status in 200..299) {
                 if (text.isNotEmpty()) return stream.fromBody(text).also { reply ->
                     reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.takeIf(String::isNotEmpty)?.let(onText)
@@ -87,29 +112,52 @@ class ResponsesModel(
                 status == 401 && token.refreshable && !fresh -> fresh = true
                 status == 400 && includeReasoning && (err?.param == "include" || text.contains("reasoning.encrypted_content")) ->
                     includeReasoning = false
+                (status == 400 || status == 422) && effectiveForce && (err?.param == "tool_choice" || text.contains("tool_choice", ignoreCase = true)) ->
+                    effectiveForce = false
+                (status == 400 || status == 422) && effectiveMaxOut != null && (err?.param == "max_output_tokens" || text.contains("max_output_tokens", ignoreCase = true)) ->
+                    effectiveMaxOut = null
                 else -> throw httpError(status, retryAfter, text, err)
             }
         }
     }
 
-    internal fun body(system: String, messages: List<Message>, tools: List<ToolSpec>, includeReasoning: Boolean = true): JsonObject =
+    internal fun body(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        includeReasoning: Boolean = true,
+        forceToolChoice: Boolean = false,
+        maxOutputTokens: Int? = null,
+    ): JsonObject =
         buildJsonObject {
             put("model", model)
             if (system.isNotEmpty()) put("instructions", system)
             put("input", JsonArray(messages.flatMap(::serialize)))
-            if (tools.isNotEmpty()) putJsonArray("tools") { tools.forEach { add(toolJson(it)) } }
+            if (tools.isNotEmpty()) {
+                putJsonArray("tools") { tools.forEach { add(toolJson(it)) } }
+                if (forceToolChoice) put("tool_choice", "required")
+            }
+            if (maxOutputTokens != null) put("max_output_tokens", maxOutputTokens)
             put("store", false)
             put("stream", true)
             reasoningEffort?.let { effort -> putJsonObject("reasoning") { put("effort", effort) } }
             if (includeReasoning) putJsonArray("include") { add(ENCRYPTED_REASONING) }
         }
 
-    private suspend fun request(bearer: String?, system: String, messages: List<Message>, tools: List<ToolSpec>, includeReasoning: Boolean): Request =
+    private suspend fun request(
+        bearer: String?,
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        includeReasoning: Boolean,
+        forceToolChoice: Boolean = false,
+        maxOutputTokens: Int? = null,
+    ): Request =
         Request.Builder().url(endpoint)
             .withHeaders(headers)
             .apply { if (!bearer.isNullOrEmpty()) headerOrReject("Authorization", "Bearer $bearer") }
             .header("Accept", "text/event-stream")
-            .postInference(InferenceProtocol.Responses, body(system, messages, tools, includeReasoning)) {
+            .postInference(InferenceProtocol.Responses, body(system, messages, tools, includeReasoning, forceToolChoice, maxOutputTokens)) {
                 if (chatGptPlan || endpoint.toHttpUrlOrNull()?.host == "api.openai.com") "openai" else "openai_compatible"
             }
             .build()

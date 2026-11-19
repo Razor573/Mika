@@ -129,6 +129,40 @@ class RunMetricsTest {
         assertEquals(2_000L, m.firstFeedbackMs)
         assertEquals(2, m.modelCalls)
         assertEquals(1, m.lightCalls)
+        assertEquals(1, m.lightRejectedCalls)
+        assertEquals(1, m.lightRejected)
+        assertEquals(1.0, m.lightRejectionRate, 1e-6)
+    }
+
+    @Test fun tracksLightRejectedAndRetriedCountsAndRateInMetricsAndStats() {
+        val m1 = RunMetrics.of(listOf(
+            started(1_000),
+            reply(1_500, 1, "phone_observe", role = "main"),
+            reply(2_000, 2, "phone_observe", role = "main"),
+            reply(2_500, 3, "phone_tap", role = "light"),
+            RunEvent.State(2_800, "light_retry", "no_tool"),
+            reply(3_000, 4, "phone_describe", role = "light"),
+            RunEvent.ModelReply(
+                atMs = 3_500, step = 5, text = "", tool = "phone_tap", argsJson = "{}",
+                inputTokens = 120, outputTokens = 18, cachedTokens = 80,
+                model = "light", role = "light_rejected",
+                reason = "unsafe_tool", decisionScore = null,
+                validatorReason = "irreversible_target:phone_tap",
+                lightTool = "phone_tap", lightOutputTokens = 18, lightRetried = false,
+            ),
+            reply(4_000, 5, "end_not_done", role = "main"),
+            RunEvent.TaskEnded(4_500, "succeeded", "done"),
+        ), "r-light-1")!!
+        assertEquals(3, m1.lightCalls)
+        assertEquals(1, m1.lightRejectedCalls)
+        assertEquals(1, m1.lightRetriedCalls)
+        assertEquals(1.0 / 3.0, m1.lightRejectionRate, 1e-6)
+
+        val stats = RunStats.of(listOf(m1))
+        assertEquals(3, stats.lightCalls)
+        assertEquals(1, stats.lightRejectedCalls)
+        assertEquals(1, stats.lightRetriedCalls)
+        assertEquals(1.0 / 3.0, stats.lightRejectionRate, 1e-6)
     }
 
     @Test fun oldRecordsWithoutArrivalTimeUseTheReplyTime() {

@@ -35,6 +35,7 @@ internal object GeminiCodec {
         maxOutputTokens: Int? = null,
         reasoningEffort: String? = null,
         googleSearch: Boolean = false,
+        forceToolCall: Boolean = false,
     ): JsonObject {
         val systemText = (listOf(system) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
@@ -51,6 +52,11 @@ internal object GeminiCodec {
                     putJsonObject("googleSearch") {}
                 })
             })
+            if (forceToolCall && tools.isNotEmpty()) putJsonObject("tool_config") {
+                putJsonObject("function_calling_config") {
+                    put("mode", "ANY")
+                }
+            }
             put("contents", buildContents(messages, vision))
             if (maxOutputTokens != null || reasoningEffort != null) putJsonObject("generationConfig") {
                 maxOutputTokens?.let { put("maxOutputTokens", it) }

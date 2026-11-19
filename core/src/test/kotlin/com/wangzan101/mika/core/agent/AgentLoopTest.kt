@@ -2,6 +2,7 @@ package com.wangzan101.mika.core.agent
 
 import com.wangzan101.mika.core.guard.DIAGNOSTIC_VERBS
 import com.wangzan101.mika.core.model.Author
+import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
@@ -57,15 +58,27 @@ class FakeModel(vararg script: Any, private val repeatLast: Boolean = false, con
     private val script = script.toMutableList()
     val requests = mutableListOf<List<Message>>()
     val offeredTools = mutableListOf<List<String>>()
+    val callOptions = mutableListOf<CallOptions>()
+    val systems = mutableListOf<String>()
     var system: String? = null
+    private var pendingOptions: CallOptions? = null
 
     override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
+        val opts = pendingOptions ?: CallOptions.DEFAULT
+        pendingOptions = null
         this.system = system
+        systems += system
         requests += messages
         offeredTools += tools.map { it.name }
+        callOptions += opts
         val next = if (repeatLast && script.size == 1) script[0] else script.removeAt(0)
         if (next is Throwable) throw next
         return next as ModelReply
+    }
+
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>, options: CallOptions): ModelReply {
+        pendingOptions = options
+        return complete(system, messages, tools)
     }
 }
 

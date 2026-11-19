@@ -36,6 +36,7 @@
     <string name="metrics_steps">مراحل</string>
     <string name="metrics_observe_act">خواندن‌ها / اقدام‌ها</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">مدل سبک رد شده</string>
     <string name="metrics_counted">محاسبه‌شده</string>
     <plurals name="metrics_n_runs">
         <item quantity="one">%1$d اجرا</item>

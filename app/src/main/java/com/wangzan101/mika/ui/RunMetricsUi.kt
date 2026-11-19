@@ -89,6 +89,9 @@ object RunMetricsCopy {
     fun share(ms: Long, totalMs: Long): String =
         if (totalMs <= 0) duration(ms) else "${duration(ms)} · ${UsageCopy.percent(ms.toDouble() / totalMs)}"
 
+    fun lightRejectedValue(rejected: Int, total: Int, rate: Double): String =
+        "$rejected / $total (${UsageCopy.percent(rate)})"
+
     /** 点开后的细目:时间去向、token、步数与次数。 */
     fun breakdown(m: RunMetrics): List<Pair<String, String>> = buildList {
         add(MODEL to share(m.modelMs, m.totalMs))
@@ -104,6 +107,9 @@ object RunMetricsCopy {
         m.allHttpCalls?.let { add(tr(R.string.metrics_all_http_calls) to trPlural(R.plurals.times, it)) }
         add(tr(R.string.metrics_steps) to trPlural(R.plurals.chat_steps_n, m.steps))
         add(tr(R.string.metrics_observe_act) to tr(R.string.metrics_observe_act_value, m.observeCalls, m.actCalls))
+        if (m.lightCalls > 0 || m.lightRejectedCalls > 0) {
+            add(tr(R.string.metrics_light_rejected) to lightRejectedValue(m.lightRejectedCalls, m.lightCalls, m.lightRejectionRate))
+        }
     }
 
     /** 运行统计的各行。 */
@@ -114,6 +120,7 @@ object RunMetricsCopy {
         tr(R.string.metrics_median_feedback) to (s.medianFirstFeedbackMs?.let(::duration) ?: "—"),
         tr(R.string.metrics_avg_round_trips) to tr(R.string.metrics_avg_round_trips_value, String.format(Locale.ROOT, "%.1f", s.avgModelCalls)),
         tr(R.string.metrics_avg_tokens) to UsageCopy.tokens(s.avgTokens.roundToLong()),
+        tr(R.string.metrics_light_rejected) to lightRejectedValue(s.lightRejectedCalls, s.lightCalls, s.lightRejectionRate),
     )
 
     /** 时间去向:各项之和占总时长之和。 */

@@ -1,8 +1,10 @@
 package com.wangzan101.mika.core.agent
 
 import com.wangzan101.mika.core.trace.RunTrace
-import com.wangzan101.mika.core.action.ConfirmDecision
+import com.wangzan101.mika.core.model.Author
+import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.ChatModel
+import com.wangzan101.mika.core.model.LightPrompt
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelReply
@@ -124,12 +126,15 @@ internal class ModelCaller(
         onText: ((String) -> Unit)? = null,
     ): Pair<ModelReply, ChatModel> {
         val r = router?.takeIf { routing } ?: return ask(history, specs, step, onText = onText) to lastMainUsed
-        val picked = r.pick(track.context(step, history.any { m -> m.parts.any { it is Part.Image } }))
-        if (!r.isLight(picked)) return ask(history, specs, step, onText = onText) to lastMainUsed
+        val upfrontMain = r.shouldRouteToMainUpfront(history, specs, tools::verb)
+        val picked = r.pick(track.context(step, history.any { m -> m.parts.any { it is Part.Image } }).copy(needsMainUpfront = upfrontMain))
+        if (!r.isLight(picked) || upfrontMain) return ask(history, specs, step, onText = onText) to lastMainUsed
+        if (specs.none { !ModelRouter.mainOnly(it.name, tools.verb(it.name)) }) return ask(history, specs, step, onText = onText) to lastMainUsed
+
         // 轻量模型的上下文可能更小:它报超长、它那次折叠多少,都不连累主模型(压缩状态按模型分开记)
         val asked = now()
-        val light = try {
-            complete(viewFor(history, picked), specs, picked, RetryPolicy.NONE, step, onText)
+        suspend fun callLightOnce(messages: List<Message>): ModelReply? = try {
+            complete(viewFor(messages, picked), specs, picked, RetryPolicy.NONE, step, onText, CallOptions.LIGHT_TOOL_ONLY)
         } catch (e: CancellationException) {
             throw e
         } catch (e: ModelError.TaskBudgetExceeded) {
@@ -143,24 +148,71 @@ internal class ModelCaller(
                 (e is ModelError.Server && e.status in 400..499)) r.disable()
             null
         }
-        val first = light?.parts?.filterIsInstance<Part.ToolCall>()?.firstOrNull()
-        if (first != null && !needsMain(first)) return light to picked
-        r.noteTrouble()
-        val text = light?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }?.trim().orEmpty()
-        emit(RunEvent.ModelReply(
-            now(), step, RunEvent.clip(Redactor.text(text)), first?.name, first?.let { Redactor.args(tools.verb(it.name), it.argsJson, secretField = true) },
-            light?.usage?.inputTokens, light?.usage?.outputTokens, light?.usage?.cachedInputTokens, now() - asked,
-            picked.name, ROLE_LIGHT_REJECTED,
-        ))
-        emit(RunEvent.State(now(), "light_to_main", first?.name ?: if (light == null) "light_error" else "no_tool"))
-        onText?.invoke("")
-        restarted(now())
-        return ask(history, specs, step, onText = onText) to lastMainUsed
+
+        val firstLight = callLightOnce(history)
+        var finalLight = firstLight
+        var retried = false
+        var validation = LightCallValidator.validate(firstLight, specs, tools, autonomous, retried = false)
+        if (firstLight != null && firstLight.parts.none { it is Part.ToolCall }) {
+            retried = true
+            emit(RunEvent.State(now(), "light_retry", "no_tool"))
+            onText?.invoke("")
+            val statePart = history.lastOrNull()?.parts?.filterIsInstance<Part.Text>()
+                ?.lastOrNull { it.text.startsWith("Current place:") }
+            val retryParts = listOfNotNull(Part.Text(LightPrompt.RETRY_REMINDER), statePart)
+            val retryHistory = history + Message(Role.User, retryParts, Author.Mika)
+            val secondLight = callLightOnce(retryHistory)
+            finalLight = secondLight
+            validation = LightCallValidator.validate(secondLight, specs, tools, autonomous, retried = true)
+        }
+
+        when (val v = validation) {
+            is LightValidation.Accepted -> return v.reply to picked
+            is LightValidation.Rejected -> {
+                r.noteTrouble()
+                val text = finalLight?.parts?.filterIsInstance<Part.Text>()?.joinToString("") { it.text }?.trim().orEmpty()
+                val firstCall = finalLight?.parts?.filterIsInstance<Part.ToolCall>()?.firstOrNull()
+                val totalInput = sumNullable(firstLight?.usage?.inputTokens, if (retried) finalLight?.usage?.inputTokens else null)
+                val totalOutput = sumNullable(firstLight?.usage?.outputTokens, if (retried) finalLight?.usage?.outputTokens else null)
+                val totalCached = sumNullable(firstLight?.usage?.cachedInputTokens, if (retried) finalLight?.usage?.cachedInputTokens else null)
+                val lightOutTokens = finalLight?.usage?.outputTokens
+                    ?: finalLight?.let { TokenEstimate.of(listOf(Message(Role.Assistant, it.parts, Author.Mika))) }
+                    ?: firstLight?.usage?.outputTokens
+                    ?: firstLight?.let { TokenEstimate.of(listOf(Message(Role.Assistant, it.parts, Author.Mika))) }
+                    ?: 0
+                val rejectedTool = v.tool ?: "None"
+                emit(RunEvent.ModelReply(
+                    atMs = now(),
+                    step = step,
+                    text = RunEvent.clip(Redactor.text(text)),
+                    tool = rejectedTool,
+                    argsJson = firstCall?.let { Redactor.args(tools.verb(it.name), it.argsJson, secretField = true) },
+                    inputTokens = totalInput,
+                    outputTokens = totalOutput,
+                    cachedTokens = totalCached,
+                    latencyMs = now() - asked,
+                    model = picked.name,
+                    role = ROLE_LIGHT_REJECTED,
+                    reason = v.reason,
+                    decisionScore = v.decisionScore,
+                    validatorReason = v.validatorReason,
+                    lightTool = rejectedTool,
+                    lightOutputTokens = lightOutTokens,
+                    lightRetried = retried,
+                ))
+                emit(RunEvent.State(now(), "light_to_main", v.tool ?: if (finalLight == null) "light_error" else "no_tool"))
+                onText?.invoke("")
+                restarted(now())
+                return ask(history, specs, step, onText = onText) to lastMainUsed
+            }
+        }
     }
 
-    private fun needsMain(call: Part.ToolCall): Boolean =
-        ModelRouter.mainOnly(call.name, tools.verb(call.name)) ||
-            (!autonomous && ConfirmDecision.mayBeIrreversible(tools, call.name, parseArgs(call.argsJson)))
+    private fun sumNullable(a: Int?, b: Int?): Int? = when {
+        a != null && b != null -> a + b
+        a != null -> a
+        else -> b
+    }
 
     /**
      * 问 [using](默认主模型):发出的是给它看的那份历史([viewFor])压缩后的副本。
@@ -221,7 +273,7 @@ internal class ModelCaller(
     }
 
     private suspend fun complete(history: List<Message>, specs: List<ToolSpec>, using: ChatModel, policy: RetryPolicy, step: Int,
-        onText: ((String) -> Unit)? = null): ModelReply {
+        onText: ((String) -> Unit)? = null, options: CallOptions = CallOptions.DEFAULT): ModelReply {
         var retries = 0
         lastRetryWaitMs = 0
         val began = now()
@@ -266,12 +318,21 @@ internal class ModelCaller(
                 // 这一次之前花掉的(失败的请求、退避)都算重试等待
                 lastRetryWaitMs = now() - began
                 suspend fun send(): ModelReply {
-                    val prompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
-                    return if (onText == null) using.complete(prompt, sent.messages, specs)
-                    else if (using is StreamingChatModel) using.completeStreaming(prompt, sent.messages, specs, onText)
-                    else using.complete(prompt, sent.messages, specs).also { result ->
-                        result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
-                            .takeIf(String::isNotEmpty)?.let(onText)
+                    val rawPrompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
+                    val prompt = if (options.forceToolCall || router?.isLight(using) == true) LightPrompt.ensure(rawPrompt) else rawPrompt
+                    return if (onText == null) {
+                        if (options == CallOptions.DEFAULT) using.complete(prompt, sent.messages, specs)
+                        else using.complete(prompt, sent.messages, specs, options)
+                    } else if (using is StreamingChatModel) {
+                        if (options == CallOptions.DEFAULT) using.completeStreaming(prompt, sent.messages, specs, onText)
+                        else using.completeStreaming(prompt, sent.messages, specs, options, onText)
+                    } else {
+                        val res = if (options == CallOptions.DEFAULT) using.complete(prompt, sent.messages, specs)
+                        else using.complete(prompt, sent.messages, specs, options)
+                        res.also { result ->
+                            result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
+                                .takeIf(String::isNotEmpty)?.let(onText)
+                        }
                     }
                 }
                 val reply = if (trace == null) send() else {

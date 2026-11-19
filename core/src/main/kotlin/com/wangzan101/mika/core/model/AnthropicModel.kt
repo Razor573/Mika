@@ -48,6 +48,7 @@ class AnthropicModel(
      * null 是列表没说(档位来自别的列表写法),照档位发。
      */
     private val thinkingTypes: List<String>? = null,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"
@@ -66,22 +67,73 @@ class AnthropicModel(
      */
     private val staleThinking: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
-        val (status, retryAfter, text) = dropStaleThinking(messages) {
-            HttpSupport.execute(http, request(system, messages, tools, stream = false))
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
+        complete(system, messages, tools, CallOptions.DEFAULT)
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveMaxTokens = options.maxOutputTokens ?: maxTokens
+        var response = dropStaleThinking(messages) {
+            HttpSupport.execute(
+                http,
+                request(effectiveSystem, messages, tools, stream = false, maxTokensOverride = effectiveMaxTokens, forceToolChoice = effectiveForce),
+            )
         }
+        if ((response.status == 400 || response.status == 422) && effectiveForce && response.body.contains("tool_choice", ignoreCase = true)) {
+            response = dropStaleThinking(messages) {
+                HttpSupport.execute(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = false, maxTokensOverride = effectiveMaxTokens, forceToolChoice = false),
+                )
+            }
+        }
+        val (status, retryAfter, text) = response
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return parse(text)
     }
 
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
-        val stream = AnthropicStream(endpoint, onText, ::parseUsage)
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveMaxTokens = options.maxOutputTokens ?: maxTokens
+        var stream = AnthropicStream(endpoint, onText, ::parseUsage)
         // 被拒的那次没有事件(不是 2xx 时 HttpSupport.stream 不调 accept),重发接着用这个 stream
-        val (status, retryAfter, text) = dropStaleThinking(messages) {
-            HttpSupport.stream(http, request(system, messages, tools, stream = true), stream::accept)
+        var response = dropStaleThinking(messages) {
+            HttpSupport.stream(
+                http,
+                request(effectiveSystem, messages, tools, stream = true, maxTokensOverride = effectiveMaxTokens, forceToolChoice = effectiveForce),
+                stream::accept,
+            )
         }
+        if ((response.status == 400 || response.status == 422) && effectiveForce && response.body.contains("tool_choice", ignoreCase = true)) {
+            stream = AnthropicStream(endpoint, onText, ::parseUsage)
+            response = dropStaleThinking(messages) {
+                HttpSupport.stream(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = true, maxTokensOverride = effectiveMaxTokens, forceToolChoice = false),
+                    stream::accept,
+                )
+            }
+        }
+        val (status, retryAfter, text) = response
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         if (text.isNotEmpty()) return parse(text).also { reply ->
             reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.takeIf(String::isNotEmpty)?.let(onText)
@@ -108,13 +160,20 @@ class AnthropicModel(
         return thinkingType != "disabled" && opaque !in staleThinking && SignedThinking.block(p, endpoint) != null
     }
 
-    private suspend fun request(system: String, messages: List<Message>, tools: List<ToolSpec>, stream: Boolean): Request {
+    private suspend fun request(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        stream: Boolean,
+        maxTokensOverride: Int = maxTokens,
+        forceToolChoice: Boolean = false,
+    ): Request {
         val systemText = (listOf(system) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
             .filter { it.isNotEmpty() }.joinToString("\n\n")
         val payload = buildJsonObject {
             put("model", model)
-            put("max_tokens", maxTokens)
+            put("max_tokens", maxTokensOverride)
             if (stream) put("stream", true)
             // Anthropic 拒绝空文本块,system 为空时整个字段省略
             if (systemText.isNotBlank()) put("system", buildJsonArray {
@@ -122,11 +181,14 @@ class AnthropicModel(
                     put("type", "text"); put("text", systemText); put("cache_control", ephemeral)
                 })
             })
-            if (tools.isNotEmpty()) put("tools", buildJsonArray {
-                tools.forEachIndexed { i, t -> add(toolJson(t, last = i == tools.lastIndex)) }
-            })
+            if (tools.isNotEmpty()) {
+                put("tools", buildJsonArray {
+                    tools.forEachIndexed { i, t -> add(toolJson(t, last = i == tools.lastIndex)) }
+                })
+                if (forceToolChoice) putJsonObject("tool_choice") { put("type", "any") }
+            }
             put("messages", buildMessages(messages))
-            when (thinkingType) {
+            if (!forceToolChoice) when (thinkingType) {
                 "disabled" -> putJsonObject("thinking") { put("type", "disabled") }
                 "adaptive" -> {
                     putJsonObject("thinking") {

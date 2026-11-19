@@ -540,11 +540,44 @@ class ProviderStoreTest {
         s.use(ModelRole.Main, p.id, "m1", none)
         s.use(ModelRole.Light, p.id, "m2", none)
         built.clear()
+        setups.clear()
         s.modelFor(ModelRole.Light)
         assertEquals("m2" to "k", built.single().first.model to built.single().second)
+        assertTrue(setups.single().forceToolCall)
+        assertEquals(200, setups.single().maxOutputTokens)
         built.clear()
+        setups.clear()
         s.modelFor(ModelRole.Main)
         assertEquals("m1", built.single().first.model)
+        assertFalse(setups.single().forceToolCall)
+        assertNull(setups.single().maxOutputTokens)
+    }
+
+    @Test
+    fun modelForLightForcesToolCallAnd200TokenCapWhileMainDoesNot() {
+        val s = store()
+        val p = connected(s)
+        s.use(ModelRole.Main, p.id, "m1", none)
+        s.use(ModelRole.Light, p.id, "m2", none)
+        s.use(ModelRole.Vision, p.id, "m1", none)
+
+        setups.clear()
+        s.modelFor(ModelRole.Light)
+        val lightSetup = setups.single()
+        assertTrue(lightSetup.forceToolCall)
+        assertEquals(200, lightSetup.maxOutputTokens)
+
+        setups.clear()
+        s.modelFor(ModelRole.Main)
+        val mainSetup = setups.single()
+        assertFalse(mainSetup.forceToolCall)
+        assertNull(mainSetup.maxOutputTokens)
+
+        setups.clear()
+        s.modelFor(ModelRole.Vision)
+        val visionSetup = setups.single()
+        assertFalse(visionSetup.forceToolCall)
+        assertNull(visionSetup.maxOutputTokens)
     }
 
     // ---------- 没人用的配置删掉 ----------

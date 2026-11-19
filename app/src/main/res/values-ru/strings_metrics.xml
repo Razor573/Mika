@@ -42,6 +42,7 @@
     <string name="metrics_steps">Шаги</string>
     <string name="metrics_observe_act">Чтения / действия</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">Лёгкая модель отклонена</string>
     <string name="metrics_counted">Учтено</string>
     <plurals name="metrics_n_runs">
         <item quantity="one">%1$d запуск</item>

@@ -17,6 +17,7 @@ class VertexModel(
     private val reasoningEffort: String? = null,
     baseUrl: String? = null,
     private val googleSearch: Boolean = false,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     private val cleanProjectId = VertexEndpoints.validateProjectId(projectId)
     private val cleanLocation = VertexEndpoints.normalizeLocation(location)
@@ -40,15 +41,28 @@ class VertexModel(
         }
     }
 
-    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
+        complete(system, messages, tools, CallOptions.DEFAULT)
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val payload = GeminiCodec.buildPayload(
-            system = system,
+            system = effectiveSystem,
             messages = messages,
             tools = tools,
             vision = capabilities.vision,
-            maxOutputTokens = maxOutputTokens,
+            maxOutputTokens = effectiveMaxOut,
             reasoningEffort = reasoningEffort,
             googleSearch = googleSearch && tools.isEmpty(),
+            forceToolCall = effectiveForce,
         )
         var fresh = false
         while (true) {
@@ -68,15 +82,28 @@ class VertexModel(
         messages: List<Message>,
         tools: List<ToolSpec>,
         onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val payload = GeminiCodec.buildPayload(
-            system = system,
+            system = effectiveSystem,
             messages = messages,
             tools = tools,
             vision = capabilities.vision,
-            maxOutputTokens = maxOutputTokens,
+            maxOutputTokens = effectiveMaxOut,
             reasoningEffort = reasoningEffort,
             googleSearch = googleSearch && tools.isEmpty(),
+            forceToolCall = effectiveForce,
         )
         var fresh = false
         while (true) {

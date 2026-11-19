@@ -23,35 +23,63 @@ class GeminiModel(
     /** 用户选的思考档位;null 不发,`none` 尽量关掉思考,其余作为 `thinkingConfig.thinkingLevel` 发出。 */
     private val reasoningEffort: String? = null,
     private val googleSearch: Boolean = false,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:generateContent"
     private val streamEndpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:streamGenerateContent?alt=sse"
 
-    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
-        val (status, retryAfter, text) = HttpSupport.execute(http, request(system, messages, tools, stream = false))
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
+        complete(system, messages, tools, CallOptions.DEFAULT)
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply {
+        val (status, retryAfter, text) = HttpSupport.execute(http, request(system, messages, tools, stream = false, options = options))
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return GeminiCodec.parseReply(text)
     }
 
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
         val stream = GeminiCodec.GeminiStream(onText)
-        val (status, retryAfter, text) = HttpSupport.stream(http, request(system, messages, tools, stream = true), stream::accept)
+        val (status, retryAfter, text) = HttpSupport.stream(http, request(system, messages, tools, stream = true, options = options), stream::accept)
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return GeminiCodec.finishOrBuffered(text, stream, onText)
     }
 
-    private suspend fun request(system: String, messages: List<Message>, tools: List<ToolSpec>, stream: Boolean): Request {
+    private suspend fun request(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        stream: Boolean,
+        options: CallOptions = CallOptions.DEFAULT,
+    ): Request {
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val payload = GeminiCodec.buildPayload(
-            system = system,
+            system = effectiveSystem,
             messages = messages,
             tools = tools,
             vision = capabilities.vision,
-            maxOutputTokens = maxOutputTokens,
+            maxOutputTokens = effectiveMaxOut,
             reasoningEffort = reasoningEffort,
             googleSearch = googleSearch && tools.isEmpty(),
+            forceToolCall = effectiveForce,
         )
         return Request.Builder().url(if (stream) streamEndpoint else endpoint)
             .withHeaders(headers)

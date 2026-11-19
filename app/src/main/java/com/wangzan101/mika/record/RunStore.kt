@@ -169,8 +169,11 @@ class RunStore internal constructor(
         internal const val EVENTS = "events.jsonl"
         private val USAGE_FIELDS = mapOf(
             "task_started" to setOf("model"),
-            "model_reply" to setOf("step", "model", "role", "tool", "inputTokens", "cachedTokens",
-                "outputTokens", "repliedAtMs", "latencyMs", "retryWaitMs"),
+            "model_reply" to setOf(
+                "step", "model", "role", "tool", "inputTokens", "cachedTokens",
+                "outputTokens", "repliedAtMs", "latencyMs", "retryWaitMs",
+                "reason", "decisionScore", "validatorReason", "lightTool", "lightOutputTokens", "lightRetried",
+            ),
             "compressed" to setOf("foldedSteps"),
             "model_calls" to setOf("calls", "httpCalls", "unreported", "httpUnreported", "inputTokens", "cachedTokens", "outputTokens"),
             "task_ended" to setOf("outcome", "kind"),

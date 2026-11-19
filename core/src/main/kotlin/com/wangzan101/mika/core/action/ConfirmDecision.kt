@@ -166,5 +166,13 @@ class ConfirmDecision(
             return aim.bySight || IrreversibleDetector.classify(target, checked, snap) != null ||
                 IrreversibleDetector.unresolved(target, checked, snap)
         }
+
+        /** 点击目标在指定读屏里是否找不到对应元素(大小模型分工校验用)。 */
+        fun isUnresolvedTarget(tools: ToolDispatcher, tool: String, args: JsonObject, snap: ScreenSnapshot?): Boolean =
+            IrreversibleDetector.unresolved(tools.gateTarget(tool), args, snap)
+
+        /** 在指定读屏里这一步是否命中不可逆判定(大小模型分工校验用)。 */
+        fun isIrreversibleTarget(tools: ToolDispatcher, tool: String, args: JsonObject, snap: ScreenSnapshot?): Boolean =
+            IrreversibleDetector.classify(tools.gateTarget(tool), args, snap) != null
     }
 }

@@ -79,6 +79,18 @@ sealed interface RunEvent {
          * 改派掉的轻量模型回复和旧记录里没有。
          */
         val repliedAtMs: Long? = null,
+        /** 轻量模型回复被拒绝时的原因类别(no_tool / invalid_tool / unsafe_tool / missing_target / light_error)。 */
+        val reason: String? = null,
+        /** 路由或判定得分(无评分时为 null)。 */
+        val decisionScore: Double? = null,
+        /** 校验器拒绝该轻量模型回复的具体原因。 */
+        val validatorReason: String? = null,
+        /** 轻量模型尝试调用的工具名(无工具时为 "None")。 */
+        val lightTool: String? = null,
+        /** 轻量模型本次被拒回复的输出 token 数。 */
+        val lightOutputTokens: Int? = null,
+        /** 轻量模型是否经过了一次 no-tool 提醒重试。 */
+        val lightRetried: Boolean? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
         val acted: Boolean get() = role != "light_rejected"

@@ -86,6 +86,67 @@ class ModelRouterTest {
         assertTrue(SANDBOX_TOOLS.all { ModelRouter.mainOnly(it, verb(it)) })
         assertTrue(SANDBOX_TOOLS.none { it in BATCHABLE })
     }
+
+    @Test fun allTwelveLightAppropriateToolsAreEligibleForLight() {
+        val lightTools = listOf(
+            "phone_tap",
+            "phone_scroll",
+            "phone_swipe",
+            "phone_screenshot",
+            "phone_type_text",
+            "phone_launch_app",
+            "phone_observe",
+            "phone_describe",
+            "view_past_screens",
+            "history_read",
+            "task_memory_step",
+            "web_read_page",
+        )
+        for (name in lightTools) {
+            org.junit.Assert.assertFalse("Expected $name to be Light-eligible", ModelRouter.mainOnly(name, verb(name)))
+        }
+    }
+
+    @Test fun upfrontRoutingKeepsMainForAskUserSystemCommandRunCommandAndFinalSummary() {
+        val r = ModelRouter(main, light)
+        assertSame(main, r.pick(clean(3).copy(needsMainUpfront = true)))
+        assertSame(main, r.pick(clean(3).copy(finalSummary = true)))
+        assertSame(main, r.pick(clean(3).copy(lastVerb = com.wangzan101.mika.core.tool.Verb.AskUser)))
+        assertSame(main, r.pick(clean(3).copy(lastVerb = com.wangzan101.mika.core.tool.Verb.PhoneCommand)))
+        assertSame(main, r.pick(clean(3).copy(lastVerb = com.wangzan101.mika.core.tool.Verb.RunCommand)))
+        assertSame(main, r.pick(clean(3).copy(requestedTool = "ask_user")))
+        assertSame(main, r.pick(clean(3).copy(requestedTool = "phone_system_command")))
+        assertSame(main, r.pick(clean(3).copy(requestedTool = "system_command")))
+        assertSame(main, r.pick(clean(3).copy(requestedTool = "run_command")))
+
+        val observeSpec = ToolSpec("phone_observe", "obs", "{}")
+        val endSpec = ToolSpec("end_not_done", "end", "{}")
+        val userMsg = Message(
+            com.wangzan101.mika.core.model.Role.User,
+            listOf(com.wangzan101.mika.core.model.Part.Text("go")),
+            com.wangzan101.mika.core.model.Author.User,
+        )
+        assertTrue(r.shouldRouteToMainUpfront(listOf(userMsg), listOf(observeSpec), ::verb, finalSummary = true))
+        assertTrue(r.shouldRouteToMainUpfront(listOf(userMsg), emptyList(), ::verb))
+        assertTrue(r.shouldRouteToMainUpfront(listOf(userMsg), listOf(endSpec), ::verb))
+
+        for (privileged in listOf("ask_user", "phone_system_command", "system_command", "run_command")) {
+            val historyAfterPrivileged = listOf(
+                userMsg,
+                Message(
+                    com.wangzan101.mika.core.model.Role.Assistant,
+                    listOf(com.wangzan101.mika.core.model.Part.ToolCall("c1", privileged, "{}")),
+                    com.wangzan101.mika.core.model.Author.Mika,
+                ),
+                Message(
+                    com.wangzan101.mika.core.model.Role.Tool,
+                    listOf(com.wangzan101.mika.core.model.Part.ToolResult("c1", """{"ok":true}""", isError = false)),
+                    com.wangzan101.mika.core.model.Author.Mika,
+                ),
+            )
+            assertTrue("Expected upfront Main after $privileged", r.shouldRouteToMainUpfront(historyAfterPrivileged, listOf(observeSpec), ::verb))
+        }
+    }
 }
 
 /** 「在哪」分手机 App 与网站:换到网页、打开网址都算换了地方。 */

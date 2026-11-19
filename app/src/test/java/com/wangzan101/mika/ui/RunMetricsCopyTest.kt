@@ -3,7 +3,9 @@ package com.wangzan101.mika.ui
 import org.junit.Rule
 import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.core.record.RunMetrics
+import com.wangzan101.mika.core.record.RunStats
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,5 +37,19 @@ class RunMetricsCopyTest {
         assertEquals("3 次 / 2 次", rows["读屏 / 操作"])
         assertTrue(rows.getValue("全部逻辑调用").startsWith("5 次"))
         assertEquals("6 次", rows["全部 HTTP 请求"])
+        assertFalse(rows.containsKey("轻量模型被拒"))
+    }
+
+    @Test fun breakdownAndStatsRowsRenderLightRejectedCountAndRate() {
+        val m = RunMetrics(
+            totalMs = 10_000, modelMs = 5_000, observeMs = 2_000, actMs = 1_000,
+            steps = 10, modelCalls = 10, lightCalls = 10, lightRejectedCalls = 2,
+        )
+        val breakdownRows = RunMetricsCopy.breakdown(m).toMap()
+        assertEquals("2 / 10 (20%)", breakdownRows["轻量模型被拒"])
+
+        val stats = RunStats.of(listOf(m))
+        val statsRows = RunMetricsCopy.statsRows(stats).toMap()
+        assertEquals("2 / 10 (20%)", statsRows["轻量模型被拒"])
     }
 }
