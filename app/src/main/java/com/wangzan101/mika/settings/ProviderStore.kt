@@ -1414,10 +1414,12 @@ class ProviderStore(
             ?.takeIf { it in MODEL_READ_TIMEOUT_SECONDS }
             ?.let { seconds -> defaultHttp.newBuilder().readTimeout(seconds.toLong(), TimeUnit.SECONDS).build() }
             ?: defaultHttp
+        // Chat Completions / Responses 只在轻量模型强制调工具时带回复上限(适配器遇 400/422 会去掉再发);连接测试等其余调用照旧不带
+        val compatMaxOut = setup.maxOutputTokens?.takeIf { setup.forceToolCall }
         return when (kind) {
             ProviderConfig.Kind.OpenAiCompat ->
                 OpenAiCompatModel(baseUrl, apiKey, cfg.model, cfg.capabilities, http, endpoint?.reasoningField, setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Anthropic -> AnthropicModel(
                 baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http,
                 maxTokens = setup.maxOutputTokens,
@@ -1429,13 +1431,13 @@ class ProviderStore(
                     reasoningEffort = setup.reasoningEffort, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.OpenAiResponses ->
                 ResponsesModel(baseUrl, BearerToken.fixed(apiKey), cfg.model, cfg.capabilities, http, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.ChatGpt ->
                 ResponsesModel(baseUrl, tokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, chatGptPlan = true, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Xai ->
                 ResponsesModel(baseUrl, accountTokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT, maxOutputTokens = setup.maxOutputTokens, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
             ProviderConfig.Kind.Vertex -> {
                 val p = provider(cfg.providerId)
                 val project = cfg.projectId.ifBlank { p?.projectId.orEmpty() }
