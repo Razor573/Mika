@@ -4,6 +4,7 @@ import com.wangzan101.mika.core.search.DeepSeekSearch
 import com.wangzan101.mika.core.search.ExaSearch
 import com.wangzan101.mika.core.search.JinaSearch
 import com.wangzan101.mika.core.search.SearxngSearch
+import com.wangzan101.mika.core.search.WebSearch
 import com.wangzan101.mika.core.search.WebSearchProvider
 import com.wangzan101.mika.core.search.WebSearchResult
 import com.wangzan101.mika.core.search.YouSearch

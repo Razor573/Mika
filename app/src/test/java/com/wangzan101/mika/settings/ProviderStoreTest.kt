@@ -1563,12 +1563,11 @@ class ProviderStoreTest {
             assertEquals("/v1beta/models/gemini-2.5-flash:generateContent", req.path)
             assertEquals("gem-secret", req.getHeader("x-goog-api-key"))
             assertEquals("Mika/1.2.3", req.getHeader("User-Agent"))
-            assertEquals("conv-g", req.getHeader("x-test-session"))
+            assertEquals(ModelSession.of("conv-g").id, req.getHeader("x-test-session"))
             assertTrue(req.body.readUtf8().contains("googleSearch"))
         } finally {
             server.shutdown()
         }
-    }
     }
 
     @Suppress("TestFunctionName")
