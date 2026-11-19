@@ -70,7 +70,7 @@ fun BackupScreen(onBack: () -> Unit) {
                 engine.import(ByteArrayInputStream(bytes), replace)
             }
             importedManifest = manifest
-        } catch (e: BackupException) {
+        } catch (_: BackupException) {
             status = context.getString(R.string.backup_import_failed)
         } catch (_: Exception) {
             status = context.getString(R.string.backup_import_failed)

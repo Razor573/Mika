@@ -45,6 +45,7 @@ object BackupPrefs {
         "web_search.xml" to listOf(
             EncryptedPrefKey.Prefix("api_key_encrypted_", "mika-web-search-key"),
             EncryptedPrefKey.Exact("api_key", "mika-web-search-key"),
+            EncryptedPrefKey.Exact("api_key_encrypted", "mika-web-search-key"),
         ),
         "mika_call_settings.xml" to listOf(
             EncryptedPrefKey.Exact("volc_credentials_v1", "mika-volc-realtime-calls"),
@@ -54,6 +55,9 @@ object BackupPrefs {
         ),
         "mika_call_instructions.xml" to listOf(
             EncryptedPrefKey.Exact("encrypted_rules_v1", "mika-call-instructions"),
+        ),
+        "mika_call_history.xml" to listOf(
+            EncryptedPrefKey.Exact("encrypted_calls_v1", "mika-call-history"),
         ),
         "task_recovery.xml" to listOf(
             EncryptedPrefKey.Exact("clip_backup", "mika-clip-backup"),

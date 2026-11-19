@@ -84,6 +84,9 @@ class GoogleGroundingSearchTest {
         val tools = sent["tools"]!!.jsonArray
         assertEquals(1, tools.size)
         assertEquals(JsonObject(emptyMap()), tools[0].jsonObject["googleSearch"]!!.jsonObject)
+        assertTrue(
+            sent["systemInstruction"]!!.jsonObject["parts"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content.isNotBlank(),
+        )
         assertEquals(
             "latest kotlin release",
             sent["contents"]!!.jsonArray[0].jsonObject["parts"]!!.jsonArray[0].jsonObject["text"]!!.jsonPrimitive.content,
@@ -97,6 +100,43 @@ class GoogleGroundingSearchTest {
         assertEquals("JetBrains Kotlin", result.hits[1].title)
         assertEquals("https://github.com/JetBrains/kotlin", result.hits[1].url)
         assertEquals("It adds guard conditions.", result.hits[1].snippet)
+    }
+
+    @Test
+    fun parsesByteOffsetSegmentsWithoutExplicitSegmentText() = runTest {
+        server.enqueue(
+            ok(
+                """{
+                    "candidates": [{
+                        "content": {
+                            "role": "model",
+                            "parts": [{"text": "Gemini grounded summary."}]
+                        },
+                        "finishReason": "STOP",
+                        "groundingMetadata": {
+                            "groundingChunks": [
+                                {"web": {"uri": "https://ai.google.dev/gemini-api/docs/grounding", "title": "Google Search Grounding"}}
+                            ],
+                            "groundingSupports": [
+                                {"segment": {"startIndex": 0, "endIndex": 24}, "groundingChunkIndices": [0]}
+                            ]
+                        }
+                    }]
+                }""",
+            ),
+        )
+
+        val search = GoogleGroundingSearch.forGemini(
+            baseUrl = baseUrl(),
+            apiKey = "gk-test",
+            model = "gemini-2.5-flash",
+            client = client,
+        )
+        val result = search.search("gemini grounding", count = 5) as WebSearchResult.Success
+        assertEquals(1, result.hits.size)
+        assertEquals("Google Search Grounding", result.hits[0].title)
+        assertEquals("https://ai.google.dev/gemini-api/docs/grounding", result.hits[0].url)
+        assertEquals("Gemini grounded summary.", result.hits[0].snippet)
     }
 
     @Test
@@ -204,6 +244,9 @@ class GoogleGroundingSearchTest {
         assertEquals("authentication_failed", (search.search("q", 5) as WebSearchResult.Failure).code)
 
         server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":{"code":403}}"""))
+        assertEquals("authentication_failed", (search.search("q", 5) as WebSearchResult.Failure).code)
+
+        server.enqueue(MockResponse().setResponseCode(400).setBody("""{"error":{"message":"API key not valid."}}"""))
         assertEquals("authentication_failed", (search.search("q", 5) as WebSearchResult.Failure).code)
 
         server.enqueue(MockResponse().setResponseCode(429).setHeader("Retry-After", "12").setBody("{}"))

@@ -13,7 +13,7 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 
 @Serializable
-enum class CallVoiceProtocol { VOLC_DUPLEX }
+enum class CallVoiceProtocol { VOLC_DUPLEX, OPENAI_REALTIME }
 
 @Serializable
 data class CallVoiceProfile(
@@ -100,8 +100,12 @@ class CallVoiceProfileStore internal constructor(
         require(credentials == null || credentials.valid) { "Realtime voice credentials are incomplete" }
         val id = profile.id.ifBlank(newId)
         val existing = stored.profiles.firstOrNull { it.id == id }
+        require(existing == null || existing.protocol == profile.protocol) { "请为其他服务商新建配置" }
+        if (profile.protocol == CallVoiceProtocol.OPENAI_REALTIME) {
+            require(credentials == null || credentials.apiKey.isNotBlank()) { "请填写 OpenAI API Key" }
+        }
         val normalized = profile.copy(id = id, name = profile.name.trim(), endpoint = profile.endpoint.trim(),
-            model = profile.model.trim(), speaker = profile.speaker.trim().ifBlank { VolcRealtimeConfig.DEFAULT_SPEAKER })
+            model = profile.model.trim(), speaker = profile.speaker.trim().ifBlank { if (profile.protocol == CallVoiceProtocol.OPENAI_REALTIME) OpenAiCallProtocol.VOICE else VolcRealtimeConfig.DEFAULT_SPEAKER })
         validate(normalized)
         require(stored.profiles.size < CallVoiceProfile.MAX_PROFILES || existing != null) { "You can save at most ${CallVoiceProfile.MAX_PROFILES} realtime voice profiles" }
         val serviceChanged = existing != null && (existing.protocol != normalized.protocol || existing.endpoint != normalized.endpoint || existing.model != normalized.model)
@@ -210,6 +214,7 @@ class CallVoiceProfileStore internal constructor(
         require(Regex("[A-Za-z0-9_-]{1,100}").matches(profile.id)) { "Invalid profile ID" }
         require(profile.name.isNotBlank() && profile.name.length <= CallVoiceProfile.MAX_NAME) { "Profile name must be 1–${CallVoiceProfile.MAX_NAME} characters" }
         require(profile.endpoint.length <= CallVoiceProfile.MAX_ENDPOINT) { "Endpoint URL is too long" }
+        if (profile.protocol == CallVoiceProtocol.OPENAI_REALTIME) require(profile.endpoint == OpenAiCallProtocol.ENDPOINT) { "Invalid OpenAI endpoint" }
         val uri = runCatching { java.net.URI(profile.endpoint) }.getOrNull()
         require(uri != null && uri.scheme == "wss" && !uri.host.isNullOrBlank() && uri.userInfo == null) { "Endpoint URL must be a valid wss address" }
         require(profile.model.isNotBlank() && profile.model.length <= CallVoiceProfile.MAX_MODEL && profile.model.all { it.code in 33..126 }) { "Invalid realtime model name" }

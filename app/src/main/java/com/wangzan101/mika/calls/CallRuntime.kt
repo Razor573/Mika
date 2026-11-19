@@ -104,7 +104,7 @@ class CallRuntime(private val app: MikaApp) {
     val voiceProfiles = CallVoiceProfileStore.create(app)
     val instructions = CallInstructionStore.create(app)
     private val access = CallTelecomAccess(app)
-    private val realtimeProvider: CallRealtimeProvider = VolcRealtimeProvider()
+    private val realtimeProvider: CallRealtimeProvider = ProfileRealtimeProvider()
     private val telecom get() = app.getSystemService(TelecomManager::class.java)
     private val telephony get() = app.getSystemService(TelephonyManager::class.java)
     private val notifications = CallNotifications(app)
@@ -1104,7 +1104,7 @@ class CallRuntime(private val app: MikaApp) {
                         realtimeProvider.connect(profile, credentials, systemPrompt, enablePhoneDtmf = true)
                             .also { w.session = it } // Adopt before the timeout/cancellation boundary.
                     } ?: throw CallProblem("Realtime voice connection timed out; AI did not handle the call")
-                    if (!connected.setMuted(true)) throw CallProblem("Volcengine realtime voice did not become ready")
+                    if (!connected.setMuted(true)) throw CallProblem("Realtime voice did not become ready")
                     validateSessionTarget(w, helper)
                     connected
                 },
@@ -1191,11 +1191,11 @@ class CallRuntime(private val app: MikaApp) {
         } catch (e: VolcRealtimeException) {
             debugMediaException(w, e)
             w.stopReason.record(when (e.kind) {
-                VolcRealtimeException.Kind.AUTH -> "Volcengine authentication rejected; check your call voice credentials and service activation"
-                VolcRealtimeException.Kind.RATE_LIMITED -> "Volcengine realtime voice hit its service limit; the system Phone app is handling the call"
-                VolcRealtimeException.Kind.TIMEOUT, VolcRealtimeException.Kind.NETWORK -> "Volcengine realtime voice connection is unavailable; the system Phone app is handling the call"
-                VolcRealtimeException.Kind.BACKPRESSURE -> "Volcengine realtime audio is congested; the system Phone app is handling the call"
-                else -> "Volcengine realtime voice could not continue; check call settings"
+                VolcRealtimeException.Kind.AUTH -> "Realtime voice authentication rejected; check your call voice credentials and service activation"
+                VolcRealtimeException.Kind.RATE_LIMITED -> "Realtime voice hit its service limit; the system Phone app is handling the call"
+                VolcRealtimeException.Kind.TIMEOUT, VolcRealtimeException.Kind.NETWORK -> "Realtime voice connection is unavailable; the system Phone app is handling the call"
+                VolcRealtimeException.Kind.BACKPRESSURE -> "Realtime audio is congested; the system Phone app is handling the call"
+                else -> "Realtime voice could not continue; check call settings"
             })
         } catch (e: Exception) {
             debugMediaException(w, e)
@@ -1429,6 +1429,15 @@ class CallRuntime(private val app: MikaApp) {
                                 liveCalls().singleOrNull() === target && liveTranscriptCallId == target.id &&
                                 appendTranscript(liveTranscript, role, text)) {
                                 publish()
+                            }
+                        },
+                        playedOutputFrames = {
+                            withContext(Dispatchers.IO) {
+                                val stats = helper.callAudioStats(w.audioOwner)
+                                if (stats?.getBoolean("upPlaybackHeadFresh") == true && stats.getBoolean("upPlaybackRouteReady")) {
+                                    (stats.getLong("upPlaybackHeadFrames") - stats.getLong("upPlaybackPrimeFrames"))
+                                        .coerceIn(0L, stats.getLong("upPlaybackEpochDataBytes") / 2L)
+                                } else 0L
                             }
                         },
                         awaitFarewellDrain = { fence ->

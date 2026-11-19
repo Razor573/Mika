@@ -124,7 +124,7 @@
 
 <!-- generated:providers:start -->
 <!-- 这一段由 ./gradlew updateReadme 生成，不要手改 -->
-内置 DeepSeek、Qwen、Kimi、Zhipu、Zhipu Coding Plan、SiliconFlow、Volcengine Ark、MiniMax、StepFun、Tencent Hunyuan、Baidu Qianfan、OpenRouter、Requesty、OpenCode Go、Anthropic、Gemini、Vertex AI、OpenAI、xAI、Mistral、Groq、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、Vertex、OpenAI Responses 接口都能接。
+内置 DeepSeek、Qwen、Kimi、Zhipu、Zhipu Coding Plan、SiliconFlow、Volcengine Ark、MiniMax、StepFun、Tencent Hunyuan、Baidu Qianfan、OpenRouter、OpenCode Go、Anthropic、Gemini、Vertex AI、OpenAI、xAI、Mistral、Groq、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、Vertex、OpenAI Responses 接口都能接。
 <!-- generated:providers:end -->
 
 也可以不填 Key：ChatGPT（Plus / Pro）、xAI / Grok、OpenRouter 账号登录。添加模型的步骤和各家登录的注意事项见[模型与登录](../models.md)。

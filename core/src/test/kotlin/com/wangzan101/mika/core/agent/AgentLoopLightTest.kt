@@ -10,6 +10,7 @@ import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.GeminiModel
 import com.wangzan101.mika.core.model.LightPrompt
 import com.wangzan101.mika.core.model.Message
+import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.OpenAiCompatModel
 import com.wangzan101.mika.core.model.Part
@@ -19,6 +20,7 @@ import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
 import com.wangzan101.mika.core.model.VertexModel
+import com.wangzan101.mika.core.net.RateLimitGovernor
 import com.wangzan101.mika.core.record.RunEvent
 import com.wangzan101.mika.core.record.RunMetrics
 import com.wangzan101.mika.core.record.RunSink
@@ -26,6 +28,8 @@ import com.wangzan101.mika.core.tool.FakeScreen
 import com.wangzan101.mika.core.uistate.ActionResult
 import com.wangzan101.mika.core.uistate.ScreenSnapshot
 import com.wangzan101.mika.core.uistate.UiElement
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -35,9 +39,11 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import java.io.File
 
@@ -105,8 +111,11 @@ private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : c
     override suspend fun typeText(ref: String?, snapshotId: String?, text: String): ActionResult = ActionResult.Ok(changed = true)
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AgentLoopLightTest {
     private val on = SpeedFlags(lightSteps = true)
+
+    @Before @After fun resetGovernor() = RateLimitGovernor.reset()
 
     private fun loop(main: ChatModel, light: ChatModel, sink: RunSink = RunSink.NONE, screen: com.wangzan101.mika.core.uistate.ScreenPort = FakeScreen()) =
         AgentLoop(main, toolDispatcher(screen), "BASE", sink = sink, flags = on, router = ModelRouter(main, light))
@@ -624,5 +633,70 @@ class AgentLoopLightTest {
         // 503 没有重发给轻量模型,这一步由主模型接
         assertEquals(1, light.requests.size)
         assertEquals(3, main.requests.size)
+    }
+
+    @Test fun lightOneRetryRunsWithoutCooldownWhenMainHasActive429Cooldown() = runTest {
+        val main = Named("main-cooldown", FakeModel())
+        val light = Named(
+            "light-ok",
+            FakeModel(
+                com.wangzan101.mika.core.testing.answerReply("Let me inspect the screen first."),
+                tools(call("phone_observe")),
+            ),
+        )
+        val dispatcher = toolDispatcher(SafeActionScreen())
+        val router = ModelRouter(main, light)
+        val sink = Events()
+        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy.NONE, sink::event, { 1000L })
+        val track = StepTrack()
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+
+        RateLimitGovernor.reportRateLimited(main.name, 5_000L)
+        val specs = listOf(ToolSpec("phone_observe", "Read screen", "{}"))
+        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
+        val (reply, usedModel) = caller.routed(history, specs, track, 3, {})
+
+        assertEquals("light-ok", usedModel.name)
+        assertEquals(2, light.requests.size)
+        assertEquals(0, main.requests.size)
+        assertEquals(0L, currentTime)
+        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
+        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
+    }
+
+    @Test fun light429FailsFastRecordingCooldownWhileMainRetriesPastThreeConsecutive429s() = runTest {
+        val main = Named(
+            "main-429",
+            FakeModel(
+                ModelError.RateLimited(null),
+                ModelError.RateLimited(null),
+                ModelError.RateLimited(null),
+                ModelError.RateLimited(null),
+                tools(call("phone_observe")),
+            ),
+        )
+        val light = Named("light-429", FakeModel(ModelError.RateLimited(2_000L)))
+        val dispatcher = toolDispatcher(SafeActionScreen())
+        val router = ModelRouter(main, light)
+        val sink = Events()
+        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
+        val track = StepTrack()
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+
+        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
+        val (reply, usedModel) = caller.routed(history, dispatcher.offeredNow(), track, 3, {})
+
+        assertEquals("main-429", usedModel.name)
+        assertEquals(1, light.requests.size)
+        assertEquals(5, main.requests.size)
+        assertEquals(15_000L, currentTime)
+        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
+        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_to_main" && it.detail == "light_error" })
+
+        // Light's own 429 cooldown must still be recorded in RateLimitGovernor even though it failed fast to Main.
+        RateLimitGovernor.awaitClear(light.name)
+        assertEquals(17_000L, currentTime)
     }
 }

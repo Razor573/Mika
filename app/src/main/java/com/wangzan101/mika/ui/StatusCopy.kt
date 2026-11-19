@@ -3,6 +3,7 @@ package com.wangzan101.mika.ui
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.i18n.trPlural
+import com.wangzan101.mika.core.agent.GoalChecklist
 import com.wangzan101.mika.core.agent.RunProgress
 import com.wangzan101.mika.settings.AccessibilityState
 import com.wangzan101.mika.settings.ChannelLevel
@@ -19,6 +20,7 @@ enum class Fix {
     OpenAccessibility, AllowNotifications, AddModel,
     /** 直接打开「需要你处理」/「任务结果」/「任务进度」频道的设置页,打开「在屏幕上弹出」;打不开退回应用通知总页。 */
     OpenAttentionChannel, OpenResultChannel, OpenProgressChannel,
+    OpenLiveTaskSettings,
     /** 「配对」通知频道的设置页:配对码要填在这类通知里。 */
     OpenPairingChannel,
     /** 本 App 的「应用信息」页:系统拦着不让开无障碍时,在这里允许受限制的设置。 */
@@ -47,10 +49,15 @@ object StatusCopy {
     fun progress(p: RunProgress): String = when (p) {
         is RunProgress.Replay -> tr(R.string.progress_replay, p.step, p.total)
         is RunProgress.Batch -> trPlural(R.plurals.progress_batch, p.steps)
-        is RunProgress.Task -> p.display
+        is RunProgress.Task -> p.goals?.let(::goals) ?: p.display
         // 只是在等另一个任务,不要用户做什么
         is RunProgress.WaitingForApp -> tr(R.string.progress_waiting_app, p.app)
     }
+
+    fun goals(goals: GoalChecklist) = tr(
+        if (goals.stale) R.string.chat_last_confirmed_goals else R.string.chat_confirmed_goals,
+        goals.confirmed.size, goals.items.size,
+    )
 
     /** 付款接管的商品、金额、地址,一行一项;都没有时为 null。卡片和通知共用。 */
     fun paymentLines(item: String?, amount: String?, address: String?): String? =

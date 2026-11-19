@@ -21,6 +21,7 @@ import com.wangzan101.mika.core.uistate.UiTreeJson
 import com.wangzan101.mika.core.uistate.UiTreeNode
 import com.wangzan101.mika.core.uistate.UiWindowTree
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -252,5 +253,84 @@ class FullUiTreeCompactionCapTest {
         val keptObs = c.messages.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }.filter { "mixed-tree-" in it }
         assertEquals(3, keptObs.size)
         assertTrue(listOf(12, 14, 15).all { n -> keptObs.any { "mixed-tree-$n" in it } })
+    }
+
+    @Test fun speedFlagsTablesAtBirthKeepsFullStructuralAndNonInteractiveTreeWhilePackingElementTables() = runTest {
+        val labelNode = UiTreeNode(
+            role = "TextView",
+            bounds = listOf(40, 120, 400, 180),
+            text = "Static section header",
+            resourceId = "com.example:id/header",
+        )
+        val decorativeIcon = UiTreeNode(
+            role = "ImageView",
+            bounds = listOf(420, 120, 480, 180),
+            description = "Info badge",
+        )
+        val elements = (1..6).map { i ->
+            UiElement(
+                ref = "@e$i",
+                role = "Button",
+                name = "Action Option $i",
+                centerX = 540,
+                centerY = 200 + i * 120,
+                bounds = listOf(40, 150 + i * 120, 1040, 250 + i * 120),
+                resourceId = "com.example:id/opt_$i",
+                clickable = true,
+                editable = false,
+                scrollable = false,
+            )
+        }
+        val interactiveNodes = elements.map { el ->
+            UiTreeNode(role = el.role, bounds = el.bounds, ref = el.ref, text = el.name, resourceId = el.resourceId, clickable = true)
+        }
+        val cardContainer = UiTreeNode(
+            role = "LinearLayout",
+            bounds = listOf(20, 100, 1060, 1100),
+            resourceId = "com.example:id/card",
+            children = listOf(labelNode, decorativeIcon) + interactiveNodes,
+        )
+        val rootContainer = UiTreeNode(
+            role = "FrameLayout",
+            bounds = listOf(0, 0, 1080, 2400),
+            children = listOf(cardContainer),
+        )
+        val screen = object : ScreenPort by FakeScreen() {
+            override suspend fun snapshot() = ScreenSnapshot(
+                snapshotId = "snap-packed",
+                packageName = "com.example",
+                elements = elements,
+                width = 1080,
+                height = 2400,
+                windows = listOf(UiWindowTree(1, "application", 1, "Settings", "com.example", active = true, focused = true, nodes = listOf(rootContainer))),
+            )
+        }
+        val model = FakeModel(
+            ModelReply(listOf(Part.ToolCall("o1", "phone_observe", "{}")), StopReason.ToolUse, null),
+            answerReply("done"),
+            contextTokens = 1_000_000,
+        )
+        val end = AgentLoop(model, toolDispatcher(screen), "BASE", flags = SpeedFlags(tablesAtBirth = true)).run("inspect screen")
+        assertTrue(end is TaskState.Succeeded)
+
+        val toolContent = model.requests[1].flatMap { it.parts }.filterIsInstance<Part.ToolResult>().single().content
+        val root = Json.parseToJsonElement(toolContent).jsonObject
+        val screenObj = (root["screen"] as? kotlinx.serialization.json.JsonObject) ?: root
+        assertTrue(toolContent, "elementTables" in screenObj)
+        assertFalse(toolContent, "elements" in screenObj)
+        val treeArr = screenObj["tree"]!!.jsonArray
+        assertEquals(1, treeArr.size)
+        val frameJson = treeArr[0].jsonObject["nodes"]!!.jsonArray.single().jsonObject
+        assertEquals("FrameLayout", frameJson["role"]!!.jsonPrimitive.content)
+        val linearJson = frameJson["children"]!!.jsonArray.single().jsonObject
+        assertEquals("LinearLayout", linearJson["role"]!!.jsonPrimitive.content)
+        assertEquals("com.example:id/card", linearJson["resourceId"]!!.jsonPrimitive.content)
+        val children = linearJson["children"]!!.jsonArray.map { it.jsonObject }
+        assertEquals("TextView", children[0]["role"]!!.jsonPrimitive.content)
+        assertEquals("Static section header", children[0]["text"]!!.jsonPrimitive.content)
+        assertEquals(listOf(40, 120, 400, 180), children[0]["bounds"]!!.jsonArray.map { it.jsonPrimitive.int })
+        assertEquals("ImageView", children[1]["role"]!!.jsonPrimitive.content)
+        assertEquals("Info badge", children[1]["description"]!!.jsonPrimitive.content)
+        assertEquals(8, children.size)
     }
 }

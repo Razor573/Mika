@@ -68,6 +68,7 @@ import com.wangzan101.mika.settings.SystemStatus
 import com.wangzan101.mika.settings.notificationOverview
 import com.wangzan101.mika.task.ParallelLimit
 import com.wangzan101.mika.ui.components.FooterNote
+import com.wangzan101.mika.ui.components.DetailNote
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.GroupLabel
 import com.wangzan101.mika.ui.components.ListRow
@@ -249,7 +250,11 @@ fun PhoneOpsScreen(
                     onClick = if (paired) ({ confirmUnpair = true }) else null,
                 )
             }
-            FooterNote(PhoneSetupCopy.usageNote(status.helperRestart))
+            DetailNote(
+                PhoneSetupCopy.usageSummary(status.helperRestart),
+                PhoneSetupCopy.usageNote(status.helperRestart),
+                Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+            )
         }
     }
     if (confirmUnpair) {
@@ -296,6 +301,12 @@ fun NotificationsScreen(status: SystemStatus, onFix: (Fix) -> Unit, onBack: () -
             ChannelRowItem(StatusCopy.ATTENTION_CHANNEL, StatusCopy.NOTIF_ATTENTION_WHEN, o.attention, Fix.OpenAttentionChannel, onFix, first = true)
             ChannelRowItem(StatusCopy.RESULT_CHANNEL, StatusCopy.NOTIF_RESULT_WHEN, o.result, Fix.OpenResultChannel, onFix)
             ChannelRowItem(StatusCopy.PROGRESS_CHANNEL, StatusCopy.NOTIF_PROGRESS_WHEN, o.progress, Fix.OpenProgressChannel, onFix)
+            if (status.sdkInt >= 36) {
+                ListRow(MikaIcons.Bell, stringResource(R.string.settings_live_task_updates),
+                    stringResource(R.string.settings_live_task_updates_detail), onClick = { onFix(Fix.OpenLiveTaskSettings) }) {
+                    RowChevron()
+                }
+            }
         }
         FooterNote(StatusCopy.NOTIF_FOOTER)
         GroupCard {
@@ -613,12 +624,12 @@ private fun ParallelRow(p: ParallelSetting, onMax: (Int) -> Unit) {
         }
         Text(
             "−", Modifier.clickable(enabled = p.max > 1) { onMax(p.max - 1) }.padding(horizontal = 10.dp, vertical = 4.dp),
-            fontSize = 18.sp, color = if (p.max > 1) MikaTheme.colors.accent else MikaTheme.colors.ink3,
+            style = MikaType.Title, color = if (p.max > 1) MikaTheme.colors.accent else MikaTheme.colors.ink3,
         )
         RowValue(trPlural(R.plurals.settings_count_tasks, p.max))
         Text(
             "+", Modifier.clickable(enabled = p.max < 3) { onMax(p.max + 1) }.padding(horizontal = 10.dp, vertical = 4.dp),
-            fontSize = 18.sp, color = if (p.max < 3) MikaTheme.colors.accent else MikaTheme.colors.ink3,
+            style = MikaType.Title, color = if (p.max < 3) MikaTheme.colors.accent else MikaTheme.colors.ink3,
         )
     }
 }
@@ -827,6 +838,7 @@ fun languageLabel(l: AppLanguage): String = stringResource(
         AppLanguage.Portuguese -> R.string.language_portuguese
         AppLanguage.Russian -> R.string.language_russian
         AppLanguage.Indonesian -> R.string.language_indonesian
+        AppLanguage.Turkish -> R.string.language_turkish
     },
 )
 

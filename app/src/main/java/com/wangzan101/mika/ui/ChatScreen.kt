@@ -3,6 +3,7 @@ package com.wangzan101.mika.ui
 import androidx.compose.foundation.gestures.scrollBy
 import com.wangzan101.mika.cap.sandbox.AttachmentFailure
 import com.wangzan101.mika.cap.sandbox.AttachmentFailureReason
+import com.wangzan101.mika.core.agent.GoalChecklist
 import com.wangzan101.mika.core.agent.QuoteMessage
 import com.wangzan101.mika.core.agent.AttachedPage
 import com.wangzan101.mika.ui.components.DirectionalIcon
@@ -86,6 +87,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
@@ -164,6 +166,7 @@ import com.wangzan101.mika.ui.theme.MikaSize
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.viewer.FileViewer
 import com.wangzan101.mika.ui.theme.MikaType
+import com.wangzan101.mika.ui.theme.MikaRadius
 import com.wangzan101.mika.voice.HoldToTalk
 import com.wangzan101.mika.voice.VoicePlayback
 import com.wangzan101.mika.voice.VoiceSource
@@ -267,6 +270,7 @@ fun ChatScreen(
     val input = ui.input
     // 推荐任务可以直接填进空输入框;已有内容时先确认,不能因误触把草稿换掉。
     var pendingExample by rememberSaveable(ui.conversationId) { mutableStateOf<String?>(null) }
+    var showUsage by rememberSaveable(ui.conversationId) { mutableStateOf(false) }
     var showChecklists by remember(ui.conversationId) { mutableStateOf(false) }
     var checklistIncoming by remember(ui.conversationId) { mutableStateOf<ChecklistSource?>(null) }
     var pendingChecklistDraft by remember(ui.conversationId) { mutableStateOf<String?>(null) }
@@ -381,6 +385,9 @@ fun ChatScreen(
         if (grown > 0 && followingTail && !listState.isScrollInProgress) listState.scrollBy(grown.toFloat())
     }
 
+    // 已结束各轮的运行小结:每轮结束那一行写这一轮的 token
+    val endedRuns = ui.exchanges.filter { !it.status.isActive() }.mapNotNull { it.recordedRun }
+    val runMetrics = rememberRunMetrics(endedRuns)
     val context = LocalContext.current
 
     val c = MikaTheme.colors
@@ -488,7 +495,12 @@ fun ChatScreen(
                         }
                     }
                     GlassSurface(backdrop = backdrop) {
-                        Text(ChatCopy.APP_TITLE, Modifier.padding(horizontal = 18.dp, vertical = 8.dp), style = MikaType.Title, color = c.ink, maxLines = 1)
+                        Row(Modifier.clickable(role = Role.Button, onClickLabel = stringResource(R.string.chat_usage_title)) { showUsage = true }
+                            .testTag("chat-usage-title").padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(ChatCopy.APP_TITLE, style = MikaType.Title, color = c.ink, maxLines = 1)
+                            Icon(MikaIcons.Chevron, null, Modifier.size(14.dp).rotate(90f), tint = c.ink2)
+                        }
                     }
                     GlassSurface(modifier = Modifier.size(MikaSize.IconButton), backdrop = backdrop, shape = CircleShape) {
                         Box(
@@ -597,6 +609,8 @@ fun ChatScreen(
             backdrop = backdrop,
             reduceMotion = reduceMotion,
         )
+
+        if (showUsage) ConversationUsageSheet(ui.conversationId) { showUsage = false }
 
         if (personaPicker) {
             PersonaPicker(
@@ -888,7 +902,7 @@ private fun JumpHighlight(active: Boolean, reduceMotion: Boolean, content: @Comp
     val alpha by animateFloatAsState(if (active) 1f else 0f, if (reduceMotion) snap() else tween(260), label = "jump-highlight")
     Box(
         Modifier.fillMaxWidth()
-            .background(c.accent.copy(alpha = 0.12f * alpha), RoundedCornerShape(16.dp)),
+            .background(c.accent.copy(alpha = 0.12f * alpha), MikaShapes.Card),
     ) { content() }
 }
 
@@ -1096,7 +1110,7 @@ private fun Modifier.answerSurface(): Modifier =
  * 在后台操作手机时最下面一行小字。
  */
 @Composable
-private fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Boolean, openRun: (String) -> Unit) {
+internal fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Boolean, openRun: (String) -> Unit) {
     val c = MikaTheme.colors
     val paused = ChatCopy.paused(ex.status)
     val elapsed = rememberElapsed(ex.startedAt)
@@ -1116,6 +1130,7 @@ private fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Boole
             )
             if (elapsed != null) Text(ChatCopy.clock(elapsed), style = ClockText, color = c.ink3)
         }
+        ex.goals?.let { GoalChecklistRow(it, ex.runId) }
         if (ex.steps.isNotEmpty()) StepLine(ex.steps, ex.stepActions, live = true, paused = paused)
         // 跑的时候就能进运行过程(页面按秒接着长);结束后收进「做了 N 步 · 查看过程」那一行
         ex.recordedRun?.let { id ->
@@ -1134,6 +1149,24 @@ private fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Boole
                 Icon(MikaIcons.Eye, null, Modifier.size(15.dp), tint = c.ink3)
                 Text(ChatCopy.BACKGROUND_NOTE, style = NoteText, color = c.ink3)
             }
+        }
+    }
+}
+
+@Composable
+private fun GoalChecklistRow(goals: GoalChecklist, runId: String?) {
+    val c = MikaTheme.colors
+    var expanded by rememberSaveable(runId) { mutableStateOf(false) }
+    Column {
+        Row(
+            Modifier.clickable(role = Role.Button) { expanded = !expanded }.padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(StatusCopy.goals(goals), style = NoteText, color = c.ink2)
+            Icon(MikaIcons.Chevron, null, Modifier.size(16.dp).rotate(if (expanded) -90f else 90f), tint = c.ink3)
+        }
+        if (expanded) goals.items.forEachIndexed { i, goal ->
+            Text("${if (i + 1 in goals.confirmed) "✓" else "○"}  $goal", style = NoteText, color = c.ink2)
         }
     }
 }
@@ -1412,11 +1445,22 @@ private fun ReadAloudIcon(answer: String, vm: ChatViewModel) {
     val playback by vm.voice.collectAsState()
     val playing = playback is VoicePlayback.Playing || playback is VoicePlayback.Loading
     val c = MikaTheme.colors
-    ReplyIcon(
-        MikaIcons.Sound,
-        stringResource(if (playing) R.string.chat_stop_speaking else R.string.chat_read_aloud),
-        tint = if (playing) c.accent else c.ink2,
-    ) { if (playing) vm.stopSpeaking() else vm.speak(answer) }
+    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.clip(MikaShapes.Pill).clickable(role = Role.Button) { if (playing) vm.stopSpeaking() else vm.speak(answer) }
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(MikaIcons.Sound, null, Modifier.size(14.dp), tint = if (playing) c.accent else c.ink3)
+            Text(
+                stringResource(if (playing) R.string.chat_stop_speaking else R.string.chat_read_aloud),
+                style = MikaType.Caption, color = if (playing) c.accent else c.ink3,
+            )
+        }
+        (playback as? VoicePlayback.Error)?.let {
+            Text(it.message, Modifier.padding(start = 8.dp), style = MikaType.Caption, color = c.bad)
+        }
+    }
 }
 
 /** 这一轮生成的音频:名字/稿子开头、时长、播放/停止;点整张卡播放,再点停止。 */
@@ -1910,22 +1954,22 @@ private const val JUMP_HIGHLIGHT_MS = 1_800L
 /** 竖线的位置(从左边算起);步骤点、转圈的中心都在这条线上。 */
 private val StepRail = 8.dp
 
-private val FileTileShape = RoundedCornerShape(10.dp)
-private val EmptyLead = TextStyle(fontSize = 15.sp, lineHeight = 21.sp)
-private val ExampleText = TextStyle(fontSize = 15.sp, lineHeight = 21.sp)
-private val SuggestionText = TextStyle(fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium)
-private val BubbleText = TextStyle(fontSize = 15.5.sp, lineHeight = 22.5.sp)
+private val FileTileShape = MikaShapes.Tile
+private val EmptyLead = MikaType.Value
+private val ExampleText = MikaType.Value
+private val SuggestionText = MikaType.Body.copy(fontWeight = FontWeight.Medium)
+private val BubbleText = MikaType.Body
 /** 回答:正文字号,行距放宽到 1.7。 */
-private val AnswerText = TextStyle(fontSize = 15.5.sp, lineHeight = 26.sp)
-private val NowText = TextStyle(fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
-private val ClockText = TextStyle(fontSize = 12.5.sp, lineHeight = 17.sp, fontFeatureSettings = "tnum")
-private val StepText = TextStyle(fontSize = 14.sp, lineHeight = 19.sp)
-private val StepCurrentText = TextStyle(fontSize = 14.sp, lineHeight = 19.sp, fontWeight = FontWeight.Medium)
-private val NoteText = TextStyle(fontSize = 12.5.sp, lineHeight = 17.sp)
-private val DoneText = TextStyle(fontSize = 13.sp, lineHeight = 18.sp)
-private val NeedTitle = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.SemiBold)
-private val CardBody = TextStyle(fontSize = 14.sp, lineHeight = 21.5.sp)
-private val PillText = TextStyle(fontSize = 13.sp, lineHeight = 18.sp)
-private val ChipText = TextStyle(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.Medium)
-private val FileName = TextStyle(fontSize = 14.5.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
-private val FileMeta = TextStyle(fontSize = 12.5.sp, lineHeight = 17.sp)
+private val AnswerText = MikaType.Body
+private val NowText = MikaType.Value.copy(fontWeight = FontWeight.Medium)
+private val ClockText = MikaType.Hint.copy(fontFeatureSettings = "tnum")
+private val StepText = MikaType.Body
+private val StepCurrentText = MikaType.Body.copy(fontWeight = FontWeight.Medium)
+private val NoteText = MikaType.Hint
+private val DoneText = MikaType.Caption
+private val NeedTitle = MikaType.Value.copy(fontWeight = FontWeight.SemiBold)
+private val CardBody = MikaType.Body
+private val PillText = MikaType.Caption
+private val ChipText = MikaType.Hint.copy(fontWeight = FontWeight.Medium)
+private val FileName = MikaType.Body.copy(fontWeight = FontWeight.Medium)
+private val FileMeta = MikaType.Hint

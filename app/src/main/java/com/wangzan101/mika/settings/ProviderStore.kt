@@ -924,7 +924,7 @@ class ProviderStore(
     fun geminiDeveloperApiKey(): String? {
         fun validKey(providerId: String): String? = providerKey(providerId)
             ?.trim()
-            ?.takeIf { it.isNotBlank() && ApiKeyText.isHeaderLegal(it) }
+            ?.takeIf { it.isNotBlank() && ApiKeyText.isHeaderLegal(it) && it.all { ch -> ch.code in 33..126 } }
         val mainCfg = configFor(ModelRole.Main)
         if (mainCfg?.kind == ProviderConfig.Kind.Gemini) {
             validKey(mainCfg.providerId)?.let { return it }

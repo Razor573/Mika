@@ -41,6 +41,7 @@ import com.wangzan101.mika.cap.phone.a11y.launchableApps
 import com.wangzan101.mika.confirm.ConfirmationNotifier
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.core.action.ConfirmChoice
+import com.wangzan101.mika.core.agent.TaskStages
 import com.wangzan101.mika.core.agent.AgentLoop
 import com.wangzan101.mika.core.agent.SystemPrompt
 import com.wangzan101.mika.core.prompt.PersonaPrompt
@@ -175,6 +176,12 @@ class TaskRun(
     val slot: Int = 0,
     val parallel: Boolean = false,
 ) {
+    internal val chipStages = TaskStages {
+        try { service.refreshNotifications(this) } catch (e: RuntimeException) {
+            // The action already ran. A notification failure must never turn it into a failed tool call.
+            Log.w(TAG, "could not refresh stage notification", e)
+        }
+    }
     internal var provenance = RunProvenance()
     internal var triggerWindowKey: String? = null
     internal var triggerActionGoal: String? = null
@@ -403,7 +410,7 @@ class TaskRun(
         else audioSettings.capabilities()?.let { caps ->
             com.wangzan101.mika.settings.ProviderStore.get(service).ttsModel(choice, caps)?.let { model ->
                 com.wangzan101.mika.media.AndroidAudioPort(service, conversationId, model, caps, onSaved = ::addSavedAudio,
-                    onGenerated = ::addAudio,
+                    onGenerated = ::addAudio, defaultVoice = choice.voice.ifBlank { null }, defaultSpeed = choice.speed,
                     onSpeak = { response -> (service.application as com.wangzan101.mika.MikaApp).voicePlayer.play(response.bytes, response.mime) })
             }
         }
@@ -967,8 +974,6 @@ class TaskRun(
                 mcpServers = mcpEndpoints(),
                 // 仅用户明确配置并启用时提供通用搜索;否则继续用浏览器搜索。
                 webSearch = com.wangzan101.mika.settings.WebSearchSettings.get(service).service(),
-                // 仅用户明确配置并启用时提供网页抓取;否则用浏览器读页面。
-                webFetch = com.wangzan101.mika.settings.WebFetchSettings.get(service).service(),
                 // 已 root 的手机上用户打开了「允许 Mika 执行 root 命令」才登记 root 工具(子任务、条件检查不给)
                 root = phoneServices.shellManager.root.takeIf { !conditionCheck && it.commandsAllowed() }
                     ?.let { r -> RootCommands(RootShell::su, r::commandsAllowed) { a -> if (a == null) r.suGone() else r.commandsDenied(a) } },
@@ -1041,6 +1046,7 @@ class TaskRun(
                 interaction = service.interaction(conversationId, channelPeer),
                 profileSnapshot = profileSnapshot,
                 streamReplies = true,
+                stages = chipStages.takeIf { Build.VERSION.SDK_INT >= 36 && provenance.origin == RunOrigin.Ui },
                 userScreens = userScreens,
                 // 同一网站、App 里连着联系别人、提交:两次之间隔一段随机的时间
                 outwardPacing = OutwardPacing.human(),

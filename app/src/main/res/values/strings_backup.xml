@@ -6,7 +6,7 @@
     <string name="backup_warning_title" translatable="false">This backup is not encrypted</string>
     <string name="backup_warning_body" translatable="false">The ZIP file contains all your secrets: API keys, your Vertex service account, and OAuth tokens. Keep it private, do not share it, and delete it after you have imported it.</string>
     <string name="backup_included_label" translatable="false">What is included</string>
-    <string name="backup_included_body" translatable="false">Providers and keys, chats, skills, memory, task runs, and settings.</string>
+    <string name="backup_included_body" translatable="false">Providers and keys, chats, personas, skills, memory, task runs, and settings.</string>
     <string name="backup_excluded_body" translatable="false">Not included: wireless-debugging pairing (re-pair after import), the accessibility service setting (turn it back on in Android Settings), the sandbox workspace, and file library attachments.</string>
     <string name="backup_export" translatable="false">Export backup</string>
     <string name="backup_export_sub" translatable="false">Save a ZIP file with all your data</string>

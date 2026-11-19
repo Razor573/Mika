@@ -68,6 +68,8 @@ import com.wangzan101.mika.ui.components.ValueTone
 import com.wangzan101.mika.ui.theme.MikaIcons
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.theme.MikaType
+import com.wangzan101.mika.ui.theme.MikaRadius
+import com.wangzan101.mika.ui.theme.MikaShapes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -155,10 +157,12 @@ private fun HeaderGroup(h: TimelineHeader, stepCount: Int, onExport: () -> Unit)
     if (h.criteria.isNotEmpty()) {
         GroupCard {
             Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 13.dp, bottom = 13.dp)) {
-                Text(stringResource(R.string.timeline_criteria), style = MikaType.Label, color = c.ink3)
+                val ids = h.confirmedIds
+                Text(if (ids == null) stringResource(R.string.timeline_criteria) else
+                    stringResource(R.string.chat_confirmed_goals, ids.size, h.criteria.size), style = MikaType.Label, color = c.ink3)
                 h.criteria.forEachIndexed { i, text ->
                     Text(
-                        if (h.criteria.size > 1) "${i + 1}. $text" else text, Modifier.padding(top = 4.dp),
+                        if (ids != null) "${if (i + 1 in ids) "✓" else "○"}  $text" else if (h.criteria.size > 1) "${i + 1}. $text" else text, Modifier.padding(top = 4.dp),
                         style = MikaType.Caption, color = c.ink2,
                     )
                 }
@@ -284,7 +288,7 @@ private fun TimelineRow(s: TimelineStep, first: Boolean, last: Boolean, vm: RunT
                         else -> c.neutralSoft to c.ink2
                     }
                     Text(
-                        result, Modifier.padding(start = 8.dp).background(bg, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp),
+                        result, Modifier.padding(start = 8.dp).background(bg, MikaShapes.Pill).padding(horizontal = 8.dp, vertical = 2.dp),
                         style = MikaType.Hint, fontWeight = FontWeight.SemiBold, color = fg, maxLines = 1,
                     )
                 }
@@ -323,7 +327,7 @@ private fun TagChip(t: Tag) {
         TagTone.Bad -> c.badSoft to c.bad
     }
     Text(
-        t.text, Modifier.background(bg, RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp),
+        t.text, Modifier.background(bg, MikaShapes.Pill).padding(horizontal = 8.dp, vertical = 2.dp),
         style = MikaType.Hint, fontWeight = FontWeight.SemiBold, color = fg,
     )
 }
@@ -334,7 +338,7 @@ private fun Shot(vm: RunTimelineViewModel, id: Int, step: Int) {
     val image by produceState<ImageBitmap?>(null, id) {
         value = withContext(Dispatchers.IO) { vm.screen(id)?.let { BitmapFactory.decodeFile(it.path) }?.asImageBitmap() }
     }
-    val shape = RoundedCornerShape(12.dp)
+    val shape = MikaShapes.Chip
     image?.let {
         Image(
             it, stringResource(R.string.timeline_step_screen, step),

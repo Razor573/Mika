@@ -42,6 +42,7 @@ class BackupEngineTest {
     /** A realistic source install: plain files, encrypted files, and encrypted prefs values. */
     private fun buildSource(filesDir: File, prefsDir: File) {
         filesDir.write("settings/providers.json", """{"services":[],"providers":[{"id":"c1"}]}""")
+        filesDir.write("settings/personas.json", """{"version":1,"personas":[{"id":"p1","name":"Reviewer"}]}""")
         val keysJson = """{"p1":"${b64(exportCipher.encrypt("sk-secret-1".toByteArray()))}"}"""
         filesDir.write("settings/provider-keys.json", keysJson)
         filesDir.write("settings/mcp.json", """{"enabled":false}""")
@@ -60,11 +61,19 @@ class BackupEngineTest {
         filesDir.write("proactive/journal.bin", exportCipher.encrypt("journal-plain".toByteArray()))
         prefsDir.write(
             "web_search.xml",
-            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="enabled" value="true" /><string name="api_key_encrypted_you">${b64(exportCipher.encrypt("you-key".toByteArray()))}</string><string name="endpoint_you">https://you.example</string></map>""",
+            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="enabled" value="true" /><string name="api_key_encrypted_you">${b64(exportCipher.encrypt("you-key".toByteArray()))}</string><string name="api_key_encrypted">${b64(exportCipher.encrypt("legacy-search-key".toByteArray()))}</string><string name="endpoint_you">https://you.example</string></map>""",
         )
         prefsDir.write(
             "feature_flags.xml",
-            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><string name="speech_doubao_credentials_encrypted">${b64(exportCipher.encrypt("""{"apiKey":"db-key"}""".toByteArray()))}</string><boolean name="personal_start" value="false" /></map>""",
+            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><string name="speech_doubao_credentials_encrypted">${b64(exportCipher.encrypt("""{"apiKey":"db-key"}""".toByteArray()))}</string><string name="voice_settings">{"enabled":true}</string><boolean name="personal_start" value="false" /></map>""",
+        )
+        prefsDir.write(
+            "mika_call_history.xml",
+            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><string name="encrypted_calls_v1">${b64(exportCipher.encrypt("""[{"id":"c1"}]""".toByteArray()))}</string></map>""",
+        )
+        prefsDir.write(
+            "device_directory_hints.xml",
+            """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><string name="directories_v1">[]</string></map>""",
         )
         prefsDir.write(
             "plain.xml",
@@ -93,6 +102,7 @@ class BackupEngineTest {
         assertEquals("0.1.43", manifest.appVersionName)
         assertEquals(48L, manifest.appVersionCode)
         assertTrue(manifest.entries.any { it.path == "files/settings/providers.json" && !it.encrypted })
+        assertTrue(manifest.entries.any { it.path == "files/settings/personas.json" && !it.encrypted })
         assertTrue(manifest.entries.any { it.path == "files/settings/provider-keys.json" && it.encrypted })
         assertTrue(manifest.entries.any { it.path == "files/memory/memory.bin" && it.encrypted && it.alias == "mika-memory" })
         assertTrue(manifest.entries.any { it.path == "files/proactive/topics.bin" && it.alias == "mika-proactive-topics" })
@@ -100,6 +110,7 @@ class BackupEngineTest {
         assertTrue(manifest.skippedPrefs.isEmpty())
 
         assertEquals("""{"services":[],"providers":[{"id":"c1"}]}""", File(dstFiles, "settings/providers.json").readText())
+        assertEquals("""{"version":1,"personas":[{"id":"p1","name":"Reviewer"}]}""", File(dstFiles, "settings/personas.json").readText())
         // Provider keys were decrypted on export and re-encrypted with the new install's key.
         val keysText = File(dstFiles, "settings/provider-keys.json").readText()
         val encoded = keysText.substringAfter("\"p1\":\"").substringBefore("\"")
@@ -122,11 +133,21 @@ class BackupEngineTest {
         assertTrue(webSearch.contains("api_key_encrypted_you"))
         val webKey = webSearch.substringAfter("api_key_encrypted_you\">").substringBefore("</string>")
         assertEquals("you-key", String(importCipher.decrypt(Base64.getDecoder().decode(webKey))))
+        val legacyWebKey = webSearch.substringAfter("name=\"api_key_encrypted\">").substringBefore("</string>")
+        assertEquals("legacy-search-key", String(importCipher.decrypt(Base64.getDecoder().decode(legacyWebKey))))
         assertTrue(webSearch.contains("endpoint_you\">https://you.example</string>"))
         assertTrue(webSearch.contains("name=\"enabled\" value=\"true\""))
+
         val flags = File(dstPrefs, "feature_flags.xml").readText()
         val doubao = flags.substringAfter("speech_doubao_credentials_encrypted\">").substringBefore("</string>")
         assertEquals("""{"apiKey":"db-key"}""", String(importCipher.decrypt(Base64.getDecoder().decode(doubao))))
+        assertTrue(flags.contains("""voice_settings">{"enabled":true}</string>"""))
+
+        val callHistoryPrefs = File(dstPrefs, "mika_call_history.xml").readText()
+        val callHistoryEnc = callHistoryPrefs.substringAfter("encrypted_calls_v1\">").substringBefore("</string>")
+        assertEquals("""[{"id":"c1"}]""", String(importCipher.decrypt(Base64.getDecoder().decode(callHistoryEnc))))
+
+        assertTrue(File(dstPrefs, "device_directory_hints.xml").readText().contains("directories_v1"))
         assertTrue(File(dstPrefs, "plain.xml").readText().contains("nickname\">Vagif</string>"))
     }
 
@@ -156,7 +177,7 @@ class BackupEngineTest {
         try {
             engine(dstFiles, dstPrefs, importCipher).import(ByteArrayInputStream(truncated), replace = true)
             fail("truncated backup must be refused")
-        } catch (e: BackupException) {
+        } catch (_: BackupException) {
             // expected
         }
         assertTrue(dstFiles.listFiles().isNullOrEmpty())
@@ -199,7 +220,7 @@ class BackupEngineTest {
         try {
             engine(dstFiles, dstPrefs, importCipher).import(ByteArrayInputStream(zip), replace = false)
             fail("import over existing data must be refused without replace")
-        } catch (e: BackupException) {
+        } catch (_: BackupException) {
             // expected
         }
         assertEquals("{}", File(dstFiles, "conversations/old.json").readText())

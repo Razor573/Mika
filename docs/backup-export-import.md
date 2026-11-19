@@ -19,7 +19,9 @@ ZIP with a `manifest.json` (backup format version 1). Import validates the whole
 ZIP first (manifest, version, entry list, paths), then re-encrypts every secret
 under the fresh install's KeyStore keys.
 
-Included: providers and keys, chats, skills, memory, task runs, and settings.
+Included: providers and keys, chats, personas, skills, memory, task runs, proactive
+data, and settings (including web search, voice/speech, calls, and device
+directory settings).
 Not included: wireless-debugging pairing (re-pair after import), the accessibility
 service setting (turn it back on in Android Settings), the sandbox workspace, and
 file library attachments. The sandbox workspace and library attachments are

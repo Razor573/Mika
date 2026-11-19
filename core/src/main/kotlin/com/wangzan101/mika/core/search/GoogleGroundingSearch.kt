@@ -55,6 +55,11 @@ class GoogleGroundingSearch private constructor(
         class Body(val status: Int, val retryAfter: String?, val body: String) : HttpOutcome
     }
 
+    private sealed interface ExecuteResult {
+        class Ok(val text: String) : ExecuteResult
+        class Failure(val failure: WebSearchResult.Failure) : ExecuteResult
+    }
+
     override suspend fun search(query: String, count: Int): WebSearchResult {
         val cleanQuery = query.trim()
         if (cleanQuery.isEmpty()) return WebSearchResult.Success(emptyList())
@@ -82,11 +87,6 @@ class GoogleGroundingSearch private constructor(
         } ?: return WebSearchResult.Failure("invalid_response", "The Google Search grounding service did not return a JSON object.")
 
         return parseResponse(root, cleanQuery, limit)
-    }
-
-    private sealed interface ExecuteResult {
-        class Ok(val text: String) : ExecuteResult
-        class Failure(val failure: WebSearchResult.Failure) : ExecuteResult
     }
 
     private suspend fun executeGemini(t: Transport.Gemini, payload: JsonObject): ExecuteResult {

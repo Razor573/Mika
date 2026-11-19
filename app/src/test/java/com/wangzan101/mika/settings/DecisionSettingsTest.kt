@@ -150,9 +150,9 @@ class DecisionSettingsTest {
         assertTrue(s.canTest(google, ""))
         s.save(google, "")
         assertEquals("", s.apiKey())
-        assertTrue(settings().let {
-            DecisionSettings(tmp.root, cipher) { "AIza-from-models" }.createModel() is GoogleDecisionModel
-        })
+        assertTrue(
+            DecisionSettings(tmp.root, cipher) { "AIza-from-models" }.createModel() is GoogleDecisionModel,
+        )
 
         val typeSafe = DecisionConfig(
             enabled = true,
