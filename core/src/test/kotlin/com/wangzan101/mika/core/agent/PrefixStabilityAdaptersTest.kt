@@ -183,7 +183,7 @@ class PrefixStabilityAdaptersTest {
     }
 
     /** 跑一遍 [PrefixStabilityTest] 的假任务,返回服务端收到的请求。 */
-    private fun run(api: Api, vision: Boolean = false, contextTokens: Int = 1_000_000): List<JsonObject> {
+    private fun run(api: Api, vision: Boolean = false, contextTokens: Int = 1_000_000, steps: Int = DEFAULT_STEPS): List<JsonObject> {
         val bodies = CopyOnWriteArrayList<JsonObject>()
         val server = MockWebServer().also { servers += it }.apply {
             dispatcher = object : Dispatcher() {
@@ -194,7 +194,7 @@ class PrefixStabilityAdaptersTest {
                     val msgs = api.messages(body)
                     val step = STEP.findAll(msgs.last()).last().groupValues[1].toInt()
                     val tokens = TokenEstimate.of(raw)
-                    if (step > STEPS) return api.answer(tokens)
+                    if (step > steps) return api.answer(tokens)
                     val (name, args) = when {
                         step % 3 == 1 -> "phone_observe" to buildJsonObject {}
                         step % 3 == 2 -> lastRead(msgs.joinToString("")).let { (ref, snap) ->
@@ -216,7 +216,7 @@ class PrefixStabilityAdaptersTest {
         val sb = FakeSandbox().apply { next = { r -> CommandResult(0, false, false, 10, "输出${r.argv}" + "行".repeat(6000), 0, false) } }
         runTest {
             AgentLoop(model, toolDispatcher(port, sandbox = sb, workspace = { "w" }, visionEnabled = vision),
-                SystemPrompt.identity(), STEPS + 5, clock = { 0L }, zone = ZoneOffset.UTC,
+                SystemPrompt.identity(), steps + 5, clock = { 0L }, zone = ZoneOffset.UTC,
             ).run("把每一屏都看一遍").also { assertTrue("$it", it is TaskState.Succeeded) }
         }
         return bodies.toList()
@@ -281,29 +281,29 @@ class PrefixStabilityAdaptersTest {
         return Result(changed, share, opened)
     }
 
-    /** 最后一次请求带齐了 30 步的回放:前后两次一致地都不带,上面几条查不出来。 */
-    private fun replaysAll(api: Api, bodies: List<JsonObject>, label: String) {
+    /** 最后一次请求带齐了回放:前后两次一致地都不带,上面几条查不出来。 */
+    private fun replaysAll(api: Api, bodies: List<JsonObject>, label: String, steps: Int = DEFAULT_STEPS) {
         val prefix = api.replay ?: return
         val last = bodies.last().toString()
-        val missing = (1..STEPS).filter { "\"$prefix$it\"" !in last }
+        val missing = (1..steps).filter { "\"$prefix$it\"" !in last }
         assertEquals("$label:最后一次请求缺了这几步的回放", emptyList<Int>(), missing)
     }
 
-    // 读屏、大结果(和画面):30 步里一次也不改写,区 0 只在第一次用手机、第一次用沙箱时展开
+    // 读屏、大结果(和画面):14 步里一次也不改写,区 0 只在第一次用手机、第一次用沙箱时展开
     private fun appendOnly(api: Api, label: String) {
         for (vision in listOf(false, true)) {
             val l = if (vision) "$label vision" else label
-            val bodies = run(api, vision = vision)
+            val bodies = run(api, vision = vision, steps = DEFAULT_STEPS)
             val r = check(api, bodies, l)
             assertEquals(l, listOf(1, 3), r.opened)
             assertTrue("$l ${r.share}", r.share > 0.95)
-            replaysAll(api, bodies, l)
+            replaysAll(api, bodies, l, DEFAULT_STEPS)
         }
     }
 
     // 80K 窗口:只在压缩的那几次改写,序号和 [PrefixStabilityTest.compaction] 的算法一样(Gemini 见它的 compactions)
     private fun compaction(api: Api, label: String) {
-        val bodies = run(api, contextTokens = 80_000)
+        val bodies = run(api, contextTokens = 80_000, steps = COMPACTION_STEPS)
         val r = check(api, bodies, "$label compaction", appendOnly = false)
         assertTrue(bodies.any { ContextCompressor.HEADER in it.toString() })
         assertEquals(api.compactions, r.changed)
@@ -321,13 +321,14 @@ class PrefixStabilityAdaptersTest {
 
     // 系统提示词、最后一个工具、最后一条用户消息各一个;Anthropic 一次请求最多 4 个,多了整次请求被拒(400)
     @Test fun anthropicCacheMarksStayWithinLimit() {
-        for (body in run(anthropic, contextTokens = 80_000)) {
+        for (body in run(anthropic, contextTokens = 80_000, steps = COMPACTION_STEPS)) {
             assertEquals("缓存标记个数", 3, CACHE_MARK.findAll(body.toString()).count())
         }
     }
 
     private companion object {
-        const val STEPS = 30
+        const val DEFAULT_STEPS = 14
+        const val COMPACTION_STEPS = 30
         val STEP = Regex("Step: (\\d+) of at most")
         val ELEMENTS = Regex("""elements\\*":\[\{""")
         val REF = Regex("""ref\\*":\\*"([^"\\]+)""")

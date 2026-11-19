@@ -1357,9 +1357,11 @@ class ModelSetupViewModel(
         _state.update { it.copy(listing = it.listing + (providerId to ListState.Running)) }
         refreshJobs[providerId] = scope.launch {
             val r = listSafely { store.listModels(p) }
+            val preserveCacheOnNotSupported =
+                p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini
             val models: List<ListedModel>? = when (r) {
                 is ModelListResult.Ok -> r.models
-                is ModelListResult.Failed -> if (r.reason == ListFailure.NotSupported) emptyList() else null
+                is ModelListResult.Failed -> if (!preserveCacheOnNotSupported && r.reason == ListFailure.NotSupported) emptyList() else null
             }
             if (models != null) withContext(io) { store.rememberModels(p.id, models) }
             val after = if (r is ModelListResult.Failed && models == null) ListState.Failed(listMessage(r)) else ListState.Idle

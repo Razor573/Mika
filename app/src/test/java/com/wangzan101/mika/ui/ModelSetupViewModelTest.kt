@@ -59,11 +59,13 @@ class ModelSetupViewModelTest {
     /** 下一次列模型抛这个;用来确认异常收成失败,不打掉测试协程。 */
     private var listBoom: Throwable? = null
     private var ids = 0
+    private var nowMs = 1_700_000_000_000L
 
     private fun store() = ProviderStore(
         tmp.root, AesGcmKeyCipher { key },
         newId = { "id${++ids}" },
         userAgent = "Mika/1.2.3",
+        clock = { nowMs },
         modelFactory = { cfg, _, _, setup -> built += cfg.model to setup; Fake(cfg.capabilities) { reply() } },
         modelLister = { kind, url, apiKey, _ ->
             listBoom?.let { throw it }
@@ -1295,6 +1297,107 @@ class ModelSetupViewModelTest {
             assertEquals("This key has characters that cannot be used. Paste only the key itself.", failed.message)
             assertFalse(failed.message.contains("Bearer"))
             assertEquals("sk", store.providerKey(id))
+        } finally {
+            UiText.source = prev
+        }
+    }
+
+    @Test fun geminiLiveRefreshUpdatesCachedModelsAndPreservesCacheOnFailure() = runTest {
+        val geminiUrl = "https://generativelanguage.googleapis.com"
+        val initialId = "gemini-live-init-${System.nanoTime()}"
+        val updatedId = "gemini-live-next-${System.nanoTime()}"
+        val manualId = "gemini-manual-fallback"
+        listing[geminiUrl] = ModelListResult.Ok(listOf(ListedModel(initialId)))
+        val store = store()
+        val vm = vm(store)
+        nowMs = 1_700_000_000_000L
+        vm.selectPreset("Gemini"); vm.setApiKey("gem-key"); vm.testAndSave(); runCurrent()
+
+        val p = store.providers.value.single()
+        assertEquals(listOf(initialId), p.models?.map { it.id })
+        assertEquals(1_700_000_000_000L, p.modelsRefreshedAtMs)
+
+        nowMs = 1_700_000_120_000L
+        listing[geminiUrl] = ModelListResult.Ok(listOf(ListedModel(updatedId)))
+        vm.refresh(p.id); runCurrent()
+
+        assertEquals(Triple(ProviderConfig.Kind.Gemini, geminiUrl, "gem-key"), listCalls.last())
+        assertEquals(ListState.Idle, vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_120_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        nowMs = 1_700_000_240_000L
+        listing[geminiUrl] = ModelListResult.Failed(ListFailure.Network)
+        vm.refresh(p.id); runCurrent()
+        assertEquals(ListState.Failed(ListFailure.Network.text), vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_120_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        listing[geminiUrl] = ModelListResult.Failed(ListFailure.NotSupported)
+        vm.refresh(p.id); runCurrent()
+        assertEquals(ListState.Failed(ListFailure.NotSupported.text), vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_120_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        var picked = 0
+        vm.pickManual(ModelRole.Main, p.id, manualId) { picked++ }; runCurrent()
+        assertEquals(1, picked)
+        assertEquals(manualId, store.configFor(ModelRole.Main)?.model)
+    }
+
+    @Test fun vertexLiveRefreshUpdatesCachedModelsAndPreservesCacheOnFailure() = runTest {
+        val initialId = "gemini-vx-init-${System.nanoTime()}"
+        val updatedId = "gemini-vx-next-${System.nanoTime()}"
+        val manualId = "gemini-vx-manual"
+        val sa = testVertexSaJson("proj-v1", "sa1@proj-v1.iam.gserviceaccount.com")
+        listing[VertexEndpoints.GLOBAL_HOST] = ModelListResult.Ok(listOf(ListedModel(initialId)))
+        val store = store()
+        val vm = vm(store)
+        nowMs = 1_700_000_000_000L
+        vm.selectPreset("Vertex AI"); vm.setServiceAccountJson(sa); vm.testAndSave(); runCurrent()
+
+        val p = store.providers.value.single()
+        assertEquals(listOf(initialId), p.models?.map { it.id })
+        assertEquals(1_700_000_000_000L, p.modelsRefreshedAtMs)
+
+        nowMs = 1_700_000_180_000L
+        listing[VertexEndpoints.GLOBAL_HOST] = ModelListResult.Ok(listOf(ListedModel(updatedId)))
+        vm.refresh(p.id); runCurrent()
+
+        assertEquals(Triple(ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST, sa), listCalls.last())
+        assertEquals(ListState.Idle, vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_180_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        nowMs = 1_700_000_300_000L
+        listing[VertexEndpoints.GLOBAL_HOST] = ModelListResult.Failed(ListFailure.Network)
+        vm.refresh(p.id); runCurrent()
+        assertEquals(ListState.Failed(ListFailure.Network.text), vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_180_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        listing[VertexEndpoints.GLOBAL_HOST] = ModelListResult.Failed(ListFailure.NotSupported)
+        vm.refresh(p.id); runCurrent()
+        assertEquals(ListState.Failed(ListFailure.NotSupported.text), vm.state.value.listing[p.id])
+        assertEquals(listOf(updatedId), store.provider(p.id)!!.models?.map { it.id })
+        assertEquals(1_700_000_180_000L, store.provider(p.id)!!.modelsRefreshedAtMs)
+
+        var picked = 0
+        vm.pickManual(ModelRole.Main, p.id, manualId) { picked++ }; runCurrent()
+        assertEquals(1, picked)
+        assertEquals(manualId, store.configFor(ModelRole.Main)?.model)
+    }
+
+    @Test fun formatLastRefreshedUsesClockTodayAndDateOtherwise() {
+        val zone = java.time.ZoneId.of("UTC")
+        val now = java.time.Instant.parse("2026-11-19T14:30:00Z").toEpochMilli()
+        val sameDay = java.time.Instant.parse("2026-11-19T09:05:00Z").toEpochMilli()
+        val earlierDay = java.time.Instant.parse("2026-11-18T22:15:00Z").toEpochMilli()
+        assertEquals("09:05", formatLastRefreshed(sameDay, now, zone))
+        val prev = UiText.source
+        try {
+            UiText.source = ResFileTexts.english
+            assertEquals("Nov 18, 22:15", formatLastRefreshed(earlierDay, now, zone))
         } finally {
             UiText.source = prev
         }

@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">上下文與壓縮</string>
-    <string name="model_context_note">留空使用自動值。同一服務商的同一模型在各用途中共用這份設定，下次任務生效。</string>
+    <string name="model_context_note">每次呼叫的輸入上限為 100,000 個 token，對話歷史每 15 步壓縮一次並保留最近 3 次完整觀察結果。留空使用自動值。同一服務商的同一模型在各用途中共用這份設定，下次任務生效。</string>
     <string name="model_context_window">上下文視窗（token）</string>
     <string name="model_context_trigger">壓縮觸發點（token）</string>
     <string name="model_context_read_timeout">讀超時（秒）</string>
     <string name="model_context_auto">自動 · %1$d</string>
     <string name="model_context_integer">請輸入正整數。</string>
     <string name="model_context_range">可填 %1$d–%2$d 個 token</string>
-    <string name="model_context_effective">生效視窗 %1$d · 觸發點 %2$d 個 token</string>
+    <string name="model_context_effective">生效上限 %1$d · 觸發點 %2$d 個 token</string>
     <string name="model_context_save_failed">未能儲存設定，請重新開啟模型再試。</string>
     <string name="models_lead">每件事用哪個模型，在「用途」裡選；模型來自下面連好的服務商。</string>
     <string name="models_roles">用途</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">這家是跳過測試存下的，還不知道能不能用。選一個模型時會先試呼叫，也可以點右上角重新整理列出它的模型。</string>
     <string name="models_not_listed">還沒列出這家的模型。</string>
     <string name="refresh">重新整理</string>
+    <string name="models_last_refreshed">上次重新整理：%1$s</string>
+    <string name="models_refresh_failed_cached">重新整理失敗（%1$s），目前顯示已快取的模型。</string>
     <string name="models_in_use">正在用這個</string>
     <string name="models_sees_images">能看圖</string>
     <string name="models_sees_note_user">按你的設定。主模型能看圖時，截圖直接給它看。</string>

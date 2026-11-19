@@ -49,7 +49,7 @@ class PrefixStabilityTest {
     @After fun tearDown() = servers.forEach { it.shutdown() }
 
     /** 假服务端:按请求末尾运行时状态里的步数决定这是第几步(折叠后助手消息会变少),照剧本回;[fail] 里的步第一次回 429。 */
-    private inner class Wire(val fail: Set<Int> = emptySet()) {
+    private inner class Wire(val fail: Set<Int> = emptySet(), val steps: Int = DEFAULT_STEPS) {
         val bodies = CopyOnWriteArrayList<JsonObject>()
         private val tried = mutableSetOf<Int>()
         val server = MockWebServer().also { servers += it }.apply {
@@ -60,7 +60,7 @@ class PrefixStabilityTest {
                     val msgs = body["messages"]!!.jsonArray.map { it.jsonObject }
                     val step = STEP.findAll(msgs.last().toString()).last().groupValues[1].toInt()
                     if (step in fail && tried.add(step)) return MockResponse().setResponseCode(429).setHeader("retry-after", "0")
-                    return MockResponse().setBody(reply(step, msgs, TokenEstimate.of(body.toString())).toString())
+                    return MockResponse().setBody(reply(step, msgs, TokenEstimate.of(body.toString()), steps).toString())
                 }
             }
             start()
@@ -71,9 +71,9 @@ class PrefixStabilityTest {
     }
 
     /** [promptTokens]:像真服务商一样按这次请求的大小报输入用量(压缩时机按真实用量算,见 [UsageMeter])。 */
-    private fun reply(step: Int, msgs: List<JsonObject>, promptTokens: Int): JsonObject {
+    private fun reply(step: Int, msgs: List<JsonObject>, promptTokens: Int, steps: Int): JsonObject {
         // 最后一步不带调用,只回文字:就是最终回答
-        if (step > STEPS) return buildJsonObject {
+        if (step > steps) return buildJsonObject {
             putJsonArray("choices") {
                 add(buildJsonObject {
                     put("finish_reason", "stop")
@@ -117,7 +117,8 @@ class PrefixStabilityTest {
     private class Setup(val vision: Boolean = false, val inline: Boolean = false, val fail: Set<Int> = emptySet(),
                         val light: Boolean = false, val contextTokens: Int = 1_000_000,
                         /** 上一轮用过的组:开局就展开。 */
-                        val prior: List<String> = emptyList())
+                        val prior: List<String> = emptyList(),
+                        val steps: Int = DEFAULT_STEPS)
 
     /** 跑一遍,返回各个服务端收到的请求(主模型在前)。 */
     private fun run(s: Setup): List<List<JsonObject>> {
@@ -125,13 +126,13 @@ class PrefixStabilityTest {
         val scripted = ScriptedScreen(screens)
         val port: ScreenPort = if (!s.vision) scripted else object : ScreenPort by scripted { override suspend fun screenshotPng() = byteArrayOf(1, 2, 3) }
         val sb = FakeSandbox().apply { next = { r -> CommandResult(0, false, false, 10, "输出${r.argv}" + "行".repeat(6000), 0, false) } }
-        val main = Wire(s.fail)
-        val light = if (s.light) Wire() else null
+        val main = Wire(s.fail, s.steps)
+        val light = if (s.light) Wire(steps = s.steps) else null
         val mainModel = main.model(s.vision, s.contextTokens)
         val lightModel = light?.model(false, s.contextTokens)
         runTest {
             AgentLoop(mainModel, toolDispatcher(port, sandbox = sb, workspace = { "w" }, inlineScreen = s.inline, visionEnabled = s.vision),
-                SystemPrompt.identity(), STEPS + 5, clock = { 0L }, zone = ZoneOffset.UTC,
+                SystemPrompt.identity(), s.steps + 5, clock = { 0L }, zone = ZoneOffset.UTC,
                 flags = SpeedFlags(inlineScreen = s.inline, lightSteps = s.light), router = lightModel?.let { ModelRouter(mainModel, it) },
             ).run("把每一屏都看一遍", if (s.prior.isEmpty()) emptyList() else listOf(Turn("上一轮", "好", "succeeded", groups = s.prior))).also { assertTrue("$it", it is TaskState.Succeeded) }
         }
@@ -222,7 +223,7 @@ class PrefixStabilityTest {
     @Test fun retriedRequestsAreIdentical() {
         val bodies = run(Setup(fail = setOf(5, 14))).single()
         // 重试的那次和被拒的那次逐字相同
-        assertEquals(33, bodies.size)
+        assertEquals(17, bodies.size)
         check(bodies, "retry")
     }
 
@@ -234,17 +235,16 @@ class PrefixStabilityTest {
     }
 
     @Test fun compaction() {
-        val bodies = run(Setup(contextTokens = 80_000)).single()
+        val bodies = run(Setup(contextTokens = 80_000, steps = COMPACTION_STEPS)).single()
         val r = check(bodies, "compaction", appendOnly = false)
         assertTrue(bodies.any { ContextCompressor.HEADER in it.toString() })
-        // 越过触发点的那一次压缩一次(改写一次),之后只追加,再长一个余量越过时才再压:30 步里改写两次
-        // (80K 窗口:提示词和展开的工具约 20K,触发点 47K,压到 30K 以下;新增工具说明会让后续越过触发点提前)
         assertEquals(listOf(12, 21, 30), r.changed)
         assertTrue("${r.share}", r.share > 0.85)
     }
 
     private companion object {
-        const val STEPS = 30
+        const val DEFAULT_STEPS = 14
+        const val COMPACTION_STEPS = 30
         val STEP = Regex("Step: (\\d+) of at most")
     }
 }

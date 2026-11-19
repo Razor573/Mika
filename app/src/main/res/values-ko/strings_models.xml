@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">컨텍스트 및 압축</string>
-    <string name="model_context_note">비워 두면 자동 값을 사용해요. 설정은 다음 작업부터, 이 제공업체와 모델을 쓰는 모든 역할에 적용돼요.</string>
+    <string name="model_context_note">호출당 입력은 최대 100,000 토큰으로 제한되며, 기록은 15단계마다 최근 관찰 3개를 온전히 유지하며 압축돼요. 비워 두면 자동 값을 사용해요. 설정은 다음 작업부터, 이 제공업체와 모델을 쓰는 모든 역할에 적용돼요.</string>
     <string name="model_context_window">컨텍스트 윈도우 (토큰)</string>
     <string name="model_context_trigger">압축 시작 기준 (토큰)</string>
     <string name="model_context_read_timeout">읽기 제한 시간(초)</string>
     <string name="model_context_auto">자동 · %1$d</string>
     <string name="model_context_integer">양의 정수를 입력하세요.</string>
     <string name="model_context_range">허용 범위 (토큰) · %1$d–%2$d</string>
-    <string name="model_context_effective">실제 적용 예산 (토큰) · 윈도우 %1$d · 기준 %2$d</string>
+    <string name="model_context_effective">실제 적용 예산 (토큰) · 최대 %1$d · 기준 %2$d</string>
     <string name="model_context_save_failed">이 설정을 저장하지 못했어요. 모델을 다시 열고 시도하세요.</string>
     <string name="models_lead">“역할”에서 각 작업을 맡을 모델을 고르세요. 모델은 아래에 연결한 제공업체에서 가져와요.</string>
     <string name="models_roles">역할</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">이 제공업체는 테스트 없이 저장되어서 동작 여부를 알 수 없어요. 모델을 골라 테스트하거나 새로고침을 눌러 모델 목록을 가져오세요.</string>
     <string name="models_not_listed">이 제공업체의 모델 목록을 아직 가져오지 않았어요.</string>
     <string name="refresh">새로고침</string>
+    <string name="models_last_refreshed">마지막 새로고침: %1$s</string>
+    <string name="models_refresh_failed_cached">새로고침 실패 (%1$s). 캐시된 모델을 표시하고 있어요.</string>
     <string name="models_in_use">사용 중</string>
     <string name="models_sees_images">이미지 인식 가능</string>
     <string name="models_sees_note_user">직접 설정했어요. 메인 모델이 이미지를 볼 수 있으면 스크린샷을 바로 보내요.</string>

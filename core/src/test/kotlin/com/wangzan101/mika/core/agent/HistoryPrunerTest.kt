@@ -5,6 +5,8 @@ import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.Role
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import com.wangzan101.mika.core.testing.TOOLS
@@ -175,5 +177,84 @@ class HistoryPrunerTest {
         assertTrue(old, HistoryPruner.OMITTED in old && text !in old && "\"id\":1" in old)
         val recent = (1..6).flatMap { obs("c$it") } + recall
         assertTrue(text in results(HistoryPruner.prune(recent, TOOLS, cut)).first { it.callId == "r1" }.content)
+    }
+
+    @Test fun shrinkInterfaceDropsTreeChangesWindowsAndNodes() {
+        val call = listOf(
+            Message(Role.Assistant, listOf(Part.ToolCall("w1", "phone_observe", "{}")), Author.Mika),
+            Message(Role.Tool, listOf(Part.ToolResult("w1",
+                """{"ok":true,"snapshotId":"s1","windows":[{"id":1,"nodes":[]}],"treeChanges":{"updated":[]},"nodes":[{"role":"TextView"}]}""", false)), Author.Mika),
+        )
+        val h = listOf(task) + call + obs("c2") + (1..4).flatMap { tap("t$it") }
+        val shrunk = results(HistoryPruner.prune(h, TOOLS, cut)).first { it.callId == "w1" }.content
+        assertTrue(shrunk, "\"windows\":\"${HistoryPruner.OMITTED}\"" in shrunk)
+        assertTrue(shrunk, "\"treeChanges\":\"${HistoryPruner.OMITTED}\"" in shrunk)
+        assertTrue(shrunk, "\"nodes\":\"${HistoryPruner.OMITTED}\"" in shrunk)
+    }
+
+    @Test fun pruneOlderObservationsKeepsLastThreeWithImagesAndPrunesEarlier() {
+        val few = listOf(task) + obs("c1") + shot(1) + obs("c2") + shot(2) + obs("c3") + shot(3)
+        assertSame(few, HistoryPruner.pruneOlderObservations(few, TOOLS, 3))
+
+        val batchNote = Message(Role.User, listOf(
+            Part.Text("The screen after the steps above.\nscreen: {\"snapshotId\":\"b1\",\"elements\":[{\"ref\":\"@e9\"}]}"),
+            Part.Image("IMG_B", screenshotId = 10),
+        ), Author.Mika)
+        val many = listOf(task) +
+            obs("c1") + shot(1) +
+            listOf(batchNote) +
+            obs("c2") + shot(2) +
+            act("a3", "s3") + shot(3) +
+            obs("c4") + shot(4)
+        val pruned = HistoryPruner.pruneOlderObservations(many, TOOLS, 3)
+
+        val r1 = results(pruned).first { it.callId == "c1" }.content
+        assertTrue(r1, HistoryPruner.OMITTED in r1 && "@e1" !in r1)
+        assertTrue(pruned.any { it.parts.any { p -> p is Part.Text && p.text == HistoryPruner.olderImage(1) } })
+
+        val prunedBatch = pruned.first { it.parts.any { p -> p is Part.Text && p.text == HistoryPruner.OMITTED } }
+        assertTrue(prunedBatch.parts.any { it is Part.Text && it.text == HistoryPruner.olderImage(10) })
+        assertFalse(prunedBatch.parts.any { it is Part.Image })
+
+        assertTrue("@e1" in results(pruned).first { it.callId == "c2" }.content)
+        assertTrue("@e1" in results(pruned).first { it.callId == "a3" }.content)
+        assertTrue("@e1" in results(pruned).first { it.callId == "c4" }.content)
+        val keptIds = pruned.flatMap { it.parts }.filterIsInstance<Part.Image>().map { it.screenshotId }
+        assertEquals(listOf<Int?>(2, 3, 4), keptIds)
+    }
+
+    @Test fun enforceCapGraduallyShrinksDropsAndClipsUntilFits() {
+        val small = listOf(task) + obs("c1")
+        assertSame(small, HistoryPruner.enforceCap(small, TOOLS) { true })
+
+        val bigMessageResult = listOf(
+            task,
+            Message(Role.Assistant, listOf(Part.ToolCall("m1", "run_command", "{}")), Author.Mika),
+            Message(Role.Tool, listOf(Part.ToolResult("m1", """{"ok":false,"error":"bad","message":"${"z".repeat(40_000)}"}""", true)), Author.Mika),
+        )
+        val shrunkMsg = HistoryPruner.enforceCap(bigMessageResult, TOOLS) { TokenEstimate.of(it) <= 1_500 }
+        assertTrue(TokenEstimate.of(shrunkMsg) <= 1_500)
+        assertTrue(results(shrunkMsg).single().content.contains("\"error\":\"bad\""))
+
+        val manyRounds = listOf(task) +
+            listOf(Message(Role.User, listOf(Part.Text(ContextBuilder.envelope(ContextKind.Memory, "memory", "keep me"))), Author.Mika)) +
+            (1..8).flatMap { obs("r$it") + shot(it) }
+        val dropped = HistoryPruner.enforceCap(manyRounds, TOOLS) { TokenEstimate.of(it) <= 300 }
+        assertTrue(TokenEstimate.of(dropped) <= 300)
+        assertTrue(task in dropped)
+        assertTrue(dropped.any { ContextBuilder.kindOf(it) == ContextKind.Memory })
+        val calls = dropped.flatMap { it.parts }.filterIsInstance<Part.ToolCall>().map { it.id }
+        val res = dropped.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.callId }
+        assertEquals(calls, res)
+        assertTrue(calls.contains("r8"))
+
+        val hugeSingle = listOf(
+            task,
+            Message(Role.Assistant, listOf(Part.Thinking("t".repeat(120_000)), Part.ToolCall("h1", "phone_observe", "{}")), Author.Mika),
+            Message(Role.Tool, listOf(Part.ToolResult("h1", """{"ok":true,"message":"${"y".repeat(200_000)}"}""", false)), Author.Mika),
+        )
+        val clipped = HistoryPruner.enforceCap(hugeSingle, TOOLS) { TokenEstimate.of(it) <= 2_000 }
+        assertTrue(TokenEstimate.of(clipped) <= 2_000)
+        assertTrue(task in clipped)
     }
 }

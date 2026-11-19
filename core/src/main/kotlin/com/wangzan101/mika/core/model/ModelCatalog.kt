@@ -175,6 +175,7 @@ class ModelCatalog(private val http: OkHttpClient) {
     suspend fun anthropic(baseUrl: String, apiKey: String, headers: Map<String, String> = emptyMap()): ModelListResult = run {
         val base = endpoint(baseUrl, "/v1/models") ?: return@run badUrl()
         val all = mutableListOf<ListedModel>()
+        val seenTokens = hashSetOf<String>()
         var after: String? = null
         repeat(MAX_PAGES) {
             val url = base.newBuilder().addQueryParameter("limit", "1000")
@@ -186,8 +187,11 @@ class ModelCatalog(private val http: OkHttpClient) {
             val root = fetch(req).getOrElse { return@run it.asFailure() }
             val data = root["data"] as? JsonArray ?: return@run ModelListResult.Failed(ListFailure.BadResponse)
             all += data.mapNotNull { (it as? JsonObject)?.let(::anthropicModel) }
-            after = root.str("last_id")
-            if (root.bool("has_more") != true || after == null) return@run ModelListResult.Ok(all.distinctBy { it.id })
+            val next = root.str("last_id")?.takeIf { it.isNotEmpty() }
+            if (root.bool("has_more") != true || next == null || !seenTokens.add(next)) {
+                return@run ModelListResult.Ok(all.distinctBy { it.id })
+            }
+            after = next
         }
         ModelListResult.Ok(all.distinctBy { it.id })
     }
@@ -195,6 +199,7 @@ class ModelCatalog(private val http: OkHttpClient) {
     suspend fun gemini(baseUrl: String, apiKey: String, headers: Map<String, String> = emptyMap()): ModelListResult = run {
         val base = endpoint(baseUrl, "/v1beta/models") ?: return@run badUrl()
         val all = mutableListOf<ListedModel>()
+        val seenTokens = hashSetOf<String>()
         var token: String? = null
         repeat(MAX_PAGES) {
             val url = base.newBuilder().addQueryParameter("pageSize", "1000")
@@ -205,8 +210,9 @@ class ModelCatalog(private val http: OkHttpClient) {
             val root = fetch(req).getOrElse { return@run it.asFailure() }
             val data = root["models"] as? JsonArray ?: JsonArray(emptyList())
             all += data.mapNotNull { (it as? JsonObject)?.let(::geminiModel) }
-            token = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
-            if (token == null) return@run ModelListResult.Ok(all.distinctBy { it.id })
+            val next = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
+            if (next == null || !seenTokens.add(next)) return@run ModelListResult.Ok(all.distinctBy { it.id })
+            token = next
         }
         ModelListResult.Ok(all.distinctBy { it.id })
     }
@@ -238,39 +244,38 @@ class ModelCatalog(private val http: OkHttpClient) {
             null
         }
 
-        var fresh = false
-        var bearer = try {
+        val initialBearer = try {
             token.get(false)?.takeIf { it.isNotBlank() } ?: return@run ModelListResult.Failed(ListFailure.Auth)
         } catch (e: CancellationException) {
             throw e
         } catch (e: ModelError) {
             return@run failureFor(e)
         }
+        val auth = VertexAuthState(initialBearer, fresh = false)
 
-        val byId = linkedMapOf<String, ListedModel>().apply {
-            CURATED_VERTEX_MODELS.forEach { put(it.id, it) }
-        }
+        val byId = linkedMapOf<String, ListedModel>()
+        val seenTokens = hashSetOf<String>()
+        var effectiveLocation = cleanLocation
         var pageToken: String? = null
-        repeat(MAX_PAGES) {
-            val url = if (overrideBase == null) {
-                VertexEndpoints.publisherModelsUrl(cleanLocation, pageSize = 100, pageToken = pageToken)
-            } else {
-                "$overrideBase/v1/publishers/google/models".toHttpUrlOrNull()!!.newBuilder()
-                    .addQueryParameter("pageSize", "100")
-                    .apply { if (pageToken != null) addQueryParameter("pageToken", pageToken) }
-                    .build()
-                    .toString()
-            }
-            val (root, updatedAuth) = fetchVertexPage(url, token, bearer, fresh, cleanProject, headers).getOrElse { err ->
+        var page = 0
+        while (page < MAX_PAGES) {
+            val url = vertexModelsUrl(overrideBase, effectiveLocation, pageToken)
+            val result = fetchVertexPage(url, token, auth, cleanProject, headers)
+            val err = result.exceptionOrNull()
+            if (err != null) {
                 val failed = err.asFailure()
-                if (failed.reason == ListFailure.NotSupported) {
-                    return@run ModelListResult.Ok(byId.values.toList())
+                if (page == 0 &&
+                    overrideBase == null &&
+                    effectiveLocation == VertexEndpoints.DEFAULT_LOCATION &&
+                    failed.reason == ListFailure.NotSupported
+                ) {
+                    effectiveLocation = VERTEX_FALLBACK_LOCATION
+                    continue
                 }
                 return@run failed
             }
-            bearer = updatedAuth.first
-            fresh = updatedAuth.second
-
+            page++
+            val root = result.getOrThrow()
             val data = (root["publisherModels"] ?: root["models"]) as? JsonArray ?: JsonArray(emptyList())
             data.mapNotNull(::vertexModel).forEach { model ->
                 val existing = byId[model.id]
@@ -284,8 +289,9 @@ class ModelCatalog(private val http: OkHttpClient) {
                     )
                 }
             }
-            pageToken = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
-            if (pageToken == null) return@run ModelListResult.Ok(byId.values.toList())
+            val next = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
+            if (next == null || !seenTokens.add(next)) return@run ModelListResult.Ok(byId.values.toList())
+            pageToken = next
         }
         ModelListResult.Ok(byId.values.toList())
     }
@@ -495,9 +501,11 @@ class ModelCatalog(private val http: OkHttpClient) {
         val id = o.str("name")?.removePrefix("models/")?.takeIf { it.isNotBlank() } ?: return null
         val methods = (o["supportedGenerationMethods"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
         if (methods != null && "generateContent" !in methods) return null
+        val displayName = o.str("displayName").orEmpty()
+        if (isExcludedGeminiModel(id, displayName)) return null
         return ListedModel(
             id = id,
-            displayName = o.str("displayName").orEmpty(),
+            displayName = displayName,
             contextTokens = o.int("inputTokenLimit"),
             reasoning = o.bool("thinking"),
         )
@@ -516,28 +524,39 @@ class ModelCatalog(private val http: OkHttpClient) {
         } ?: return null
         val id = VertexEndpoints.cleanModelId(rawId)
         if (id.isEmpty()) return null
-        val lower = id.lowercase()
-        if ("gemini" !in lower) return null
-        if (VERTEX_EXCLUDED_TOKENS.any { it in lower }) return null
         val obj = el as? JsonObject
+        val displayName = obj?.str("displayName").orEmpty()
+        val lower = id.lowercase()
+        if ("gemini" !in lower && "gemini" !in displayName.lowercase()) return null
+        if (isExcludedGeminiModel(id, displayName)) return null
         return ListedModel(
             id = id,
-            displayName = obj?.str("displayName").orEmpty(),
+            displayName = displayName,
             contextTokens = obj?.int("inputTokenLimit"),
             reasoning = obj?.bool("thinking"),
         )
     }
 
+    private class VertexAuthState(var bearer: String, var fresh: Boolean)
+
+    private fun vertexModelsUrl(overrideBase: String?, location: String, pageToken: String?): String =
+        if (overrideBase == null) {
+            VertexEndpoints.publisherModelsUrl(location, pageSize = 100, pageToken = pageToken)
+        } else {
+            "$overrideBase/v1beta1/publishers/google/models".toHttpUrlOrNull()!!.newBuilder()
+                .addQueryParameter("pageSize", "100")
+                .apply { if (!pageToken.isNullOrBlank()) addQueryParameter("pageToken", pageToken) }
+                .build()
+                .toString()
+        }
+
     private suspend fun fetchVertexPage(
         url: String,
         token: BearerToken,
-        initialBearer: String,
-        initialFresh: Boolean,
+        auth: VertexAuthState,
         projectId: String?,
         headers: Map<String, String>,
-    ): Result<Pair<JsonObject, Pair<String, Boolean>>> {
-        var bearer = initialBearer
-        var fresh = initialFresh
+    ): Result<JsonObject> {
         while (true) {
             val req = buildRequest {
                 Request.Builder()
@@ -545,7 +564,7 @@ class ModelCatalog(private val http: OkHttpClient) {
                     .get()
                     .withHeaders(headers)
                     .removeHeader("x-goog-api-key")
-                    .headerOrReject("Authorization", "Bearer $bearer")
+                    .headerOrReject("Authorization", "Bearer ${auth.bearer}")
                     .apply { if (projectId != null) headerOrReject("x-goog-user-project", projectId) }
                     .build()
             } ?: return Result.failure(Failure(illegalKey()))
@@ -556,9 +575,9 @@ class ModelCatalog(private val http: OkHttpClient) {
             } catch (e: Exception) {
                 return Result.failure(Failure(ModelListResult.Failed(ListFailure.of(e))))
             }
-            if (raw.status == 401 && token.refreshable && !fresh) {
-                fresh = true
-                bearer = try {
+            if (raw.status == 401 && token.refreshable && !auth.fresh) {
+                auth.fresh = true
+                auth.bearer = try {
                     token.get(true)?.takeIf { it.isNotBlank() }
                         ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.Auth)))
                 } catch (e: CancellationException) {
@@ -571,7 +590,7 @@ class ModelCatalog(private val http: OkHttpClient) {
             if (raw.status !in 200..299) return Result.failure(Failure(failureFor(raw.status, raw.body)))
             val root = try { json.parseToJsonElement(raw.body).jsonObject } catch (_: Exception) { null }
                 ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.BadResponse)))
-            return Result.success(root to (bearer to fresh))
+            return Result.success(root)
         }
     }
 
@@ -643,7 +662,8 @@ class ModelCatalog(private val http: OkHttpClient) {
 
     companion object {
         /** 翻页上限:防止服务端一直给下一页。 */
-        private const val MAX_PAGES = 10
+        private const val MAX_PAGES = 25
+        private const val VERTEX_FALLBACK_LOCATION = "us-central1"
         /** Anthropic 的 `capabilities.effort` 按字母排;界面按由浅到深排,不认得的排最后。 */
         private val EFFORT_ORDER = listOf("low", "medium", "high", "xhigh", "max")
         /** 列表里 `type` 一项的写法:是对话模型的,和不是的(向量、重排、画图、语音、审核)。 */
@@ -652,13 +672,42 @@ class ModelCatalog(private val http: OkHttpClient) {
             "embedding", "embeddings", "rerank", "reranker", "image", "images", "video", "audio", "tts", "stt", "asr",
             "speech", "transcription", "moderation",
         )
-        private val VERTEX_EXCLUDED_TOKENS = listOf("embedding", "imagen", "veo", "tts", "live", "audio", "transcribe")
-        private val CURATED_VERTEX_MODELS = listOf(
-            ListedModel(id = "gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen"),
-            ListedModel(id = "gemini-4-argon", displayName = "Gemini 4 Argon"),
-            ListedModel(id = "gemini-4-carbon", displayName = "Gemini 4 Carbon"),
-            ListedModel(id = "gemini-3.8-flash", displayName = "Gemini 3.8 Flash"),
+        private val TOKEN_SPLIT_REGEX = Regex("[^a-z0-9]+")
+        private val EXCLUDED_GEMINI_PHRASES = listOf(
+            "deep-research",
+            "text-to-speech",
+            "native-audio",
+            "nano-banana",
+            "virtual-try-on",
+            "image-generation",
+            "music-generation",
+            "speech-to-text",
         )
+        private val EXCLUDED_GEMINI_TOKENS = setOf(
+            "tts", "image", "images", "imagen", "music", "lyria", "robotics", "veo", "video",
+            "embedding", "embeddings", "embed", "aqa", "audio", "live", "realtime",
+            "transcribe", "transcription", "speech", "chirp", "whisper", "stt", "asr",
+            "moderation", "rerank", "reranker", "gecko", "bison", "unicorn", "medlm",
+            "upscale", "inpaint", "outpaint",
+        )
+        private val EXCLUDED_GEMINI_PREFIXES = listOf("imagen", "lyria", "veo", "chirp", "embed", "robotics")
+
+        internal fun isExcludedGeminiModel(id: String, displayName: String = ""): Boolean {
+            val fields = listOf(id, displayName)
+                .map { it.lowercase().replace('_', '-') }
+                .filter { it.isNotEmpty() }
+            for (field in fields) {
+                val tokens = field.split(TOKEN_SPLIT_REGEX).filter { it.isNotEmpty() }
+                val normalized = tokens.joinToString("-")
+                if (EXCLUDED_GEMINI_PHRASES.any { it in normalized }) return true
+                if (tokens.any { token ->
+                        token in EXCLUDED_GEMINI_TOKENS || EXCLUDED_GEMINI_PREFIXES.any { token.startsWith(it) }
+                    }
+                ) return true
+            }
+            return false
+        }
+
         private val JSON_TYPE = "application/json".toMediaType()
         val CURATED_ANTIGRAVITY_MODELS = listOf(
             ListedModel(id = "gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen"),

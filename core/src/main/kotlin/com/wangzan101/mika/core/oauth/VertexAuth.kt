@@ -111,6 +111,7 @@ object VertexEndpoints {
     private val LOCATION_REGEX = Regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
     private val PROJECT_REGEX = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]*$")
     private val MODEL_REGEX = Regex("^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    private val VERSION_SUFFIX = Regex("@[A-Za-z0-9._-]+$")
 
     fun normalizeLocation(raw: String): String {
         val trimmed = raw.trim()
@@ -130,11 +131,15 @@ object VertexEndpoints {
         return trimmed
     }
 
-    fun cleanModelId(raw: String): String =
-        raw.trim()
-            .removePrefix("publishers/google/models/")
-            .removePrefix("models/")
-            .trim()
+    fun cleanModelId(raw: String): String {
+        val trimmed = raw.trim()
+        val unprefixed = if ("publishers/google/models/" in trimmed) {
+            trimmed.substringAfter("publishers/google/models/")
+        } else {
+            trimmed.removePrefix("models/")
+        }
+        return unprefixed.replace(VERSION_SUFFIX, "").trim()
+    }
 
     fun validateModelId(raw: String): String {
         val clean = cleanModelId(raw)
@@ -175,7 +180,7 @@ object VertexEndpoints {
         pageToken: String? = null,
     ): String {
         val loc = normalizeLocation(location)
-        val base = "${host(loc)}/v1/publishers/google/models"
+        val base = "${host(loc)}/v1beta1/publishers/google/models"
         return requireHttpsUrl(base, "Vertex catalog URL").newBuilder()
             .addQueryParameter("pageSize", pageSize.coerceIn(1, 1000).toString())
             .apply { if (!pageToken.isNullOrBlank()) addQueryParameter("pageToken", pageToken) }

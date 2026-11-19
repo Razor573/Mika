@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">Contexto e compactação</string>
-    <string name="model_context_note">Campos em branco usam valores automáticos. As configurações valem a partir da próxima tarefa para todas as funções que usam este provedor e modelo.</string>
+    <string name="model_context_note">A entrada é limitada a 100.000 tokens por chamada, e o histórico é compactado a cada 15 passos mantendo as últimas 3 observações completas. Campos em branco usam valores automáticos. As configurações valem a partir da próxima tarefa para todas as funções que usam este provedor e modelo.</string>
     <string name="model_context_window">Janela de contexto (tokens)</string>
     <string name="model_context_trigger">Gatilho de compactação (tokens)</string>
     <string name="model_context_read_timeout">Tempo limite de leitura (segundos)</string>
     <string name="model_context_auto">Automático · %1$d</string>
     <string name="model_context_integer">Digite um número inteiro positivo.</string>
     <string name="model_context_range">Intervalo permitido (tokens) · %1$d–%2$d</string>
-    <string name="model_context_effective">Orçamento efetivo (tokens) · Janela %1$d · Gatilho %2$d</string>
+    <string name="model_context_effective">Orçamento efetivo (tokens) · Máx. %1$d · Gatilho %2$d</string>
     <string name="model_context_save_failed">Não foi possível salvar estas configurações. Abra o modelo de novo e tente outra vez.</string>
     <string name="models_lead">Escolha qual modelo faz cada trabalho em “Funções”; os modelos vêm dos provedores conectados abaixo.</string>
     <string name="models_roles">Funções</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">Este provedor foi salvo sem teste, então não se sabe se funciona. Escolha um modelo para testá-lo ou toque em Atualizar para listar os modelos dele.</string>
     <string name="models_not_listed">Os modelos deste provedor ainda não foram listados.</string>
     <string name="refresh">Atualizar</string>
+    <string name="models_last_refreshed">Última atualização: %1$s</string>
+    <string name="models_refresh_failed_cached">Falha ao atualizar (%1$s). Exibindo modelos em cache.</string>
     <string name="models_in_use">Em uso</string>
     <string name="models_sees_images">Enxerga imagens</string>
     <string name="models_sees_note_user">Definido por você. Quando o modelo principal enxerga, as capturas de tela vão direto para ele.</string>

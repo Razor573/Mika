@@ -15,6 +15,7 @@ class ContextLimits private constructor(
     val minTrigger: Int,
 ) {
     companion object {
+        const val MAX_INPUT_TOKENS = 100_000
         /** 给模型输出预留的 token 上限。 */
         const val MAX_OUTPUT_RESERVE = 20_000
         /** 触发点离可用窗口留的余量上限。 */
@@ -29,9 +30,10 @@ class ContextLimits private constructor(
          */
         fun of(window: Int, triggerOverride: Int? = null): ContextLimits {
             val w = window.coerceAtLeast(0)
-            val usable = w - minOf(MAX_OUTPUT_RESERVE, w / 4)
+            val rawUsable = w - minOf(MAX_OUTPUT_RESERVE, w / 4)
+            val usable = minOf(rawUsable, MAX_INPUT_TOKENS)
             val margin = minOf(MARGIN_TOKENS, usable / 4)
-            val floor = minOf((w * MIN_TRIGGER_SHARE).toInt(), usable)
+            val floor = minOf((minOf(w, MAX_INPUT_TOKENS) * MIN_TRIGGER_SHARE).toInt(), usable)
             val trigger = (triggerOverride ?: (usable - margin)).coerceIn(floor, usable)
             val target = minOf((usable * AFTER_COMPACTION).toInt(), trigger - margin).coerceAtLeast(0)
             return ContextLimits(w, usable, trigger, margin, target, floor)

@@ -277,17 +277,41 @@ class VertexAuthTest {
         assertEquals("https://aiplatform.googleapis.com", VertexEndpoints.host("global"))
         assertEquals("https://europe-west4-aiplatform.googleapis.com", VertexEndpoints.host("europe-west4"))
         assertEquals(
-            "https://aiplatform.googleapis.com/v1/publishers/google/models?pageSize=100",
+            "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100",
             VertexEndpoints.publisherModelsUrl("global"),
         )
         assertEquals(
-            "https://us-central1-aiplatform.googleapis.com/v1/publishers/google/models?pageSize=100",
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100",
             VertexEndpoints.publisherModelsUrl("us-central1"),
+        )
+        assertEquals(
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=50&pageToken=next-1",
+            VertexEndpoints.publisherModelsUrl("us-central1", pageSize = 50, pageToken = "next-1"),
+        )
+        assertEquals(
+            "gemini-2.5-pro",
+            VertexEndpoints.cleanModelId("projects/p1/locations/us-central1/publishers/google/models/gemini-2.5-pro"),
+        )
+        assertEquals(
+            "gemini-2.5-pro",
+            VertexEndpoints.cleanModelId("publishers/google/models/gemini-2.5-pro@001"),
+        )
+        assertEquals(
+            "gemini-2.5-pro",
+            VertexEndpoints.validateModelId("projects/p1/locations/global/publishers/google/models/gemini-2.5-pro@default"),
         )
         assertEquals(
             "https://us-central1-aiplatform.googleapis.com/v1/projects/p1/locations/us-central1/publishers/google/models/gemini-4-argon:streamGenerateContent?alt=sse",
             VertexEndpoints.generateContentUrl("p1", "us-central1", "publishers/google/models/gemini-4-argon", stream = true),
         )
+
+        for (badModel in listOf("", "@001", "../bad", "bad@evil.com/foo", "projects/p/locations/l/publishers/google/models/")) {
+            try {
+                VertexEndpoints.validateModelId(badModel)
+                fail("Expected invalid model ID to fail: $badModel")
+            } catch (_: IllegalArgumentException) {
+            }
+        }
 
         for (badLoc in listOf("../bad", "us central1", "us-central1/extra", "us?x=1")) {
             try {

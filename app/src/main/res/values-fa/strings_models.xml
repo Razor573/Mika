@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">زمینه و خلاصه‌سازی</string>
-    <string name="model_context_note">فیلدهای خالی از مقادیر خودکار استفاده می‌کنند. تنظیمات از کار بعدی برای همهٔ نقش‌هایی که از این ارائه‌دهنده و مدل استفاده می‌کنند اعمال می‌شود.</string>
+    <string name="model_context_note">ورودی در هر فراخوانی حداکثر به 100,000 توکن محدود است و تاریخچه هر 15 مرحله با نگه داشتن کامل 3 مشاهدهٔ آخر خلاصه می‌شود. فیلدهای خالی از مقادیر خودکار استفاده می‌کنند. تنظیمات از کار بعدی برای همهٔ نقش‌هایی که از این ارائه‌دهنده و مدل استفاده می‌کنند اعمال می‌شود.</string>
     <string name="model_context_window">پنجرهٔ زمینه (توکن)</string>
     <string name="model_context_trigger">آستانهٔ خلاصه‌سازی (توکن)</string>
     <string name="model_context_read_timeout">مهلت دریافت پاسخ (ثانیه)</string>
     <string name="model_context_auto">خودکار · %1$d</string>
     <string name="model_context_integer">یک عدد صحیح مثبت وارد کنید.</string>
     <string name="model_context_range">محدودهٔ مجاز (توکن) · %1$d تا %2$d</string>
-    <string name="model_context_effective">بودجهٔ مؤثر (توکن) · پنجره %1$d · آستانه %2$d</string>
+    <string name="model_context_effective">بودجهٔ مؤثر (توکن) · حداکثر %1$d · آستانه %2$d</string>
     <string name="model_context_save_failed">ذخیرهٔ این تنظیمات ممکن نشد. مدل را دوباره باز کنید و تلاش کنید.</string>
     <string name="models_lead">در بخش «نقش‌ها» انتخاب کنید کدام مدل هر کار را انجام دهد؛ مدل‌ها از ارائه‌دهندگان متصل زیر انتخاب می‌شوند.</string>
     <string name="models_roles">نقش‌ها</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">این ارائه‌دهنده بدون آزمون ذخیره شده است، بنابراین عملکرد آن مشخص نیست. مدلی را برای آزمون انتخاب کنید یا برای دریافت فهرست مدل‌ها «تازه‌سازی» را بزنید.</string>
     <string name="models_not_listed">فهرست مدل‌های این ارائه‌دهنده هنوز دریافت نشده است.</string>
     <string name="refresh">تازه‌سازی</string>
+    <string name="models_last_refreshed">آخرین تازه‌سازی: %1$s</string>
+    <string name="models_refresh_failed_cached">تازه‌سازی ناموفق بود (%1$s). مدل‌های ذخیره‌شده نمایش داده می‌شوند.</string>
     <string name="models_in_use">در حال استفاده</string>
     <string name="models_sees_images">قابلیت دیدن تصویر</string>
     <string name="models_sees_note_user">توسط شما تنظیم شده است. وقتی مدل اصلی قابلیت دیدن داشته باشد، عکس‌های صفحه مستقیم به آن ارسال می‌شوند.</string>

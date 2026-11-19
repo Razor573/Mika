@@ -11,10 +11,15 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -238,21 +243,31 @@ class VertexModelTest {
     }
 
     @Test
-    fun vertexCatalogMergesLiveModelsAndPreservesCuratedDefaults() = runTest {
+    fun vertexCatalogFetchesLiveModelsPagesAndFailsWithoutHardcodedFallback() = runTest {
         val catalog = ModelCatalog(OkHttpClient())
         val base = server.url("/").toString().trimEnd('/')
 
-        // 1. Live publisher list with curated + extra + excluded models (also triggers 401 refresh retry)
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"code":401,"message":"expired"}}"""))
         server.enqueue(
             ok(
                 """{
                     "publisherModels": [
-                        {"name": "publishers/google/models/gemini-4-hydrogen", "displayName": "Gemini 4 Hydrogen Live", "inputTokenLimit": 1000000, "thinking": true},
                         {"name": "publishers/google/models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro", "inputTokenLimit": 2000000, "thinking": true},
                         {"name": "publishers/google/models/imagen-3.0-generate-001"},
                         {"name": "publishers/google/models/gemini-embedding-001"}
-                    ]
+                    ],
+                    "nextPageToken": "page-2"
+                }""",
+            ),
+        )
+        server.enqueue(
+            ok(
+                """{
+                    "publisherModels": [
+                        {"name": "projects/proj-1/locations/us-central1/publishers/google/models/gemini-9-quantum@001", "displayName": "Gemini 9 Quantum", "inputTokenLimit": 1000000, "thinking": true},
+                        {"name": "publishers/google/models/gemini-2.5-pro", "displayName": "Gemini 2.5 Pro Updated"}
+                    ],
+                    "nextPageToken": "page-2"
                 }""",
             ),
         )
@@ -267,39 +282,139 @@ class VertexModelTest {
         }
         val okRes = catalog.vertex(token = token, location = "us-central1", projectId = "proj-1", baseUrl = base)
         val listed = (okRes as ModelListResult.Ok).models
-        val ids = listed.map { it.id }
-        assertEquals(
-            listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-4-carbon", "gemini-3.8-flash", "gemini-2.5-pro"),
-            ids,
-        )
-        assertEquals("Gemini 4 Hydrogen Live", listed.first { it.id == "gemini-4-hydrogen" }.displayName)
-        assertEquals(1_000_000, listed.first { it.id == "gemini-4-hydrogen" }.contextTokens)
-        assertEquals(true, listed.first { it.id == "gemini-4-hydrogen" }.reasoning)
+        assertEquals(listOf("gemini-2.5-pro", "gemini-9-quantum"), listed.map { it.id })
+        assertEquals("Gemini 2.5 Pro Updated", listed.first { it.id == "gemini-2.5-pro" }.displayName)
+        assertEquals(2_000_000, listed.first { it.id == "gemini-2.5-pro" }.contextTokens)
+        assertEquals(true, listed.first { it.id == "gemini-2.5-pro" }.reasoning)
+        assertEquals("Gemini 9 Quantum", listed.first { it.id == "gemini-9-quantum" }.displayName)
         assertEquals(listOf(false, true), freshCalls)
 
         val req1 = server.takeRequest()
-        assertEquals("/v1/publishers/google/models?pageSize=100", req1.path)
+        assertEquals("/v1beta1/publishers/google/models?pageSize=100", req1.path)
         assertEquals("Bearer tok-stale", req1.getHeader("Authorization"))
         assertEquals("proj-1", req1.getHeader("x-goog-user-project"))
         assertNull(req1.getHeader("x-goog-api-key"))
-        assertEquals("Bearer tok-fresh", server.takeRequest().getHeader("Authorization"))
+        val req2 = server.takeRequest()
+        assertEquals("/v1beta1/publishers/google/models?pageSize=100", req2.path)
+        assertEquals("Bearer tok-fresh", req2.getHeader("Authorization"))
+        val req3 = server.takeRequest()
+        assertEquals("/v1beta1/publishers/google/models?pageSize=100&pageToken=page-2", req3.path)
+        assertEquals(3, server.requestCount)
 
-        // 2. Empty live response and 404 still keep all 4 plain-ID curated defaults
         server.enqueue(ok("""{"publisherModels":[]}"""))
         val emptyOk = catalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Ok
-        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-4-carbon", "gemini-3.8-flash"), emptyOk.models.map { it.id })
+        assertEquals(emptyList<ListedModel>(), emptyOk.models)
         server.takeRequest()
 
         server.enqueue(MockResponse().setResponseCode(404).setBody("""{"error":{"code":404,"message":"not supported"}}"""))
-        val fallbackOk = catalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Ok
-        assertEquals(listOf("gemini-4-hydrogen", "gemini-4-argon", "gemini-4-carbon", "gemini-3.8-flash"), fallbackOk.models.map { it.id })
+        val notSupported = catalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Failed
+        assertEquals(ListFailure.NotSupported, notSupported.reason)
         server.takeRequest()
 
-        // 3. 403 maps cleanly to ListFailure.Auth
         server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":{"code":403,"message":"forbidden"}}"""))
         val authFail = catalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Failed
         assertEquals(ListFailure.Auth, authFail.reason)
         server.takeRequest()
+    }
+
+    @Test
+    fun vertexCatalogKeepsNovelGeminiModelsFiltersNonChatAndHandlesNetworkError() = runTest {
+        val catalog = ModelCatalog(OkHttpClient())
+        val base = server.url("/").toString().trimEnd('/')
+
+        server.enqueue(
+            ok(
+                """{
+                    "publisherModels": [
+                        {"name": "publishers/google/models/gemini-4-neon", "displayName": "Gemini 4 Neon"},
+                        {"name": "publishers/google/models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash"},
+                        {"name": "publishers/google/models/gemini-3-pro-preview", "displayName": "Gemini 3 Pro Preview"},
+                        {"name": "publishers/google/models/gemini-novel-alpha-99", "displayName": "Gemini Novel Alpha 99"},
+                        {"name": "publishers/google/models/gemini-2.5-flash-preview-tts", "displayName": "Gemini 2.5 Flash Preview TTS"},
+                        {"name": "publishers/google/models/gemini-2.5-flash-image", "displayName": "Gemini 2.5 Flash Image"},
+                        {"name": "publishers/google/models/gemini-2.5-flash-native-audio-preview", "displayName": "Gemini Native Audio"},
+                        {"name": "publishers/google/models/gemini-music-generation-001", "displayName": "Gemini Music Generation"},
+                        {"name": "publishers/google/models/lyria-realtime-exp", "displayName": "Gemini Lyria"},
+                        {"name": "publishers/google/models/gemini-robotics-er-1.5-preview"},
+                        {"name": "publishers/google/models/gemini-deep-research-pro-preview"},
+                        {"name": "publishers/google/models/veo-2.0-generate-001", "displayName": "Gemini Veo"},
+                        {"name": "publishers/google/models/gemini-embedding-001"},
+                        {"name": "publishers/google/models/gemini-live-2.5-flash-preview"},
+                        {"name": "publishers/google/models/gemini-2.5-audio-preview"},
+                        {"name": "publishers/google/models/gemma-3-27b-it", "displayName": "Gemma 3 27B"},
+                        {"name": "publishers/google/models/gemini-bad-method", "supportedGenerationMethods": ["embedContent"]}
+                    ]
+                }""",
+            ),
+        )
+
+        val okRes = catalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Ok
+        assertEquals(
+            listOf("gemini-4-neon", "gemini-2.5-flash", "gemini-3-pro-preview", "gemini-novel-alpha-99"),
+            okRes.models.map { it.id },
+        )
+        server.takeRequest()
+
+        val noRetryCatalog = ModelCatalog(OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        val networkFail = noRetryCatalog.vertex(token = BearerToken.fixed("vt"), baseUrl = base) as ModelListResult.Failed
+        assertEquals(ListFailure.Network, networkFail.reason)
+    }
+
+    @Test
+    fun vertexCatalogGlobalLocationFallsBackToUsCentral1On404() = runTest {
+        val seenUrls = mutableListOf<String>()
+        val jsonMedia = "application/json".toMediaType()
+        val interceptorClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val url = req.url.toString()
+                seenUrls += url
+                val (code, body) = if (req.url.host == "aiplatform.googleapis.com") {
+                    404 to """{"error":{"code":404,"message":"not found on global"}}"""
+                } else {
+                    200 to """{"publisherModels":[{"name":"publishers/google/models/gemini-2.5-pro","displayName":"Gemini 2.5 Pro"}]}"""
+                }
+                Response.Builder()
+                    .request(req)
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(code)
+                    .message("OK")
+                    .body(body.toResponseBody(jsonMedia))
+                    .build()
+            }
+            .build()
+
+        val res = ModelCatalog(interceptorClient).vertex(
+            token = BearerToken.fixed("vt"),
+            location = "global",
+            projectId = "proj-1",
+        ) as ModelListResult.Ok
+        assertEquals(listOf("gemini-2.5-pro"), res.models.map { it.id })
+        assertEquals(
+            listOf(
+                "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100",
+                "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100",
+            ),
+            seenUrls,
+        )
+
+        val both404Client = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(404)
+                    .message("Not Found")
+                    .body("""{"error":{"code":404}}""".toResponseBody(jsonMedia))
+                    .build()
+            }
+            .build()
+        val failRes = ModelCatalog(both404Client).vertex(
+            token = BearerToken.fixed("vt"),
+            location = "global",
+        ) as ModelListResult.Failed
+        assertEquals(ListFailure.NotSupported, failRes.reason)
     }
 
     @Test

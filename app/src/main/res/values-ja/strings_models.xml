@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">コンテキストと圧縮</string>
-    <string name="model_context_note">空欄の項目は自動の値を使います。設定は、このプロバイダーとモデルを使うすべての役割に、次のタスクから反映されます。</string>
+    <string name="model_context_note">1 回の呼び出しあたりの入力は最大 100,000 トークンに制限され、履歴は 15 ステップごとに直近 3 件の観察結果を完全に残して圧縮されます。空欄の項目は自動の値を使います。設定は、このプロバイダーとモデルを使うすべての役割に、次のタスクから反映されます。</string>
     <string name="model_context_window">コンテキストウィンドウ(トークン)</string>
     <string name="model_context_trigger">圧縮を始める位置(トークン)</string>
     <string name="model_context_read_timeout">読み取りタイムアウト（秒）</string>
     <string name="model_context_auto">自動 · %1$d</string>
     <string name="model_context_integer">正の整数を入力してください。</string>
     <string name="model_context_range">指定できる範囲(トークン) · %1$d～%2$d</string>
-    <string name="model_context_effective">実際の上限(トークン) · ウィンドウ %1$d · 圧縮開始 %2$d</string>
+    <string name="model_context_effective">実際の上限(トークン) · 最大 %1$d · 圧縮開始 %2$d</string>
     <string name="model_context_save_failed">この設定を保存できませんでした。モデルを開き直して、もう一度お試しください。</string>
     <string name="models_lead">「役割」で、仕事ごとに使うモデルを選びます。モデルは、下で接続したプロバイダーから選べます。</string>
     <string name="models_roles">役割</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">このプロバイダーはテストせずに保存したので、動作するかどうかは分かっていません。モデルを選んでテストするか、「更新」をタップしてモデルを一覧にしてください。</string>
     <string name="models_not_listed">このプロバイダーのモデルは、まだ一覧にしていません。</string>
     <string name="refresh">更新</string>
+    <string name="models_last_refreshed">最終更新: %1$s</string>
+    <string name="models_refresh_failed_cached">更新に失敗しました (%1$s)。キャッシュされたモデルを表示しています。</string>
     <string name="models_in_use">使用中</string>
     <string name="models_sees_images">画像を見られる</string>
     <string name="models_sees_note_user">あなたの設定です。メインモデルが画像を見られる場合、スクリーンショットはそのまま送られます。</string>

@@ -7,7 +7,9 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -238,6 +240,95 @@ class ModelCatalogTest {
         assertEquals("/v1beta/models?pageSize=1000", first.path)
         assertEquals("gk", first.getHeader("x-goog-api-key"))
         assertEquals("/v1beta/models?pageSize=1000&pageToken=p2", server.takeRequest().path)
+    }
+
+    @Test fun geminiFiltersNonChatModelsStopsRepeatedTokensAndHandlesNetworkFailure() = runTest {
+        server.enqueue(ok("""{"models":[
+            {"name":"models/gemini-2.5-pro","displayName":"Gemini 2.5 Pro","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-4-neon","displayName":"Gemini 4 Neon","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-exp-1206","displayName":"Gemini Exp 1206","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-flash-latest","displayName":"Gemini Flash Latest","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-2.5-flash-preview-tts","displayName":"Gemini 2.5 Flash Preview TTS","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-2.5-flash-image","displayName":"Nano Banana","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/imagen-3.0-generate-002","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/lyria-realtime-exp","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-robotics-er-1.5-preview","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/deep-research-pro-preview-12-2025","displayName":"Gemini Deep Research","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-embedding-001","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-2.5-flash-native-audio-preview","displayName":"Gemini Native Audio","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-custom-music","displayName":"Gemini Music Generation","supportedGenerationMethods":["generateContent"]}
+        ],"nextPageToken":"tok-2"}"""))
+        server.enqueue(ok("""{"models":[
+            {"name":"models/gemini-3-pro-preview","displayName":"Gemini 3 Pro Preview","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/gemini-2.0-flash-live-001","supportedGenerationMethods":["generateContent"]}
+        ],"nextPageToken":"tok-2"}"""))
+
+        val list = models(catalog.gemini(base, "gk"))
+        assertEquals(
+            listOf("gemini-2.5-pro", "gemini-4-neon", "gemini-exp-1206", "gemini-flash-latest", "gemini-3-pro-preview"),
+            list.map { it.id },
+        )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test fun geminiNetworkFailureReturnsNetwork() = runTest {
+        val noRetryCatalog = ModelCatalog(OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+        assertEquals(ListFailure.Network, failure(noRetryCatalog.gemini(base, "gk")))
+    }
+
+    @Test fun isExcludedGeminiModelCoversNonChatAndPreservesChatModels() {
+        for (keep in listOf(
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-3-pro-preview",
+            "gemini-4-neon",
+            "gemini-exp-1206",
+            "gemini-flash-latest",
+            "gemini-2.5-flash-lite",
+        )) {
+            assertFalse("Expected chat model to be kept: $keep", ModelCatalog.isExcludedGeminiModel(keep, keep))
+        }
+
+        for ((id, name) in listOf(
+            "gemini-2.5-flash-preview-tts" to "",
+            "gemini-2.5-flash-image" to "",
+            "gemini-2.5-pro" to "Gemini Deep Research",
+            "deep_research_pro" to "",
+            "gemini-2.5-flash-native-audio" to "",
+            "gemini-custom" to "Nano Banana",
+            "gemini-custom" to "Virtual Try-On",
+            "gemini-custom" to "Image Generation",
+            "gemini-custom" to "Music Generation",
+            "gemini-custom" to "Text-to-Speech",
+            "gemini-custom" to "Speech to Text",
+            "imagen-3.0-generate-001" to "",
+            "imagen4" to "",
+            "lyria-realtime-exp" to "",
+            "lyria2" to "",
+            "gemini-robotics-er-1.5-preview" to "",
+            "robotics1" to "",
+            "veo-2.0-generate-001" to "",
+            "veo3" to "",
+            "gemini-embedding-001" to "",
+            "embed2" to "",
+            "chirp-2" to "",
+            "chirp3" to "",
+            "aqa" to "",
+            "gemini-live-2.5-flash-preview" to "",
+            "gemini-audio-preview" to "",
+            "gemini-video-preview" to "",
+            "whisper-1" to "",
+            "text-bison" to "",
+            "chat-gecko" to "",
+            "text-unicorn" to "",
+            "medlm-large" to "",
+            "gemini-upscale" to "",
+            "gemini-inpaint" to "",
+            "gemini-outpaint" to "",
+        )) {
+            assertTrue("Expected non-chat model to be excluded: id=$id name=$name", ModelCatalog.isExcludedGeminiModel(id, name))
+        }
     }
 
     @Test fun mapsHttpFailuresToReasons() = runTest {

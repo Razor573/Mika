@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">Konteks dan pemadatan</string>
-    <string name="model_context_note">Kolom kosong memakai nilai otomatis. Pengaturan berlaku pada tugas berikutnya untuk semua peran yang memakai penyedia dan model ini.</string>
+    <string name="model_context_note">Input dibatasi hingga 100.000 token per panggilan, dan riwayat dipadatkan setiap 15 langkah dengan mempertahankan 3 pengamatan terakhir secara penuh. Kolom kosong memakai nilai otomatis. Pengaturan berlaku pada tugas berikutnya untuk semua peran yang memakai penyedia dan model ini.</string>
     <string name="model_context_window">Jendela konteks (token)</string>
     <string name="model_context_trigger">Pemicu pemadatan (token)</string>
     <string name="model_context_read_timeout">Waktu tunggu baca (detik)</string>
     <string name="model_context_auto">Otomatis · %1$d</string>
     <string name="model_context_integer">Masukkan bilangan bulat positif.</string>
     <string name="model_context_range">Rentang yang diizinkan (token) · %1$d–%2$d</string>
-    <string name="model_context_effective">Anggaran efektif (token) · Jendela %1$d · Pemicu %2$d</string>
+    <string name="model_context_effective">Anggaran efektif (token) · Maks %1$d · Pemicu %2$d</string>
     <string name="model_context_save_failed">Gagal menyimpan pengaturan ini. Buka lagi modelnya dan coba lagi.</string>
     <string name="models_lead">Pilih model untuk setiap tugas di bawah “Peran”; model berasal dari penyedia yang terhubung di bawah.</string>
     <string name="models_roles">Peran</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">Penyedia ini disimpan tanpa pengujian, jadi belum diketahui apakah berfungsi. Pilih sebuah model untuk mengujinya, atau ketuk Segarkan untuk memuat daftar modelnya.</string>
     <string name="models_not_listed">Model penyedia ini belum dimuat.</string>
     <string name="refresh">Segarkan</string>
+    <string name="models_last_refreshed">Terakhir disegarkan: %1$s</string>
+    <string name="models_refresh_failed_cached">Gagal menyegarkan (%1$s). Menampilkan model tersimpan.</string>
     <string name="models_in_use">Sedang dipakai</string>
     <string name="models_sees_images">Bisa melihat gambar</string>
     <string name="models_sees_note_user">Diatur oleh Anda. Jika model utama bisa melihat, tangkapan layar langsung dikirim ke sana.</string>

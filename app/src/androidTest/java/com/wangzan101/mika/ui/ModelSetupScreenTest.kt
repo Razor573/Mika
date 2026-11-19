@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -170,12 +171,13 @@ class ModelSetupScreenTest {
             save.assertIsNotEnabled()
         }
         window.performTextReplacement("1000000")
-        preview.assertTextContains("967000", substring = true)
-        for (invalid in listOf("499999", "980001", "+600000")) {
+        preview.assertTextContains("87000", substring = true)
+        preview.assertTextContains("100000", substring = true)
+        for (invalid in listOf("49999", "100001", "+80000")) {
             trigger.performTextReplacement(invalid)
             save.assertIsNotEnabled()
         }
-        trigger.performTextReplacement("600000")
+        trigger.performTextReplacement("80000")
         for (invalid in listOf("0", "-1", "1e6", "2147484", "2147483648")) {
             readTimeout.performTextReplacement(invalid)
             save.assertIsNotEnabled()
@@ -184,15 +186,15 @@ class ModelSetupScreenTest {
         save.assertIsEnabled().performClick()
         compose.runOnIdle {
             assertEquals(1_000_000, store.modelFor(ModelRole.Main)!!.capabilities.contextTokens)
-            assertEquals(600_000, store.modelFor(ModelRole.Light)!!.capabilities.compactionTriggerTokens)
+            assertEquals(80_000, store.modelFor(ModelRole.Light)!!.capabilities.compactionTriggerTokens)
         }
         open.performScrollTo().performClick()
-        trigger.assertTextContains("600000")
+        trigger.assertTextContains("80000")
         readTimeout.assertTextContains("600")
         compose.onNodeWithText("重置").performScrollTo().performClick()
         preview.assertTextContains("18000", substring = true)
         compose.onNodeWithText("取消").performClick()
-        assertEquals(ModelContextSettings(1_000_000, 600_000, 600), store.provider(provider.id)!!.contextSettings["m"])
+        assertEquals(ModelContextSettings(1_000_000, 80_000, 600), store.provider(provider.id)!!.contextSettings["m"])
         open.performScrollTo().performClick()
         compose.onNodeWithText("重置").performScrollTo().performClick()
         save.performClick()
@@ -376,5 +378,64 @@ class ModelSetupScreenTest {
         compose.onNodeWithText(ModelsCopy.SET_MAIN).performScrollTo().performClick()
         compose.onNodeWithText(ModelsCopy.CHATGPT_SIGN_OUT).performScrollTo().performClick()
         assertEquals(listOf("main", "out"), got)
+    }
+
+    @Test fun pickerShowsRefreshLastRefreshedCachedFallbackAndManualEntryForVertexAndGemini() {
+        val refreshedAt = System.currentTimeMillis() - 60_000L
+        val vertex = Provider(
+            "pv", "Vertex AI", ProviderConfig.Kind.Vertex, "https://aiplatform.googleapis.com",
+            listOf(ListedModel("gemini-cached-vx")), modelsRefreshedAtMs = refreshedAt,
+        )
+        val gemini = Provider(
+            "pg", "Gemini", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
+            emptyList(), modelsRefreshedAtMs = refreshedAt,
+        )
+        val refreshed = mutableListOf<String>()
+        val manualPicked = mutableListOf<Pair<String, String>>()
+        var ui by mutableStateOf(
+            ModelSetupUi(
+                form,
+                providers = listOf(deepseek, vertex, gemini),
+                configs = listOf(main),
+                roles = RoleChoices(main = "c1"),
+                listing = mapOf(vertex.id to ListState.Failed("network offline")),
+            ),
+        )
+        compose.setContent {
+            MikaTheme {
+                RolePickerContent(
+                    ui, ModelRole.Main,
+                    RolePickerActions(
+                        refresh = { refreshed += it },
+                        pickManual = { pid, m -> manualPicked += pid to m },
+                    ),
+                    onBack = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("picker-refresh-${deepseek.id}").assertDoesNotExist()
+        compose.onNodeWithTag("picker-refresh-${vertex.id}").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        compose.onNodeWithTag("picker-refresh-${gemini.id}").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
+        assertEquals(listOf(vertex.id, gemini.id), refreshed)
+
+        compose.onNodeWithText("gemini-cached-vx").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("picker-refresh-failed-${vertex.id}")
+            .performScrollTo().assertIsDisplayed()
+            .assertTextContains(ModelsCopy.refreshFailedCached("network offline"))
+        compose.onNodeWithTag("picker-last-refreshed-${vertex.id}")
+            .performScrollTo().assertIsDisplayed()
+            .assertTextContains(ModelsCopy.lastRefreshed(refreshedAt))
+        compose.onNodeWithTag("picker-last-refreshed-${gemini.id}")
+            .performScrollTo().assertIsDisplayed()
+            .assertTextContains(ModelsCopy.lastRefreshed(refreshedAt))
+
+        compose.onAllNodesWithTag("manual-model")[2].performScrollTo().performTextInput("gemini-custom-id")
+        compose.onAllNodesWithTag("manual-model-use")[2].performScrollTo().performClick()
+        assertEquals(listOf(gemini.id to "gemini-custom-id"), manualPicked)
+
+        ui = ui.copy(listing = mapOf(vertex.id to ListState.Running))
+        compose.onNodeWithTag("picker-refresh-${vertex.id}").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithText(ModelsCopy.LISTING).performScrollTo().assertIsDisplayed()
     }
 }

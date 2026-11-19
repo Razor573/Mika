@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">Context and compaction</string>
-    <string name="model_context_note">Blank fields use automatic values. Settings apply on the next task to all roles using this provider and model.</string>
+    <string name="model_context_note">Input is capped at 100,000 tokens per call, and history compacts every 15 steps keeping the last 3 observations full. Blank fields use automatic values. Settings apply on the next task to all roles using this provider and model.</string>
     <string name="model_context_window">Context window (tokens)</string>
     <string name="model_context_trigger">Compaction trigger (tokens)</string>
     <string name="model_context_read_timeout">Read timeout (seconds)</string>
     <string name="model_context_auto">Auto · %1$d</string>
     <string name="model_context_integer">Enter a positive whole number.</string>
     <string name="model_context_range">Allowed range (tokens) · %1$d–%2$d</string>
-    <string name="model_context_effective">Effective budget (tokens) · Window %1$d · Trigger %2$d</string>
+    <string name="model_context_effective">Effective budget (tokens) · Max %1$d · Trigger %2$d</string>
     <string name="model_context_save_failed">Could not save these settings. Reopen the model and try again.</string>
     <string name="models_lead">Pick which model does each job under “Roles”; models come from the providers connected below.</string>
     <string name="models_roles">Roles</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">This provider was saved without a test, so nothing is known about whether it works. Pick a model to test it, or tap Refresh to list its models.</string>
     <string name="models_not_listed">This provider’s models haven’t been listed yet.</string>
     <string name="refresh">Refresh</string>
+    <string name="models_last_refreshed">Last refreshed: %1$s</string>
+    <string name="models_refresh_failed_cached">Refresh failed (%1$s). Showing cached models.</string>
     <string name="models_in_use">In use</string>
     <string name="models_sees_images">Can see images</string>
     <string name="models_sees_note_user">Set by you. When the main model can see, screenshots go straight to it.</string>

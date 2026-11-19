@@ -33,30 +33,39 @@ class ContextLimitsTest {
 
     @Test fun commonWindow128k() {
         val l = ContextLimits.of(128_000)
-        assertEquals(108_000, l.usable)
-        assertEquals(95_000, l.trigger)
-        assertEquals(54_000, l.target)
+        assertEquals(100_000, l.usable)
+        assertEquals(87_000, l.trigger)
+        assertEquals(50_000, l.target)
+        assertEquals(50_000, l.minTrigger)
     }
 
     @Test fun hugeWindow1m() {
         val l = ContextLimits.of(1_000_000)
-        assertEquals(980_000, l.usable)
-        assertEquals(967_000, l.trigger)
-        assertEquals(490_000, l.target)
+        assertEquals(100_000, l.usable)
+        assertEquals(87_000, l.trigger)
+        assertEquals(50_000, l.target)
+        assertEquals(50_000, l.minTrigger)
     }
 
     @Test fun triggerNeverBelowFloorNorAboveUsable() {
         for (w in listOf(100, 1_000, 4_096, 8_192, 32_000, 128_000, 1_000_000)) {
             val l = ContextLimits.of(w)
-            assertTrue("$w", l.trigger >= w * ContextLimits.MIN_TRIGGER_SHARE && l.trigger <= l.usable)
+            val expectedFloor = minOf(w, ContextLimits.MAX_INPUT_TOKENS) * ContextLimits.MIN_TRIGGER_SHARE
+            assertTrue("$w", l.trigger >= expectedFloor && l.trigger <= l.usable)
             assertTrue("$w", l.target < l.trigger)
         }
         // 按模型给的触发点:限在下限和可用窗口之间;目标跟着降
         assertEquals(16_000, ContextLimits.of(32_000, triggerOverride = 1_000).trigger)
         assertEquals(24_000, ContextLimits.of(32_000, triggerOverride = 99_999).trigger)
-        val low = ContextLimits.of(1_000_000, triggerOverride = 600_000)
-        assertEquals(600_000, low.trigger)
-        assertEquals(490_000, low.target)
+        val high = ContextLimits.of(1_000_000, triggerOverride = 600_000)
+        assertEquals(100_000, high.trigger)
+        assertEquals(50_000, high.target)
+        val custom = ContextLimits.of(1_000_000, triggerOverride = 80_000)
+        assertEquals(80_000, custom.trigger)
+        assertEquals(50_000, custom.target)
+        val low = ContextLimits.of(1_000_000, triggerOverride = 10_000)
+        assertEquals(50_000, low.trigger)
+        assertEquals(37_000, low.target)
         assertEquals(0, ContextLimits.of(0).trigger)
     }
 }

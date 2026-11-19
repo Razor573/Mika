@@ -209,6 +209,7 @@ fun ModelSetupScreen(
                     },
                     pickManual = { pid, model -> vm.pickFallbackManual(slot, pid, model) { pickingFallback = null } },
                     addProvider = { vm.openForm(); pickingFallback = null },
+                    refresh = { vm.refresh(it) },
                 ),
                 onBack = { pickingFallback = null },
                 titleOverride = stringResource(R.string.main_fallback_name, slot + 1),
@@ -240,6 +241,7 @@ fun ModelSetupScreen(
                     pickManual = { pid, model -> vm.pickManual(role, pid, model) { picking = null } },
                     choose = { vm.choose(role, it); picking = null },
                     addProvider = { vm.openForm(); picking = null },
+                    refresh = { vm.refresh(it) },
                 ),
                 onBack = { picking = null },
             )
@@ -794,7 +796,7 @@ private fun ModelContextControl(ui: ModelSetupUi, role: ModelRole,
                         Text("${stringResource(R.string.model_context_integer)} (1–${MODEL_READ_TIMEOUT_SECONDS.last})")
                     }) else null,
                     isError = badReadTimeout)
-                if (!badWindow && (trigger.isBlank() || settings.triggerTokens != null)) Text(stringResource(R.string.model_context_effective, limits.window, limits.trigger),
+                if (!badWindow && (trigger.isBlank() || settings.triggerTokens != null)) Text(stringResource(R.string.model_context_effective, limits.usable, limits.trigger),
                     modifier = Modifier.testTag("context-effective"))
                 TextButton(onClick = { window = ""; trigger = ""; readTimeout = ""; saveFailed = false }) { Text(stringResource(R.string.reset)) }
                 if (saveFailed) Text(stringResource(R.string.model_context_save_failed), color = MikaTheme.colors.bad)

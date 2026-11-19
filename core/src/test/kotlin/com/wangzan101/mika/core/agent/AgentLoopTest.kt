@@ -680,8 +680,9 @@ class AgentLoopTest {
         val half = notes(10).filter { "end_not_done" in it }
         assertEquals(1, half.size)
         assertTrue(half.single(), "10 of 20" in half.single())
-        assertEquals(1, notes(14).count { "end_not_done" in it })
-        assertEquals(2, notes(15).count { "end_not_done" in it })
+        assertEquals(1, notes(14).count { "end_not_done" in it && "10 of 20" in it })
+        assertTrue(notes(15).any { ContextCompressor.HEADER in it })
+        assertEquals(1, notes(15).count { "end_not_done" in it && "15 of 20" in it })
     }
 
     @Test fun giveUpRemindersTellAnAnswerFromAFailure() = runTest {

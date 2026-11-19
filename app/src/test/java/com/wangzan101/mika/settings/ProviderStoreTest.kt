@@ -249,12 +249,12 @@ class ProviderStoreTest {
         s.use(ModelRole.Main, first.id, "m1", none)
         s.use(ModelRole.Vision, second.id, "m1", none)
         val cfg = s.configFor(ModelRole.Main)!!
-        val saved = ModelContextSettings(1_000_000, 600_000)
+        val saved = ModelContextSettings(1_000_000, 80_000)
         assertTrue(s.setModelContext(cfg.id, saved))
         for (role in listOf(ModelRole.Main, ModelRole.Light)) {
             val caps = s.modelFor(role)!!.capabilities
             assertEquals(1_000_000, caps.contextTokens)
-            assertEquals(600_000, caps.compactionTriggerTokens)
+            assertEquals(80_000, caps.compactionTriggerTokens)
         }
         assertEquals(64_000, s.modelFor(ModelRole.Vision)!!.capabilities.contextTokens)
         assertNull(s.modelFor(ModelRole.Vision)!!.capabilities.compactionTriggerTokens)
@@ -264,7 +264,7 @@ class ProviderStoreTest {
         val reloaded = store()
         reloaded.use(ModelRole.Main, first.id, "m1", none)
         assertEquals(saved, reloaded.provider(first.id)!!.contextSettings["m1"])
-        assertEquals(600_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
+        assertEquals(80_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
         assertTrue(reloaded.setModelContext(reloaded.configFor(ModelRole.Main)!!.id, ModelContextSettings()))
         assertNull(store().provider(first.id)!!.contextSettings["m1"])
     }
@@ -322,12 +322,12 @@ class ProviderStoreTest {
         val first = connected(s)
         s.use(ModelRole.Main, first.id, "m1", none)
         val cfg = s.configFor(ModelRole.Main)!!
-        assertTrue(s.setModelContext(cfg.id, ModelContextSettings(1_000_000, 600_000, 600)))
+        assertTrue(s.setModelContext(cfg.id, ModelContextSettings(1_000_000, 80_000, 600)))
         val file = tmp.root.resolve("providers.json")
         file.writeText(file.readText().replace("\"readTimeoutSeconds\":600", "\"readTimeoutSeconds\":2147484"))
 
         val reloaded = store()
-        assertEquals(ModelContextSettings(1_000_000, 600_000), reloaded.provider(first.id)!!.contextSettings["m1"])
+        assertEquals(ModelContextSettings(1_000_000, 80_000), reloaded.provider(first.id)!!.contextSettings["m1"])
         assertEquals(1_000_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.contextTokens)
         assertNull(setups.last().readTimeoutSeconds)
     }
@@ -352,17 +352,17 @@ class ProviderStoreTest {
         val p = connected(s)
         s.use(ModelRole.Main, p.id, "m1", none.copy(contextTokens = 1_000_000))
         val id = s.configFor(ModelRole.Main)!!.id
-        for (value in listOf(500_000, 980_000, 950_000)) {
+        for (value in listOf(50_000, 100_000, 80_000)) {
             assertTrue(s.setModelContext(id, ModelContextSettings(triggerTokens = value)))
         }
-        for (value in listOf(0, 499_999, 980_001)) {
+        for (value in listOf(0, 49_999, 100_001)) {
             assertFalse(s.setModelContext(id, ModelContextSettings(triggerTokens = value)))
         }
         assertFalse(s.setModelContext(id, ModelContextSettings(windowTokens = -1)))
         s.use(ModelRole.Main, p.id, "m2", none)
         s.use(ModelRole.Main, p.id, "m1", none.copy(contextTokens = 32_000))
         val saved = store().provider(p.id)!!.contextSettings.getValue("m1")
-        assertEquals(950_000, saved.triggerTokens)
+        assertEquals(80_000, saved.triggerTokens)
         assertEquals(24_000, saved.limits(s.modelFor(ModelRole.Main)!!.capabilities.contextTokens).trigger)
     }
 
@@ -375,8 +375,13 @@ class ProviderStoreTest {
         assertNull(s.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
         val entries = """{"m1":{"windowTokens":1000000},"m2":{"triggerTokens":600000},"bad":{"triggerTokens":{}}}"""
         file.writeText(original.replace("\"services\":[{", "\"services\":[{\"contextSettings\":$entries,"))
+        val reloaded = store()
         assertEquals(mapOf("m1" to ModelContextSettings(1_000_000), "m2" to ModelContextSettings(triggerTokens = 600_000)),
-            store().provider(p.id)!!.contextSettings)
+            reloaded.provider(p.id)!!.contextSettings)
+        reloaded.use(ModelRole.Main, p.id, "m2", none.copy(contextTokens = 1_000_000))
+        assertEquals(100_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
+        val m2CfgId = reloaded.configFor(ModelRole.Main)!!.id
+        assertEquals(100_000, reloaded.modelForConfig(m2CfgId)!!.capabilities.compactionTriggerTokens)
     }
 
     @Test fun failedContextSaveLeavesBothTheStoredAndActiveModelAloneAndCanBeRetried() {
@@ -1775,6 +1780,45 @@ class ProviderStoreTest {
         s.removeProvider(gemFirst.id)
         s.removeProvider(gemMain.id)
         assertNull(s.geminiDeveloperApiKey())
+    }
+
+    @Test fun modelsRefreshedAtMsPersistsAndIsPreservedWhenUnchanged() {
+        var nowMs = 1_700_000_000_000L
+        val dir = tmp.newFolder("refresh-ts")
+        val s = ProviderStore(dir, AesGcmKeyCipher { key }, clock = { nowMs })
+
+        val untested = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST,
+            testServiceAccountJson("proj-v1", "sa1@proj-v1.iam.gserviceaccount.com"),
+            emptyList(), untested = true,
+        )
+        assertNull(untested.modelsRefreshedAtMs)
+        assertNull(ProviderStore(dir, AesGcmKeyCipher { key }).provider(untested.id)!!.modelsRefreshedAtMs)
+
+        s.rememberModels(untested.id, listOf(ListedModel("gemini-live-1")))
+        assertEquals(1_700_000_000_000L, s.provider(untested.id)!!.modelsRefreshedAtMs)
+        assertEquals(1_700_000_000_000L, ProviderStore(dir, AesGcmKeyCipher { key }).provider(untested.id)!!.modelsRefreshedAtMs)
+
+        nowMs += 60_000L
+        val kept = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST,
+            null, emptyList(), untested = true,
+        )
+        assertEquals(1_700_000_000_000L, kept.modelsRefreshedAtMs)
+        assertEquals(1_700_000_000_000L, ProviderStore(dir, AesGcmKeyCipher { key }).provider(untested.id)!!.modelsRefreshedAtMs)
+
+        nowMs += 60_000L
+        s.rememberModels(untested.id, listOf(ListedModel("gemini-live-1"), ListedModel("gemini-live-2")))
+        assertEquals(1_700_000_120_000L, s.provider(untested.id)!!.modelsRefreshedAtMs)
+        assertEquals(1_700_000_120_000L, ProviderStore(dir, AesGcmKeyCipher { key }).provider(untested.id)!!.modelsRefreshedAtMs)
+
+        nowMs += 60_000L
+        val reconnected = s.connect(
+            "Vertex AI", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST,
+            null, listOf(ListedModel("gemini-live-3")), untested = false,
+        )
+        assertEquals(1_700_000_180_000L, reconnected.modelsRefreshedAtMs)
+        assertEquals(1_700_000_180_000L, ProviderStore(dir, AesGcmKeyCipher { key }).provider(untested.id)!!.modelsRefreshedAtMs)
     }
 
     @Suppress("TestFunctionName")

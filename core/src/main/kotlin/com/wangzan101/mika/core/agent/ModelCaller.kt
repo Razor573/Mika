@@ -231,13 +231,31 @@ internal class ModelCaller(
         var compaction = compactions[using] ?: CompactionState()
         var overflowRetried = false
         var overflowRewrote = false
+        val cap = minOf(ContextLimits.of(contextTokens, using.capabilities.compactionTriggerTokens).usable, ContextLimits.MAX_INPUT_TOKENS)
         while (true) {
             val current = ContextRecovery.ensure(history, compressor.current(history, contextTokens))
             val currentTokens = requestTokens(current, using, overhead, compressor.scale)
-            val raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
+            var raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
             if (raw.rewritten) anchors.clear()
-            val restored = ContextRecovery.ensure(history, raw.messages)
-            val sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            var restored = ContextRecovery.ensure(history, raw.messages)
+            var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            fun exceedsCap(est: Int) = UsageMeter.estimate(est + overhead, compressor.scale) > cap || (est + overhead) > ContextLimits.MAX_INPUT_TOKENS
+            if (exceedsCap(sent.estimate)) {
+                if (!compaction.aggressive || !raw.rewritten) {
+                    compaction = compaction.copy(aggressive = true)
+                    raw = compressor.compress(history, contextTokens, currentTokens = Int.MAX_VALUE, aggressive = true, fixedOverhead = overhead, maxImages = using.capabilities.maxImages)
+                    if (raw.rewritten) anchors.clear()
+                    restored = ContextRecovery.ensure(history, raw.messages)
+                    sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+                }
+                if (exceedsCap(sent.estimate)) {
+                    val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(TokenEstimate.of(it)) }
+                    if (capped !== sent.messages) {
+                        anchors.clear()
+                        sent = sent.copy(messages = capped, estimate = TokenEstimate.of(capped), rewritten = true)
+                    }
+                }
+            }
             val (next, report) = CompactionPolicy.sent(compaction, sent.foldedSteps)
             if (report) emit(RunEvent.Compressed(now(), sent.foldedSteps))
             compaction = next
@@ -258,8 +276,8 @@ internal class ModelCaller(
                 }
                 val reply = if (trace == null) send() else {
                     val change = when {
-                        overflowRewrote -> "overflow_compaction folded=" + raw.foldedSteps
-                        raw.rewritten && current != sent.messages -> "history_rewritten folded=" + raw.foldedSteps
+                        overflowRewrote -> "overflow_compaction folded=" + sent.foldedSteps
+                        sent.rewritten && current != sent.messages -> "history_rewritten folded=" + sent.foldedSteps
                         else -> null
                     }
                     overflowRewrote = false

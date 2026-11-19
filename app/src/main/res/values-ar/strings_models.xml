@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">السياق وضغط السياق</string>
-    <string name="model_context_note">تُستخدم القيم التلقائية للحقول الفارغة. تُطبّق الإعدادات في المهمة التالية على جميع الأدوار التي تستخدم هذا المزوّد وهذا النموذج.</string>
+    <string name="model_context_note">الحد الأقصى للإدخال هو 100,000 رمز في كل استدعاء، ويتم ضغط السجل كل 15 خطوة مع الاحتفاظ بآخر 3 ملاحظات كاملة. تُستخدم القيم التلقائية للحقول الفارغة. تُطبّق الإعدادات في المهمة التالية على جميع الأدوار التي تستخدم هذا المزوّد وهذا النموذج.</string>
     <string name="model_context_window">نافذة السياق (رموز)</string>
     <string name="model_context_trigger">حد بدء ضغط السياق (رموز)</string>
     <string name="model_context_read_timeout">مهلة القراءة (بالثواني)</string>
     <string name="model_context_auto">تلقائي · %1$d</string>
     <string name="model_context_integer">أدخل عددًا صحيحًا موجبًا.</string>
     <string name="model_context_range">النطاق المسموح (رموز) · %1$d–%2$d</string>
-    <string name="model_context_effective">الميزانية الفعلية (رموز) · النافذة %1$d · الحد %2$d</string>
+    <string name="model_context_effective">الميزانية الفعلية (رموز) · الحد الأقصى %1$d · حد البدء %2$d</string>
     <string name="model_context_save_failed">تعذّر حفظ هذه الإعدادات. أعد فتح النموذج وحاول مجددًا.</string>
     <string name="models_lead">اختر النموذج الذي ينفّذ كل مهمة ضمن «الأدوار»؛ تأتي النماذج من المزوّدين المتصلين أدناه.</string>
     <string name="models_roles">الأدوار</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">حُفظ هذا المزوّد دون اختباره، لذا لا يُعرف إن كان يعمل. اختر نموذجًا لاختباره، أو انقر على «تحديث» لسرد نماذجه.</string>
     <string name="models_not_listed">لم تُسرد نماذج هذا المزوّد بعد.</string>
     <string name="refresh">تحديث</string>
+    <string name="models_last_refreshed">آخر تحديث: %1$s</string>
+    <string name="models_refresh_failed_cached">تعذّر التحديث (%1$s). يتم عرض النماذج المخزّنة مؤقتًا.</string>
     <string name="models_in_use">قيد الاستخدام</string>
     <string name="models_sees_images">يستطيع رؤية الصور</string>
     <string name="models_sees_note_user">حدّدته أنت. عندما يستطيع النموذج الرئيسي الرؤية، تُرسل لقطات الشاشة إليه مباشرةً.</string>

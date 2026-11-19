@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="model_context_title">上下文与压缩</string>
-    <string name="model_context_note">留空使用自动值。同一服务商的同一模型在各用途间共用这份设置，下次任务生效。</string>
+    <string name="model_context_note">每次调用的输入上限为 100,000 个 token，对话历史每 15 步压缩一次并保留最近 3 次完整观察结果。留空使用自动值。同一服务商的同一模型在各用途间共用这份设置，下次任务生效。</string>
     <string name="model_context_window">上下文窗口（token）</string>
     <string name="model_context_trigger">压缩触发点（token）</string>
     <string name="model_context_read_timeout">读超时（秒）</string>
     <string name="model_context_auto">自动 · %1$d</string>
     <string name="model_context_integer">请输入正整数。</string>
     <string name="model_context_range">可填 %1$d–%2$d 个 token</string>
-    <string name="model_context_effective">生效窗口 %1$d · 触发点 %2$d 个 token</string>
+    <string name="model_context_effective">生效上限 %1$d · 触发点 %2$d 个 token</string>
     <string name="model_context_save_failed">未能保存设置，请重新打开模型再试。</string>
     <string name="models_lead">每件事用哪个模型，在「用途」里选；模型来自下面连好的服务商。</string>
     <string name="models_roles">用途</string>
@@ -47,6 +47,8 @@
     <string name="models_untested_note">这家是跳过测试存下的，还不知道能不能用。选一个模型时会先试调用，也可以点右上角刷新列出它的模型。</string>
     <string name="models_not_listed">还没列出这家的模型。</string>
     <string name="refresh">刷新</string>
+    <string name="models_last_refreshed">上次刷新：%1$s</string>
+    <string name="models_refresh_failed_cached">刷新失败（%1$s），当前显示已缓存的模型。</string>
     <string name="models_in_use">正在用这个</string>
     <string name="models_sees_images">能看图</string>
     <string name="models_sees_note_user">按你的设定。主模型能看图时，截图直接给它看。</string>

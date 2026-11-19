@@ -179,6 +179,7 @@ data class Provider(
     val projectId: String = "",
     /** Vertex AI 区域（空值回退为 `global`）。 */
     val location: String = "",
+    val modelsRefreshedAtMs: Long? = null,
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
 
@@ -342,6 +343,7 @@ class ProviderStore(
     private val proactiveUsage: () -> Long = { 0L },
     private val proactiveLimit: () -> Long = { ProactiveBudget.DEFAULT_DAILY_LIMIT },
     private val proactiveCalls: () -> Long = { 0L },
+    private val clock: () -> Long = System::currentTimeMillis,
     /**
      * 建可调用的模型:配置、Key、服务商列表里给这个模型单独指定的接口(没有为 null,按配置的接口类型和地址)、请求头等。
      * 为 null 时用内置的适配器(测试里换成假的)。
@@ -484,6 +486,7 @@ class ProviderStore(
             savedUntested = untested && verified.isEmpty() && found.verifiedModels.isEmpty() && listed.isEmpty(),
             projectId = finalProject,
             location = finalLocation,
+            modelsRefreshedAtMs = if (!untested && listed.isNotEmpty()) clock() else found.modelsRefreshedAtMs,
         )
         _providers.value = _providers.value.map { if (it.id == p.id) p else it }
         _configs.value = _configs.value.map {
@@ -497,11 +500,11 @@ class ProviderStore(
 
     /** 记下服务商最近一次列出的模型。列出来了,就说明「没测过」不再成立(跳过测试存下的那家在这里清掉标记)。 */
     @Synchronized
-    fun rememberModels(providerId: String, models: List<ListedModel>) {
+    fun rememberModels(providerId: String, models: List<ListedModel>, refreshedAtMs: Long = clock()) {
         val p = provider(providerId) ?: return
         val normalized = if (p.kind == ProviderConfig.Kind.Antigravity) collapseAntigravityListedModels(models) else models
         _providers.value = _providers.value.map {
-            if (it.id == providerId) it.copy(models = normalized, savedUntested = false) else it
+            if (it.id == providerId) it.copy(models = normalized, modelsRefreshedAtMs = refreshedAtMs, savedUntested = false) else it
         }
         repairUnavailableReasoningEfforts()
         writeConfig()
@@ -824,10 +827,7 @@ class ProviderStore(
         val source = UsageSource(cfg.providerId, p?.name ?: cfg.name, cfg.model, purpose,
             deepSeekDirect = DeepSeekPriceTable.isOfficialEndpoint(adapterFor(cfg, listed?.endpoint).second))
         val settings = p?.contextSettings?.get(cfg.model)
-        val configured = if (settings == null) cfg else cfg.copy(capabilities = cfg.capabilities.copy(
-            contextTokens = settings.windowTokens ?: cfg.capabilities.contextTokens,
-            compactionTriggerTokens = settings.triggerTokens,
-        ))
+        val configured = applyContextSettings(cfg, settings)
         val roleEffort = _roles.value.reasoningEffort(role)
         // 主动能力:思考取服务商写明的最低档;回复短的那两种请求另设上限(见 ProactiveModelSetup)
         val (effort, cap) = if (purpose == UsagePurpose.Proactive) {
@@ -838,6 +838,12 @@ class ProviderStore(
             thinkingTypes = listed?.thinkingTypes, readTimeoutSeconds = settings?.readTimeoutSeconds,
         )).metered(source, usage, beforeRetry = beforeRetry, beforeCall = beforeCall)
     }
+
+    private fun applyContextSettings(cfg: ProviderConfig, settings: ModelContextSettings?): ProviderConfig =
+        if (settings == null) cfg else cfg.copy(capabilities = cfg.capabilities.copy(
+            contextTokens = settings.windowTokens ?: cfg.capabilities.contextTokens,
+            compactionTriggerTokens = settings.triggerTokens?.coerceAtMost(ContextLimits.MAX_INPUT_TOKENS),
+        ))
 
     /**
      * 主动能力的调用只查它自己的每日预算:整份的硬上限(Token 上限,和跟着它算的请求次数上限,见 [ProactiveBudget.check])。
@@ -875,10 +881,7 @@ class ProviderStore(
         val listed = listedOf(raw)
         val settings = p?.contextSettings?.get(raw.model)
         val adjusted = asMain(raw)
-        val configured = if (settings == null) adjusted else adjusted.copy(capabilities = adjusted.capabilities.copy(
-            contextTokens = settings.windowTokens ?: adjusted.capabilities.contextTokens,
-            compactionTriggerTokens = settings.triggerTokens,
-        ))
+        val configured = applyContextSettings(adjusted, settings)
         // 备援接手时带上主模型设的思考强度,但只在备援自己写明支持这个档位时才带:
         // 不支持就不指定、用它自己的默认,不能让请求因为这个参数被拒(MK-1 B-D1)。
         val mainEffort = _roles.value.reasoningEffort(ModelRole.Main)
@@ -1136,19 +1139,23 @@ class ProviderStore(
             val base = provider(p.id)?.baseUrl?.takeIf { it.isNotBlank() } ?: p.baseUrl
             when (p.kind) {
                 ProviderConfig.Kind.Vertex -> {
-                    val tp = vertexTokenProviderFor(p.id)
+                    val raw = providerKey(p.id).orEmpty()
                     if (modelLister === defaultModelLister) {
-                        val project = p.projectId.ifBlank { vertexServiceAccountFromJson(providerKey(p.id))?.projectId.orEmpty() }
+                        val token: BearerToken = if (raw.trimStart().startsWith("{") || raw.isBlank()) {
+                            vertexTokenProviderFor(p.id)
+                        } else {
+                            BearerToken.fixed(raw)
+                        }
+                        val project = p.projectId.ifBlank { vertexServiceAccountFromJson(raw)?.projectId.orEmpty() }
                         catalog.vertex(
-                            token = tp,
+                            token = token,
                             location = VertexEndpoints.normalizeLocation(p.location),
                             projectId = project.ifBlank { null },
                             headers = headers(p.sessionHeader, ModelSession.fresh()),
                             baseUrl = vertexBaseOverride(base),
                         )
                     } else {
-                        val token = tp.get(fresh = false)
-                        modelLister(p.kind, base, token, headers(p.sessionHeader, ModelSession.fresh()))
+                        modelLister(p.kind, base, raw.ifEmpty { null }, headers(p.sessionHeader, ModelSession.fresh()))
                     }
                 }
                 ProviderConfig.Kind.Antigravity -> {
@@ -1278,7 +1285,10 @@ class ProviderStore(
         val normalizedModels = if (kind == ProviderConfig.Kind.Antigravity) collapseAntigravityListedModels(models) else models
         val existing = _providers.value.firstOrNull { it.kind == kind }
         if (existing == null) return connect(name, kind, base, session.toJson(), normalizedModels)
-        val p = existing.copy(name = name, baseUrl = base, models = normalizedModels)
+        val p = existing.copy(
+            name = name, baseUrl = base, models = normalizedModels,
+            modelsRefreshedAtMs = if (normalizedModels.isNotEmpty()) clock() else existing.modelsRefreshedAtMs,
+        )
         _providers.value = _providers.value.map { if (it.id == p.id) p else it }
         _configs.value = _configs.value.map { if (it.providerId == p.id) it.copy(baseUrl = base, name = name) else it }
         repairUnavailableReasoningEfforts()
@@ -1671,6 +1681,7 @@ class ProviderStore(
         savedUntested = o["untested"]?.jsonPrimitive?.booleanOrNull ?: false,
         projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
         location = o["location"]?.jsonPrimitive?.content.orEmpty(),
+        modelsRefreshedAtMs = o.positiveLong("modelsRefreshedAtMs"),
         models = o["models"]?.jsonArray?.map { e ->
             val m = e.jsonObject
             ListedModel(
@@ -1751,6 +1762,7 @@ class ProviderStore(
                         p.sessionHeader?.let { put("sessionHeader", it) }
                         p.signIn?.let { put("signIn", it) }
                         p.dailyTokenBudget?.let { put("dailyTokenBudget", it) }
+                        p.modelsRefreshedAtMs?.let { put("modelsRefreshedAtMs", it) }
                         if (p.projectId.isNotEmpty()) put("projectId", p.projectId)
                         if (p.location.isNotEmpty()) put("location", p.location)
                         if (p.savedUntested) put("untested", true)

@@ -10,11 +10,21 @@ import com.wangzan101.mika.core.oauth.AccountSignInFailure
 import com.wangzan101.mika.core.oauth.VertexEndpoints
 import com.wangzan101.mika.core.oauth.VertexServiceAccount
 import com.wangzan101.mika.core.usage.TokenBudgetLimits
+import com.wangzan101.mika.i18n.UiText
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.i18n.trPlural
+import com.wangzan101.mika.i18n.uiLocale
 import androidx.compose.ui.res.stringResource
+import com.wangzan101.mika.ui.components.DirectionalIcon
 import com.wangzan101.mika.ui.components.keepsKeyboard
 import com.wangzan101.mika.ui.components.KeyboardDismissArea
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.semantics.Role
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -194,6 +204,7 @@ class RolePickerActions(
     /** 看图、轻量的固定选项(用主模型、不用)。 */
     val choose: (RoleChoice) -> Unit = {},
     val addProvider: () -> Unit = {},
+    val refresh: (String) -> Unit = {},
 )
 
 /** 选择页顶上的固定选项:看图「用主模型」「不用」,轻量「用主模型」;主模型没有。 */
@@ -251,10 +262,22 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
             }
             // 这家列不出模型:手填是唯一的选法
             val noList = p.models?.isEmpty() == true
-            if (q.isNotEmpty() && shown.isEmpty()) return@forEach
-            anyShown = true
+            val supportsLiveRefresh = p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini
             val state = ui.listing[p.id]
-            GroupLabel(ModelsCopy.providerName(p))
+            if (q.isNotEmpty() && shown.isEmpty() && !(supportsLiveRefresh && (state == ListState.Running || state is ListState.Failed))) return@forEach
+            anyShown = true
+            if (supportsLiveRefresh) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    GroupLabel(ModelsCopy.providerName(p), Modifier.weight(1f))
+                    PickerRefreshButton(
+                        { actions.refresh(p.id) },
+                        Modifier.testTag("picker-refresh-${p.id}"),
+                        enabled = state != ListState.Running,
+                    )
+                }
+            } else {
+                GroupLabel(ModelsCopy.providerName(p))
+            }
             GroupCard {
                 shown.take(PICK_AT_MOST).forEachIndexed { i, o ->
                     RadioRow(
@@ -272,8 +295,15 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
                 // 选列表里的模型也可能先试调用(见 ModelSetupUi.probeBeforePick);手填的那一行自己显示进度
                 !noList && manualState == ListState.Running -> FooterNote(ModelSetupCopy.TESTING, Modifier.testTag("pick-probe-running"))
                 state == ListState.Running -> FooterNote(ModelsCopy.LISTING)
-                state is ListState.Failed -> FooterNote(ModelSetupCopy.failed(state.message), color = c.bad)
+                state is ListState.Failed -> if (options.isNotEmpty()) {
+                    FooterNote(ModelsCopy.refreshFailedCached(state.message), Modifier.testTag("picker-refresh-failed-${p.id}"), color = c.warn)
+                } else {
+                    FooterNote(ModelSetupCopy.failed(state.message), Modifier.testTag("picker-refresh-failed-${p.id}"), color = c.bad)
+                }
                 shown.size > PICK_AT_MOST -> FooterNote(ModelsCopy.more(shown.size - PICK_AT_MOST))
+            }
+            if (supportsLiveRefresh && p.modelsRefreshedAtMs != null) {
+                FooterNote(ModelsCopy.lastRefreshed(p.modelsRefreshedAtMs), Modifier.testTag("picker-last-refreshed-${p.id}"))
             }
         }
         if (q.isNotEmpty() && !anyShown) FooterNote(ModelsCopy.NO_MATCH)
@@ -282,6 +312,28 @@ fun RolePickerContent(ui: ModelSetupUi, role: ModelRole, actions: RolePickerActi
             ListRow(MikaIcons.Plus, ModelsCopy.ADD_PROVIDER, first = true, titleColor = c.accent, tone = TileTone.Accent, onClick = actions.addProvider)
         }
         FooterNote(ModelsCopy.PICKER_NOTE)
+    }
+}
+
+@Composable
+private fun PickerRefreshButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+) {
+    val c = MikaTheme.colors
+    Box(
+        modifier.size(MikaSize.IconButton)
+            .clip(CircleShape)
+            .clickable(enabled = enabled, onClickLabel = ModelsCopy.REFRESH, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        DirectionalIcon(
+            MikaIcons.Refresh,
+            ModelsCopy.REFRESH,
+            Modifier.size(MikaSize.Icon).alpha(if (enabled) 1f else 0.35f),
+            tint = c.ink,
+        )
     }
 }
 
@@ -348,6 +400,7 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
     var using by remember { mutableStateOf<ModelOption?>(null) }
     val state = ui.listing[p.id]
     val list = ui.sortedOptions(p)
+    val supportsLiveRefresh = p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini
     Page(ModelsCopy.providerName(p), onBack) {
         GroupLabel(ModelsCopy.CONNECTION)
         if (p.kind == ProviderConfig.Kind.ChatGpt) {
@@ -382,7 +435,13 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
                 }
             }
         }
-        (state as? ListState.Failed)?.let { FooterNote(ModelSetupCopy.failed(it.message), color = c.bad) }
+        (state as? ListState.Failed)?.let {
+            if (supportsLiveRefresh && list.isNotEmpty()) {
+                FooterNote(ModelsCopy.refreshFailedCached(it.message), Modifier.testTag("provider-refresh-failed-${p.id}"), color = c.warn)
+            } else {
+                FooterNote(ModelSetupCopy.failed(it.message), color = c.bad)
+            }
+        }
 
         GroupCard {
             ListRow(
@@ -411,6 +470,9 @@ fun ProviderDetailContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetail
                 }
             }
             FooterNote(ModelsCopy.MODELS_NOTE)
+        }
+        if (supportsLiveRefresh && p.modelsRefreshedAtMs != null) {
+            FooterNote(ModelsCopy.lastRefreshed(p.modelsRefreshedAtMs), Modifier.testTag("provider-last-refreshed-${p.id}"))
         }
         // 跳过测试直接存下的:说清它还没测过,别说成「这家不提供模型列表」——那个说法对它不成立
         val untested = ui.untested(p)
@@ -713,6 +775,7 @@ fun AllModelsContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActio
     var using by remember { mutableStateOf<ModelOption?>(null) }
     val state = ui.listing[p.id]
     val all = ui.sortedOptions(p)
+    val supportsLiveRefresh = p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini
     val q = filter.trim()
     val shown = all.filter { q.isEmpty() || it.id.contains(q, ignoreCase = true) || it.displayName.contains(q, ignoreCase = true) }
     PageBackground {
@@ -725,8 +788,15 @@ fun AllModelsContent(ui: ModelSetupUi, p: Provider, actions: ProviderDetailActio
             }
             when (state) {
                 ListState.Running -> FooterNote(ModelsCopy.LISTING)
-                is ListState.Failed -> FooterNote(ModelSetupCopy.failed(state.message), color = c.bad)
+                is ListState.Failed -> if (supportsLiveRefresh && all.isNotEmpty()) {
+                    FooterNote(ModelsCopy.refreshFailedCached(state.message), Modifier.testTag("all-models-refresh-failed-${p.id}"), color = c.warn)
+                } else {
+                    FooterNote(ModelSetupCopy.failed(state.message), color = c.bad)
+                }
                 else -> Unit
+            }
+            if (supportsLiveRefresh && p.modelsRefreshedAtMs != null) {
+                FooterNote(ModelsCopy.lastRefreshed(p.modelsRefreshedAtMs), Modifier.testTag("all-models-last-refreshed-${p.id}"))
             }
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp)) {
                 itemsIndexed(shown, key = { _, o -> o.id }) { i, o ->
@@ -862,6 +932,8 @@ object ModelsCopy {
     fun unverifiedNote(models: List<String>) = tr(R.string.models_unverified_note, models.joinToString(tr(R.string.list_sep)))
     val NOT_LISTED: String get() = tr(R.string.models_not_listed)
     val REFRESH: String get() = tr(R.string.refresh)
+    fun lastRefreshed(epochMs: Long): String = tr(R.string.models_last_refreshed, formatLastRefreshed(epochMs))
+    fun refreshFailedCached(reason: String): String = tr(R.string.models_refresh_failed_cached, reason)
     val IN_USE: String get() = tr(R.string.models_in_use)
     val DELETE: String get() = tr(R.string.models_delete)
     val DELETE_CONFIRM: String get() = tr(R.string.confirm_delete)
@@ -1135,4 +1207,18 @@ internal fun displayModelName(ui: ModelSetupUi, cfg: ProviderConfig): String {
     val fromProvider = p?.let { ui.options(it).firstOrNull { o -> o.id == cfg.model }?.displayName }.orEmpty()
     val curated = ModelCatalog.CURATED_ANTIGRAVITY_MODELS.firstOrNull { it.id == cfg.model }?.displayName.orEmpty()
     return fromProvider.ifBlank { curated }.ifBlank { cfg.model }
+}
+
+private val REFRESH_TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm")
+
+internal fun formatLastRefreshed(
+    epochMs: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    zone: ZoneId = ZoneId.systemDefault(),
+): String {
+    val at = Instant.ofEpochMilli(epochMs).atZone(zone)
+    val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+    if (at.toLocalDate() == today) return REFRESH_TIME_FORMAT.format(at)
+    val locale = if (UiText.source != null) uiLocale() else Locale.getDefault()
+    return DateTimeFormatter.ofPattern("MMM d, HH:mm", locale).format(at)
 }
