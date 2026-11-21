@@ -1307,8 +1307,6 @@ object ModelsCopy {
         return if (cfg != null) RoleLine(displayModelName(ui, cfg), ui.providerOf(cfg)?.let(::providerName) ?: cfg.name, isModel = true)
         else RoleLine(UNSET, tr(R.string.main_fallback_pick), unset = true)
     }
-        else RoleLine(UNSET, tr(R.string.main_fallback_pick), unset = true)
-    }
 
     fun fallbackLine(ui: ModelSetupUi, slot: Int): RoleLine = fallbackLine(ui, ModelRole.Main, slot)
 
