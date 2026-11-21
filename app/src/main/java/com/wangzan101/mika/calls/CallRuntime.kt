@@ -1380,15 +1380,29 @@ class CallRuntime(private val app: MikaApp) {
             !settings.state.value.enabled || !mute.isConfirmed(target.service.telecomMuted, microphoneMuted())) {
             throw CallProblem("Call state or mute changed; voice was not sent")
         }
-        val remaining = (w.config.maxCallSeconds * 1_000L - (SystemClock.elapsedRealtime() - w.activeElapsed)).coerceAtLeast(1)
+        // 0 = 不限时长:超时长按「永不触发」给(库对 Long.MAX_VALUE 的等待有特判,不会排闹钟)
+        val remaining = w.config.maxCallSeconds.takeIf { it > 0 }
+            ?.let { (it * 1_000L - (SystemClock.elapsedRealtime() - w.activeElapsed)).coerceAtLeast(1) }
         w.mediaStage = MediaStage.PCM_BRIDGE
-        withTimeoutOrNull(remaining) {
+        withTimeoutOrNull(remaining ?: Long.MAX_VALUE) {
             coroutineScope {
+                // 到点前让 AI 先说句道别(两家供应商都照字面播);道别走自然挂断时这里提前收尾
+                val closingJob = CallPolicy.closingDelayMs(remaining)?.let { closingAt ->
+                    launch {
+                        delay(closingAt)
+                        if (work === w && w.stopReason.value == null && w.aiActive &&
+                            !target.suppressed && sameActiveMuteTarget(w, target)) {
+                            runCatching { session.sendGreeting(CallPolicy.CLOSING_LINE) }
+                        }
+                    }
+                }
                 val watchdog = launch {
                     var lastBytes = -1L
                     var stalled = 0
                     while (true) {
                         delay(if (w.aiActive) 1_500 else 350)
+                        // 锁有自然到期(尤其不限时长按时长档拿的预算),到期就重新拿,通话没完不能放
+                        if (w.wakeLock?.isHeld == false) acquireCallWakeLock(w)
                         val stats = withContext(Dispatchers.IO) {
                             runCatching { helper.callAudioStats(w.audioOwner) }.getOrNull()
                         }
@@ -1455,11 +1469,14 @@ class CallRuntime(private val app: MikaApp) {
                     )
                 } finally {
                     watchdog.cancel()
+                    closingJob?.cancel()
                 }
             }
         }
         // A natural ending already issued the owner-bound disconnect with media still running.
         if (w.stopReason.value == FAREWELL_ENDING) return
+        // 不限时长:桥正常返回只可能是自然结束(上面已接住),到这里就是异常之外的兜底,别谎报时长上限
+        if (w.config.maxCallSeconds <= 0) return
         val ending = "Reached the AI call duration limit"
         if (!w.stopReason.record(ending)) return
         w.mediaStage = MediaStage.RELEASE
@@ -1468,8 +1485,13 @@ class CallRuntime(private val app: MikaApp) {
         w.aiActive = false
         w.bridging = false
         if (!restored || work !== w || target.suppressed || !sameActiveMuteTarget(w, target)) return
-        val ended = runCatching { target.call.disconnect() }.isSuccess &&
-            (waitFor(CallPolicy.CONTROL_TIMEOUT_MS) { confirmedEnded(target) } || confirmedEnded(target))
+        // 挂断可能没被确认:多试几次,别头一次没确认就把活电话塞回用户手里
+        var ended = false
+        repeat(CallPolicy.HANGUP_ATTEMPTS) {
+            if (ended || work !== w || target.suppressed || !sameActiveMuteTarget(w, target)) return@repeat
+            ended = runCatching { target.call.disconnect() }.isSuccess &&
+                (waitFor(CallPolicy.CONTROL_TIMEOUT_MS) { confirmedEnded(target) } || confirmedEnded(target))
+        }
         w.stopReason.refine(ending, if (ended) "Duration limit reached; Android hung up"
             else "Duration limit reached; Android did not confirm hang-up, handed back to the system")
     }
@@ -1597,6 +1619,8 @@ class CallRuntime(private val app: MikaApp) {
                 playbackHeadFrames = stats.getLong("upPlaybackHeadFrames", -1L),
                 flushMaxMs = stats.getLong("upFlushMaxMs", -1L),
                 captureSilencedMs = if (stats.getBoolean("clientSilencedKnown")) stats.getLong("clientSilencedMaxMs", -1L) else -1L,
+                playbackRebuilds = stats.getLong("upPlaybackRebuilds", -1L),
+                rebuildDroppedBytes = stats.getLong("upRebuildDroppedBytes", -1L),
             )
             !stats.getBoolean("active") && stats.getBoolean("microphoneRestored")
         }.onFailure { debugMediaException(w, it) }.getOrDefault(false).also {

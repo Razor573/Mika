@@ -20,7 +20,6 @@ import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
 import com.wangzan101.mika.core.model.VertexModel
-import com.wangzan101.mika.core.net.RateLimitGovernor
 import com.wangzan101.mika.core.record.RunEvent
 import com.wangzan101.mika.core.record.RunMetrics
 import com.wangzan101.mika.core.record.RunSink
@@ -114,8 +113,6 @@ private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : c
 @OptIn(ExperimentalCoroutinesApi::class)
 class AgentLoopLightTest {
     private val on = SpeedFlags(lightSteps = true)
-
-    @Before @After fun resetGovernor() = RateLimitGovernor.reset()
 
     private fun loop(main: ChatModel, light: ChatModel, sink: RunSink = RunSink.NONE, screen: com.wangzan101.mika.core.uistate.ScreenPort = FakeScreen()) =
         AgentLoop(main, toolDispatcher(screen), "BASE", sink = sink, flags = on, router = ModelRouter(main, light))
@@ -635,8 +632,8 @@ class AgentLoopLightTest {
         assertEquals(3, main.requests.size)
     }
 
-    @Test fun lightOneRetryRunsWithoutCooldownWhenMainHasActive429Cooldown() = runTest {
-        val main = Named("main-cooldown", FakeModel())
+    @Test fun lightOneRetryRunsAtZeroWaitWhenMainHasPreviouslySeen429() = runTest {
+        val main = Named("main-ok", FakeModel(ModelError.RateLimited(5_000L), finish()))
         val light = Named(
             "light-ok",
             FakeModel(
@@ -647,56 +644,70 @@ class AgentLoopLightTest {
         val dispatcher = toolDispatcher(SafeActionScreen())
         val router = ModelRouter(main, light)
         val sink = Events()
-        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy.NONE, sink::event, { 1000L })
+        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
+        caller.reset("BASE")
+
+        // First Main call hits 429 and recovers after 5s; no global cooldown carries into later Light calls.
+        caller.ask(listOf(Message(Role.User, listOf(Part.Text("Warm up")), Author.User)), emptyList(), step = 1)
+        assertEquals(5_000L, currentTime)
+
         val track = StepTrack()
         track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
         track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
 
-        RateLimitGovernor.reportRateLimited(main.name, 5_000L)
         val specs = listOf(ToolSpec("phone_observe", "Read screen", "{}"))
         val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
         val (reply, usedModel) = caller.routed(history, specs, track, 3, {})
 
         assertEquals("light-ok", usedModel.name)
         assertEquals(2, light.requests.size)
-        assertEquals(0, main.requests.size)
-        assertEquals(0L, currentTime)
+        assertEquals(2, main.requests.size)
+        assertEquals(5_000L, currentTime)
         assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
         assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
     }
 
-    @Test fun light429FailsFastRecordingCooldownWhileMainRetriesPastThreeConsecutive429s() = runTest {
+    @Test fun light429FallsBackImmediatelyWithoutConsumingTaskWaitBudget() = runTest {
+        val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_observe")), finish()))
+        val light = Named("light", FakeModel(ModelError.RateLimited(300_000)))
+        val r = loop(main, light).run("t")
+        assertTrue(r is TaskState.Succeeded)
+        assertEquals(0L, currentTime)
+        assertEquals(1, light.requests.size)
+        assertEquals(3, main.requests.size)
+    }
+
+    @Test fun singleMain429RetriesAtMostThreeTimesPerRequestWithNoGlobalCooldownCarryover() = runTest {
         val main = Named(
-            "main-429",
+            "main-429-cap",
             FakeModel(
                 ModelError.RateLimited(null),
                 ModelError.RateLimited(null),
                 ModelError.RateLimited(null),
                 ModelError.RateLimited(null),
-                tools(call("phone_observe")),
+                finish("second-request-ok"),
             ),
         )
-        val light = Named("light-429", FakeModel(ModelError.RateLimited(2_000L)))
         val dispatcher = toolDispatcher(SafeActionScreen())
-        val router = ModelRouter(main, light)
         val sink = Events()
-        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
-        val track = StepTrack()
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+        val caller = ModelCaller(main, dispatcher, null, SpeedFlags.OFF, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
+        caller.reset("BASE")
 
-        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
-        val (reply, usedModel) = caller.routed(history, dispatcher.offeredNow(), track, 3, {})
+        val req = listOf(Message(Role.User, listOf(Part.Text("Step 1")), Author.User))
+        var thrown: Throwable? = null
+        try {
+            caller.ask(req, emptyList(), step = 1)
+        } catch (e: ModelError.RateLimited) {
+            thrown = e
+        }
+        assertTrue(thrown is ModelError.RateLimited)
+        assertEquals(4, main.requests.size)
+        assertEquals(7_000L, currentTime)
 
-        assertEquals("main-429", usedModel.name)
-        assertEquals(1, light.requests.size)
+        // Subsequent request starts immediately without any global cooldown wait.
+        val second = caller.ask(req, emptyList(), step = 2)
         assertEquals(5, main.requests.size)
-        assertEquals(15_000L, currentTime)
-        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
-        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_to_main" && it.detail == "light_error" })
-
-        // Light's own 429 cooldown must still be recorded in RateLimitGovernor even though it failed fast to Main.
-        RateLimitGovernor.awaitClear(light.name)
-        assertEquals(17_000L, currentTime)
+        assertEquals(7_000L, currentTime)
+        assertEquals("second-request-ok", second.parts.filterIsInstance<Part.Text>().single().text)
     }
 }

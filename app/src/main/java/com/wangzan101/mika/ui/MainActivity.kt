@@ -523,7 +523,7 @@ private fun MikaRoot(
             Onboarding.start(onboardingInputs())?.let(::goOnboarding)
         }
     }
-    val phoneSetupNeeded by phoneSetup.needed.collectAsState()
+    val phoneSetupNeed by phoneSetup.needed.collectAsState()
     // 页面有自己的返回处理时(设置页里的子页、侧栏)由它们先接;这里只管退回上一页
     BackHandler(enabled = nav.canGoBack) { nav.back() }
     val back: () -> Unit = { nav.back() }
@@ -597,7 +597,7 @@ private fun MikaRoot(
                             openRun = { runId = it; nav.push(Route.Run) },
                             openReport = { reportRunId = it; nav.push(Route.Report) },
                             openPlayback = { reportRunId = it; playbackScreenshotId = null; nav.push(Route.Playback) },
-                            phoneSetupNeeded = phoneSetupNeeded && status.builtinShell != BuiltinShellStatus.Running,
+                            phoneSetupNeed = (if (status.builtinShell != BuiltinShellStatus.Running) phoneSetupNeed else null),
                             openPhoneSetup = { onFix(Fix.OpenPhoneSetup) },
                             loadSource = { id ->
                                 withContext(Dispatchers.IO) { evidenceSource(RunStore(context).events(id)) { ConfirmationNotifier.appLabel(context, it) } }
@@ -651,8 +651,9 @@ private fun MikaRoot(
                 mcpServers = app.mcpServers,
                 openPhoneOps = openPhoneOps, onPhoneOpsOpened = { openPhoneOps = false })
         }
-        Route.Models -> ModelsScreen(store, onBack = back, onOpenSpeech = { nav.push(Route.SpeechModel) }, onOpenVoice = { nav.push(Route.VoiceModel) }, onOpenUsage = { nav.push(Route.Usage) })
+        Route.Models -> ModelsScreen(store, onBack = back, onOpenSpeech = { nav.push(Route.SpeechModel) }, onOpenVoice = { nav.push(Route.VoiceModel) }, onOpenImage = { nav.push(Route.ImageModel) }, onOpenUsage = { nav.push(Route.Usage) })
         Route.VoiceModel -> VoiceModelScreen(store, onBack = back)
+        Route.ImageModel -> ImageModelScreen(store, onBack = back)
         Route.Persona -> if (personasOn) PersonaScreen(app.personas, onBack = back) else LaunchedEffect(Unit) { nav.back() }
         Route.Usage -> UsageScreen(app.usage, store, onBack = back, onOpenUrl = { openInBrowser(context, it) })
         Route.SpeechModel -> SpeechModelScreen(store, onBack = back)
@@ -785,6 +786,22 @@ private fun MikaRoot(
             nav.reset()
         })
         Route.Calls -> CallSettingsScreen(app.calls, onBack = back, standalone = true, initialHistoryCallId = focusedCallHistoryId)
+    }
+
+    var showLanguagePrompt by rememberSaveable { mutableStateOf(!AppLanguage.hasPrompted(context)) }
+    if (showLanguagePrompt && onboarding == null) {
+        LanguagePromptDialog(
+            initial = AppLanguage.current(context),
+            onConfirm = { lang ->
+                showLanguagePrompt = false
+                AppLanguage.markPrompted(context)
+                AppLanguage.set(context, lang)
+            },
+            onDismiss = {
+                showLanguagePrompt = false
+                AppLanguage.markPrompted(context)
+            },
+        )
     }
 }
 

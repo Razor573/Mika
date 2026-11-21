@@ -176,8 +176,8 @@ class ChatViewModelTest {
         assertNull(notice.recordedRun)
         assertEquals("我从通知里挑出 1 条", (notice.status as ExchangeStatus.Done).answer)
         assertEquals("run-1", reply.recordedRun)
-        // 页面上的行数和画出来的对得上:提醒那一轮只有回答那一行,普通的一轮是原话、「查看过程」、回答三行
-        assertEquals(1 + 3, chatItemCount(vm.ui.value.exchanges, kept = null, phoneSetupNeeded = false, hasBlocked = false))
+        // 页面上的行数和画出来的对得上:提醒那一轮只有回答那一行,普通的一轮是原话、回答两行(查看过程收进回答卡的操作区了)
+        assertEquals(1 + 2, chatItemCount(vm.ui.value.exchanges, kept = null, phoneSetupRow = null, hasBlocked = false))
         // 对话开着的时候又写进一轮提醒:接在后面,前面的不动、不合并
         store.append("talk", Turn("", "我从通知里挑出 2 条", "succeeded", runId = "notice:n2"))
         runCurrent()
@@ -3832,5 +3832,34 @@ class ChatViewModelTest {
         vm.openConversation(id)
         assertNull(vm.ui.value.personaId)
         assertFalse(vm.selectPersona("p1"))
+    }
+
+    @Test fun projectDraftPersistsOnSendAndDeletesWithProject() = runTest {
+        val conversations = ConversationStore(tmp.newFolder("chats"))
+        val projects = com.wangzan101.mika.chat.ProjectStore(tmp.newFolder("projects"))
+        val resolver = com.wangzan101.mika.chat.WorkspaceResolver(conversations, projects)
+        val p1 = projects.create("科研").getOrThrow()
+        var deletedProjectId: String? = null
+        val vm = ChatViewModel(
+            backgroundScope, state, stage, actions, conversations,
+            appLabel = { it }, activities = acts, steers = steerFlow,
+            projectStore = projects,
+            removeProject = { pid -> deletedProjectId = pid },
+            workspaceResolver = resolver,
+        ).also { runCurrent() }
+
+        vm.newConversation(p1.id)
+        assertEquals(p1.id, vm.ui.value.projectId)
+        vm.input("先建个草稿")
+        val draftId = vm.ui.value.conversationId!!
+        assertEquals(com.wangzan101.mika.cap.sandbox.WorkspaceKey.Project(p1.id), resolver.resolve(draftId))
+        assertTrue(vm.send("先建个草稿", ok))
+        assertEquals(p1.id, conversations.projectId(draftId))
+
+        vm.deleteProject(p1.id)
+        runCurrent()
+        assertEquals(p1.id, deletedProjectId)
+        assertNull(vm.ui.value.conversationId)
+        assertNull(vm.ui.value.projectId)
     }
 }

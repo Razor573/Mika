@@ -250,8 +250,8 @@ class ModelCatalogTest {
             {"name":"models/gemini-flash-latest","displayName":"Gemini Flash Latest","supportedGenerationMethods":["generateContent"]},
             {"name":"models/gemini-2.5-flash-preview-tts","displayName":"Gemini 2.5 Flash Preview TTS","supportedGenerationMethods":["generateContent"]},
             {"name":"models/gemini-2.5-flash-image","displayName":"Nano Banana","supportedGenerationMethods":["generateContent"]},
-            {"name":"models/imagen-3.0-generate-002","supportedGenerationMethods":["generateContent"]},
-            {"name":"models/lyria-realtime-exp","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/imagen-3.0-generate-002","displayName":"Imagen 3","supportedGenerationMethods":["generateContent"]},
+            {"name":"models/lyria-realtime-exp","displayName":"Lyria","supportedGenerationMethods":["generateContent"]},
             {"name":"models/gemini-robotics-er-1.5-preview","supportedGenerationMethods":["generateContent"]},
             {"name":"models/deep-research-pro-preview-12-2025","displayName":"Gemini Deep Research","supportedGenerationMethods":["generateContent"]},
             {"name":"models/gemini-embedding-001","supportedGenerationMethods":["generateContent"]},
@@ -329,6 +329,61 @@ class ModelCatalogTest {
         )) {
             assertTrue("Expected non-chat model to be excluded: id=$id name=$name", ModelCatalog.isExcludedGeminiModel(id, name))
         }
+    }
+
+    @Test fun cloudflareWorkersAiSearchesModelsAndParsesCapabilities() = runTest {
+        val json = """{
+            "result": [
+                {
+                    "id": "c1",
+                    "name": "@cf/deepseek-ai/deepseek-v4-pro-0813",
+                    "description": "DeepSeek V4 Pro on Workers AI",
+                    "properties": [
+                        {"property_id": "context_window", "value": "131072"},
+                        {"property_id": "function_calling", "value": "true"},
+                        {"property_id": "vision", "value": "true"},
+                        {"property_id": "reasoning", "value": "true"}
+                    ]
+                },
+                {
+                    "id": "c2",
+                    "name": "@cf/meta/llama-3.1-8b-instruct",
+                    "description": "Llama 3.1 8B",
+                    "properties": [
+                        {"property_id": "context_window", "value": "8192"},
+                        {"property_id": "function_calling", "value": "false"},
+                        {"property_id": "vision", "value": "false"},
+                        {"property_id": "reasoning", "value": "false"}
+                    ]
+                }
+            ],
+            "success": true
+        }"""
+        server.enqueue(ok(json))
+        val cfUrl = "$base/client/v4/accounts/test-acc-123/ai/v1"
+        val list = models(catalog.openAiCompat(cfUrl, "cf-token"))
+        assertEquals(2, list.size)
+        val deepseek = list[0]
+        assertEquals("@cf/deepseek-ai/deepseek-v4-pro-0813", deepseek.id)
+        assertEquals("deepseek-ai/deepseek-v4-pro-0813", deepseek.displayName)
+        assertEquals(131072, deepseek.contextTokens)
+        assertEquals(true, deepseek.toolCalls)
+        assertEquals(true, deepseek.vision)
+        assertEquals(true, deepseek.reasoning)
+        assertEquals(true, deepseek.chat)
+
+        val llama = list[1]
+        assertEquals("@cf/meta/llama-3.1-8b-instruct", llama.id)
+        assertEquals("meta/llama-3.1-8b-instruct", llama.displayName)
+        assertEquals(8192, llama.contextTokens)
+        assertEquals(false, llama.toolCalls)
+        assertEquals(false, llama.vision)
+        assertEquals(false, llama.reasoning)
+
+        val req = server.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/client/v4/accounts/test-acc-123/ai/models/search?task=Text%20Generation", req.path)
+        assertEquals("Bearer cf-token", req.getHeader("Authorization"))
     }
 
     @Test fun mapsHttpFailuresToReasons() = runTest {

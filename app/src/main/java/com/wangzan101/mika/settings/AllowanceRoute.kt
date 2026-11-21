@@ -36,6 +36,7 @@ internal data class AllowanceRoute(
                 "Zhipu" -> AllowanceRoute(dashboard = "https://bigmodel.cn/finance/overview")
                 "Zhipu Coding Plan" -> AllowanceRoute(dashboard = "https://www.bigmodel.cn/usercenter/glm-coding/usage")
                 "Volcengine Ark" -> AllowanceRoute(dashboard = "https://console.volcengine.com/finance/overview")
+                "OpenDesign Go" -> AllowanceRoute(dashboard = "https://open-design.ai/cloud/dashboard")
                 "MiniMax" -> AllowanceRoute(dashboard = "https://platform.minimax.cn/user-center/payment/balance")
                 "StepFun" -> AllowanceRoute(dashboard = "https://platform.stepfun.com/")
                 "Tencent Hunyuan" -> AllowanceRoute(dashboard = "https://console.cloud.tencent.com/tokenhub")
@@ -48,6 +49,7 @@ internal data class AllowanceRoute(
                 "xAI" -> AllowanceRoute(dashboard = "https://console.x.ai/")
                 "Mistral" -> AllowanceRoute(dashboard = "https://admin.mistral.ai/organization/usage")
                 "Groq" -> AllowanceRoute(dashboard = "https://console.groq.com/settings/billing")
+                "Cloudflare Workers AI" -> AllowanceRoute(dashboard = "https://dash.cloudflare.com/")
                 else -> AllowanceRoute()
             }
         }

@@ -8,12 +8,33 @@ import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.StopReason
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.util.Base64
 
 class VisionServiceTest {
+    @Test fun groundingTrustBelongsToTheModelThatAnswered() = runTest {
+        val reply = ModelReply(listOf(Part.Text("answer")), StopReason.EndTurn, null)
+        val primary = FakeModel(reply, groundingVerified = false)
+        val backup = FakeModel(reply, groundingVerified = true)
+        val unused = VisionService(primary, ops, listOf(backup))
+        assertFalse(unused.groundingVerified)
+        assertFalse(unused.askWithGrounding("s", "question", emptyList()).groundingVerified)
+        assertTrue(backup.requests.isEmpty())
+
+        val failedPrimary = FakeModel(ModelError.Auth(), groundingVerified = true)
+        val unverifiedBackup = FakeModel(reply, groundingVerified = false)
+        assertFalse(VisionService(failedPrimary, ops, listOf(unverifiedBackup))
+            .askWithGrounding("s", "question", emptyList()).groundingVerified)
+
+        val unverifiedPrimary = FakeModel(ModelError.Auth(), groundingVerified = false)
+        val verifiedBackup = FakeModel(reply, groundingVerified = true)
+        assertTrue(VisionService(unverifiedPrimary, ops, listOf(verifiedBackup))
+            .askWithGrounding("s", "question", emptyList()).groundingVerified)
+    }
+
     private val ops = JvmTestImageOps
     private val big = ops.encode(2000, 1000) { x, _ -> if (x < 1000) 0 else 200 }
     private val small = ops.encode(10, 10) { _, _ -> 128 }
@@ -42,6 +63,24 @@ class VisionServiceTest {
             fail("expected ModelError")
         } catch (e: ModelError.RateLimited) {
         }
+    }
+
+    @Test fun fallsBackToNextVisionModelOnModelError() = runTest {
+        val primary = FakeModel(ModelError.RateLimited(null))
+        val backup = FakeModel(ModelReply(listOf(Part.Text("备援识别结果")), StopReason.EndTurn, null))
+        var switched = false
+        val service = VisionService(
+            model = primary,
+            ops = ops,
+            fallbacks = listOf(backup),
+            onModelSwitch = { _, _, err ->
+                switched = true
+                assertTrue(err is ModelError.RateLimited)
+            }
+        )
+        val result = service.ask("SYS", "看", listOf(small))
+        assertEquals("备援识别结果", result)
+        assertTrue(switched)
     }
 
     @Test fun blankReplyIsBadResponse() = runTest {

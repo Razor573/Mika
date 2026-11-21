@@ -6,6 +6,7 @@ import com.wangzan101.mika.cap.sandbox.AttachmentFailureReason
 import com.wangzan101.mika.core.agent.GoalChecklist
 import com.wangzan101.mika.core.agent.QuoteMessage
 import com.wangzan101.mika.core.agent.AttachedPage
+import com.wangzan101.mika.core.record.RunMetrics
 import com.wangzan101.mika.ui.components.DirectionalIcon
 import com.wangzan101.mika.ui.components.GlassSurface
 import com.wangzan101.mika.ui.components.keepsKeyboard
@@ -19,6 +20,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -115,11 +117,9 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDirection
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.LayoutDirection
@@ -202,8 +202,8 @@ fun ChatScreen(
     /** 被拦下的提示里的「去设置」。 */
     openSettings: () -> Unit,
     openRun: (String) -> Unit = {},
-    /** 任务要用手机而手机操作没准备好:最后一轮下面放一行去设置。 */
-    phoneSetupNeeded: Boolean = false,
+    /** 任务要用手机而手机操作没准备好:在那轮问答下面放一行去设置(配不上具体轮次时挂在最后)。 */
+    phoneSetupNeed: com.wangzan101.mika.cap.phone.setup.PhoneSetupPrompt.Need? = null,
     openPhoneSetup: () -> Unit = {},
     /** 按运行记录取依据的来处(「来源」胶囊和点开后的截图);读盘的活由调用方放到后台线程。 */
     loadSource: suspend (runId: String) -> EvidenceSource? = { null },
@@ -233,6 +233,8 @@ fun ChatScreen(
     }
     val recommendedTasks by recommendedTasksFlow.collectAsState()
     val ui by vm.ui.collectAsState()
+    val projects by vm.projects.collectAsState()
+    val currentProject = remember(projects, ui.projectId) { ui.projectId?.let { pid -> projects.firstOrNull { it.id == pid } } }
     var deviceBrowserConversation by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(ui.conversationId, deviceBrowserConversation) {
         if (deviceBrowserConversation != null && deviceBrowserConversation != vm.ui.value.conversationId) deviceBrowserConversation = null
@@ -322,7 +324,8 @@ fun ChatScreen(
     // 返回聊天时同一条内容不重新滚动；新进展仅在跟随末尾时滚动。
     // 目标行直接由当前 UI 状态计算:layoutInfo 还是上一帧的测量结果,发送后立即读它会滚到旧的末尾。
     val last = ui.exchanges.lastOrNull()
-    val rowCount = chatItemCount(ui.exchanges, kept, phoneSetupNeeded, hasBlocked = ui.blocked != null)
+    val setupRow = phoneSetupRow(phoneSetupNeed, ui.conversationId, ui.exchanges)
+    val rowCount = chatItemCount(ui.exchanges, kept, setupRow, hasBlocked = ui.blocked != null)
     val canScrollForward by remember { derivedStateOf { listState.canScrollForward } }
     val showScrollToBottom = ui.exchanges.isNotEmpty() && !followingTail && canScrollForward
     val scrollMarker = "${ui.conversationId}:${ui.exchanges.size}:${last?.steps?.size}:${last?.steers?.size}:${last?.status?.hashCode()}:${ui.blocked?.hashCode()}"
@@ -334,7 +337,7 @@ fun ChatScreen(
     LaunchedEffect(scrollMarker, jump) {
         // 从搜索或文件库过来:先滚到目标消息,期间不要跟末尾;目标不在了就退回原来的逻辑。
         if (jump != null) {
-            val keys = chatItemKeys(ui.exchanges, kept, phoneSetupNeeded, hasBlocked = ui.blocked != null)
+            val keys = chatItemKeys(ui.exchanges, kept, setupRow, hasBlocked = ui.blocked != null)
             val index = chatTargetKey(ui.exchanges, jump.target)?.let(keys::indexOf) ?: -1
             if (index >= 0) {
                 previousScrollMarker = scrollMarker
@@ -446,7 +449,7 @@ fun ChatScreen(
                 ui.exchanges.forEachIndexed { i, ex ->
                     val backgroundNote = i == ui.exchanges.lastIndex && ui.operatingPhone
                     exchange(
-                        i, ex, ui.conversationId, ui.takeoverStage, vm, reduceMotion, backgroundNote, openRun, loadSource, openSource, kept,
+                        i, ex, ui.conversationId, ui.takeoverStage, vm, reduceMotion, backgroundNote, runMetrics, openRun, loadSource, openSource, kept,
                         highlightKey = highlightKey,
                         recover = { resume ->
                             val label = if (resume) R.string.chat_resume_request else R.string.chat_restart_request
@@ -454,8 +457,10 @@ fun ChatScreen(
                         },
                         openReport = openReport, openPlayback = openPlayback,
                     )
+                    // 「去设置」挂在发现手机没就绪的那一轮后面;配不上具体轮次时(下面)照旧挂在最后
+                    if (setupRow == i) item("ps$i") { PhoneSetupLine(openPhoneSetup) }
                 }
-                if (phoneSetupNeeded && ui.exchanges.isNotEmpty()) item("phone-setup") { PhoneSetupLine(openPhoneSetup) }
+                if (setupRow == -1) item("phone-setup") { PhoneSetupLine(openPhoneSetup) }
                 ui.blocked?.let { problems ->
                     item("blocked") {
                         NeedCard(
@@ -499,7 +504,6 @@ fun ChatScreen(
                             .testTag("chat-usage-title").padding(horizontal = 14.dp, vertical = 8.dp),
                             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(ChatCopy.APP_TITLE, style = MikaType.Title, color = c.ink, maxLines = 1)
-                            Icon(MikaIcons.Chevron, null, Modifier.size(14.dp).rotate(90f), tint = c.ink2)
                         }
                     }
                     GlassSurface(modifier = Modifier.size(MikaSize.IconButton), backdrop = backdrop, shape = CircleShape) {
@@ -510,6 +514,23 @@ fun ChatScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(MikaIcons.New, stringResource(R.string.chat_new), Modifier.size(MikaSize.Icon), tint = c.ink)
+                        }
+                    }
+                }
+                if (currentProject != null) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        GlassSurface(backdrop = backdrop, modifier = Modifier.testTag("chat-project-pill")) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(MikaIcons.Folder, stringResource(R.string.chat_project_shared), Modifier.size(12.dp), tint = c.ink2)
+                                Text(currentProject.name, style = MikaType.Hint, color = c.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
                     }
                 }
@@ -645,7 +666,7 @@ fun ChatScreen(
             onAttention = {
                 vm.attendPip()
                 val count = listState.layoutInfo.totalItemsCount
-                val after = (if (last?.files?.isNotEmpty() == true) 1 else 0) + (if (phoneSetupNeeded) 1 else 0)
+                val after = (if (last?.files?.isNotEmpty() == true) 1 else 0) + (if (setupRow == ui.exchanges.lastIndex || setupRow == -1) 1 else 0)
                 val card = count - 1 - after
                 if (card >= 0) scope.launch { if (reduceMotion) listState.scrollToItem(card) else listState.animateScrollToItem(card) }
             },
@@ -908,6 +929,7 @@ private fun JumpHighlight(active: Boolean, reduceMotion: Boolean, content: @Comp
 
 private fun LazyListScope.exchange(
     index: Int, ex: Exchange, conversationId: String?, stage: Takeover.Stage, vm: ChatViewModel, reduceMotion: Boolean, backgroundNote: Boolean,
+    runMetrics: Map<String, RunMetrics>,
     openRun: (String) -> Unit, loadSource: suspend (String) -> EvidenceSource?, openSource: (String?, String?) -> Unit,
     kept: KeptPage? = null,
     /** 从搜索或文件库跳过来时要高亮的行 key。 */
@@ -924,42 +946,32 @@ private fun LazyListScope.exchange(
         ex.status is ExchangeStatus.NeedsInput || ex.status is ExchangeStatus.Queued
     val active = ex.status.isActive()
     val answering = ex.status == ExchangeStatus.Working && !ex.draft.isNullOrBlank()
-    if (active) {
-        if (!answering) item("s$index") { WorkBlock(ex, reduceMotion, backgroundNote, openRun) }
-    }
-    // 引导进当前任务的话只带一个弯箭头;没赶上当前任务、转入下一件的不带标记。
-    // 插话之前已经说完的回复照常显示;插话打断的那段留在原处(淡色、标「被你的新消息打断」);接着才是插话。
-    // 还没交给模型的插话排在正在长出来的回答后面:那段回答是它到之前就在写的,不是对它的回复。
-    fun steer(n: SteerNote) {
-        n.finished?.takeIf(String::isNotBlank)?.let { done ->
-            item("a$index-${n.id}") {
-                JumpHighlight(highlightKey == "a$index-${n.id}", reduceMotion) { FinishedReply(done, "a$index-${n.id}") }
-            }
-        }
-        n.interrupted?.takeIf(String::isNotBlank)?.let { cut ->
-            item("i$index-${n.id}") {
-                JumpHighlight(highlightKey == "i$index-${n.id}", reduceMotion) { InterruptedReply(cut) }
-            }
-        }
-        item("m$index-${n.id}") {
-            JumpHighlight(highlightKey == "m$index-${n.id}", reduceMotion) {
-                UserBubble(n.text, conversationId, key = "m$index-${n.id}", steerMark = n.state != SteerState.Next)
+    // 插话:干活中作为右侧一步插进步骤里(见 [StepLine]);没在跑步骤(结束了、或在写总结)时收成紧跟
+    // 用户消息下面的一条弱化小字,和前面的主对话区分主从。撤回的插话不显示。
+    val steers = ex.steers.filterNot { it.state == SteerState.Withdrawn }
+    if (active && !answering) {
+        item("s$index") { WorkBlock(ex, steers.map { it.text }, reduceMotion, backgroundNote, openRun) }
+    } else {
+        steers.forEach { n ->
+            item("m$index-${n.id}") {
+                JumpHighlight(highlightKey == "m$index-${n.id}", reduceMotion) { SteerSupplement(n.text) }
             }
         }
     }
-    val (joined, waiting) = steersAroundDraft(ex.steers)
-    joined.forEach(::steer)
     ex.draft?.takeIf(String::isNotBlank)?.let { draft -> item("d$index") { DraftText(draft, ex.waitingForModel) } }
-    waiting.forEach(::steer)
     item("r$index") {
         JumpHighlight(highlightKey == "r$index", reduceMotion) {
-            StatusCard(ex.status, stage, vm, ex.recordedRun, loadSource, openSource, openRun, "r$index",
+            StatusCard(ex.status, stage, vm, ex.recordedRun, ex.elapsedMs, ex.recordedRun?.let { runMetrics[it]?.tokens }, loadSource, openSource, openRun, "r$index",
+                conversationId = conversationId,
                 recover = recover, goal = ex.goal, openReport = openReport, openPlayback = openPlayback)
         }
     }
     // 这一轮结束后留在后台运行的那一页:还开着是绿色一行(能关),关了是一句原因
     keptPageRow(index, ex, kept, vm::closeKeptPage)
     if (ex.audios.isNotEmpty()) item("au$index") { GeneratedAudioCards(ex.audios, vm) }
+    if (ex.photos.isNotEmpty()) item("p$index") {
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { GeneratedPhotos(ex.photos, conversationId, 292.dp) }
+    }
     if (ex.files.isNotEmpty()) item("f$index") {
         JumpHighlight(highlightKey == "f$index", reduceMotion) { FileCards(ex.files) }
     }
@@ -995,43 +1007,37 @@ internal fun ExchangeStatus.isActive() =
  * 在浏览器页上对着一页问的,最上面是「网页 · 网站」和选中的字(见 [SentPage]),页面说明那几行不显示。
  */
 @Composable
-internal fun UserBubble(text: String, conversationId: String?, note: String? = null, key: String = "", steerMark: Boolean = false) {
+internal fun UserBubble(text: String, conversationId: String?, note: String? = null, key: String = "") {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val paged = remember(text) { AttachedPage.parse(text) }
     val quoted = remember(text) { QuoteMessage.parse(paged.words) }
     val attached = remember(text) { AttachmentMessage.parse(quoted.words) }
     BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 14.dp), contentAlignment = Alignment.CenterEnd) {
-        val max = maxWidth * (if (steerMark) 0.76f else 0.8f)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Column(horizontalAlignment = Alignment.End) {
-                paged.page?.let { SentPage(it, max) }
-                quoted.quote?.let { SentQuote(it, max) }
-                if (attached.hasAttachments) {
-                    SentAttachments(attached, conversationId, max) { item ->
-                        val id = conversationId ?: return@SentAttachments
-                        scope.launch { if (!AttachFiles.openSent(context, id, item.path)) Toast.makeText(context, AttachCopy.GONE, Toast.LENGTH_SHORT).show() }
-                    }
+        val max = maxWidth * 0.8f
+        Column(horizontalAlignment = Alignment.End) {
+            paged.page?.let { SentPage(it, max) }
+            quoted.quote?.let { SentQuote(it, max) }
+            if (attached.hasAttachments) {
+                SentAttachments(attached, conversationId, max) { item ->
+                    val id = conversationId ?: return@SentAttachments
+                    scope.launch { if (!AttachFiles.openSent(context, id, item.path)) Toast.makeText(context, AttachCopy.GONE, Toast.LENGTH_SHORT).show() }
                 }
-                if (attached.hasAttachments && attached.words.isNotEmpty()) Spacer(Modifier.size(6.dp))
-                if ((!attached.hasAttachments || attached.words.isNotEmpty()) && (paged.page == null || quoted.words.isNotEmpty())) UserMessage(conversationId, attached.words.takeIf { attached.hasAttachments } ?: quoted.words, ChatThumbWidth) { words ->
-                    // 用户气泡是淡蓝底 + 深字:选中的底色用稍浓一点的蓝,把手仍是强调色(画在气泡外面)
-                    val colors = MikaTheme.colors
-                    val bubble = colors.accent.copy(alpha = 0.14f)
-                    CompositionLocalProvider(LocalTextSelectionColors provides TextSelectionColors(colors.accent, colors.accent.copy(alpha = 0.3f))) {
-                        MessageArea(
-                            key, QuoteMessage.From.You, words, "selectable-user",
-                            Modifier.widthIn(max = max).background(bubble, MikaShapes.UserBubble),
-                            lifted = { LiftedMessage(MikaShapes.UserBubble, bubble) { UserBubbleText(words) } },
-                        ) { UserBubbleText(words) }
-                    }
-                }
-                note?.let { Text(it, Modifier.padding(top = 3.dp, end = 4.dp), style = MikaType.Hint, color = MikaTheme.colors.ink3) }
             }
-            if (steerMark) Icon(
-                MikaIcons.Steer, stringResource(R.string.follow_up_steer),
-                Modifier.size(18.dp), tint = MikaTheme.colors.accent,
-            )
+            if (attached.hasAttachments && attached.words.isNotEmpty()) Spacer(Modifier.size(6.dp))
+            if ((!attached.hasAttachments || attached.words.isNotEmpty()) && (paged.page == null || quoted.words.isNotEmpty())) UserMessage(conversationId, attached.words.takeIf { attached.hasAttachments } ?: quoted.words, ChatThumbWidth) { words ->
+                // 用户气泡是淡蓝底 + 深字:选中的底色用稍浓一点的蓝,把手仍是强调色(画在气泡外面)
+                val colors = MikaTheme.colors
+                val bubble = colors.accent.copy(alpha = 0.14f)
+                CompositionLocalProvider(LocalTextSelectionColors provides TextSelectionColors(colors.accent, colors.accent.copy(alpha = 0.3f))) {
+                    MessageArea(
+                        key, QuoteMessage.From.You, words, "selectable-user",
+                        Modifier.widthIn(max = max).background(bubble, MikaShapes.UserBubble),
+                        lifted = { LiftedMessage(MikaShapes.UserBubble, bubble) { UserBubbleText(words) } },
+                    ) { UserBubbleText(words) }
+                }
+            }
+            note?.let { Text(it, Modifier.padding(top = 3.dp, end = 4.dp), style = MikaType.Hint, color = MikaTheme.colors.ink3) }
         }
     }
 }
@@ -1062,13 +1068,27 @@ private fun DraftText(text: String, generating: Boolean) {
     )
 }
 
-/** 插话交给模型之前已经说完的回复:和回答一样的底和字,长按一样能复制、引用、选择文字。 */
+/** 结束后插话收成的弱化小字:右对齐、比正文淡一点点,紧跟用户消息下面,和主回答区分主从。 */
 @Composable
-private fun FinishedReply(text: String, key: String) {
-    Box(Modifier.padding(bottom = 4.dp)) {
-        AnswerArea(key, text, Modifier.fillMaxWidth().answerSurface()) {
-            MarkdownText(text, AnswerText.copy(color = MikaTheme.colors.ink), streaming = false)
-        }
+private fun SteerSupplement(text: String) {
+    Box(
+        Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 6.dp),
+        contentAlignment = Alignment.CenterEnd,
+    ) {
+        Text(text, Modifier.padding(horizontal = 4.dp), style = SupplementText, color = MikaTheme.colors.inkSoft)
+    }
+}
+
+/** 干活中插话作为「右侧插入的一步」:淡蓝胶囊、右对齐,和左边的模型步骤区分开。 */
+@Composable
+private fun SteerStepPill(text: String) {
+    val c = MikaTheme.colors
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.End) {
+        Text(
+            text,
+            Modifier.background(c.accentSoft, SteerPillShape).clip(SteerPillShape).padding(horizontal = 12.dp, vertical = 6.dp),
+            style = StepText, color = c.ink, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1089,15 +1109,6 @@ private fun AnswerArea(key: String, answer: String, modifier: Modifier, content:
     ) { content() }
 }
 
-/** 被插话打断的那段回复:和回答同样的底,字用次要色,下面一行小字「被你的新消息打断」。 */
-@Composable
-private fun InterruptedReply(text: String) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-        MarkdownText(text, AnswerText.copy(color = MikaTheme.colors.ink2), Modifier.fillMaxWidth().answerSurface(), streaming = false)
-        Text(stringResource(R.string.steer_interrupted_reply), Modifier.padding(top = 3.dp, start = 4.dp), style = MikaType.Hint, color = MikaTheme.colors.ink3)
-    }
-}
-
 /** Mika 回答的底:很淡的灰,左下尾角。 */
 @Composable
 private fun Modifier.answerSurface(): Modifier =
@@ -1106,40 +1117,40 @@ private fun Modifier.answerSurface(): Modifier =
 // ---------- 进度 ----------
 
 /**
- * 进行中:一行状态(转圈 + 此刻的进展 + 用时),下面一条竖线步骤(做完的灰点、当前的蓝点;停下来等你时当前步是橙点)。
+ * 进行中:一行状态(呼吸点 + 此刻的进展 + 用时),下面一条竖线步骤(做完的灰点、当前的蓝点;停下来等你时当前步是橙点)。
  * 在后台操作手机时最下面一行小字。
  */
 @Composable
-internal fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Boolean, openRun: (String) -> Unit) {
+internal fun WorkBlock(ex: Exchange, steers: List<String>, reduceMotion: Boolean, backgroundNote: Boolean, openRun: (String) -> Unit) {
     val c = MikaTheme.colors
     val paused = ChatCopy.paused(ex.status)
     val elapsed = rememberElapsed(ex.startedAt)
     Column(Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+        TurnMeta(elapsed, tokens = null)
+        Spacer(Modifier.height(3.dp))
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 28.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            Modifier.fillMaxWidth().heightIn(min = 24.dp),
+            verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Spinner(
-                Modifier.size(16.dp), spinning = !paused && !reduceMotion,
-                track = if (paused) c.warnSoft else c.accentSoft, head = if (paused) c.warnSolid else c.accent,
-            )
+            BreathingDot(paused, reduceMotion)
             Text(
                 ChatCopy.progressLine(ex), Modifier.weight(1f), style = NowText, color = c.ink,
                 maxLines = 2, overflow = TextOverflow.Ellipsis,
             )
-            if (elapsed != null) Text(ChatCopy.clock(elapsed), style = ClockText, color = c.ink3)
         }
         ex.goals?.let { GoalChecklistRow(it, ex.runId) }
-        if (ex.steps.isNotEmpty()) StepLine(ex.steps, ex.stepActions, live = true, paused = paused)
+        if (ex.steps.isNotEmpty() || steers.isNotEmpty()) StepLine(ex.steps, ex.stepActions, steers, live = true, paused = paused)
         // 跑的时候就能进运行过程(页面按秒接着长);结束后收进「做了 N 步 · 查看过程」那一行
         ex.recordedRun?.let { id ->
-            Text(
-                stringResource(R.string.chat_view_process),
+            Row(
                 Modifier.padding(top = 2.dp).clip(MikaShapes.Pill).clickable(role = Role.Button) { openRun(id) }
                     .padding(horizontal = 4.dp, vertical = 4.dp).testTag("work-view-process"),
-                style = DoneText.copy(fontStyle = FontStyle.Italic, textDecoration = TextDecoration.Underline), color = c.ink3,
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(R.string.chat_view_process), style = DoneText, color = c.ink3)
+                DirectionalIcon(MikaIcons.Chevron, null, Modifier.size(12.dp), tint = c.ink3)
+            }
         }
         if (backgroundNote) {
             Row(
@@ -1149,6 +1160,23 @@ internal fun WorkBlock(ex: Exchange, reduceMotion: Boolean, backgroundNote: Bool
                 Icon(MikaIcons.Eye, null, Modifier.size(15.dp), tint = c.ink3)
                 Text(ChatCopy.BACKGROUND_NOTE, style = NoteText, color = c.ink3)
             }
+        }
+    }
+}
+
+/** 回答/干活头部那行:「Mika · 0:42 · 1.2 万 Token」;[elapsed]/[tokens] 为 null 时略去对应段。 */
+@Composable
+private fun TurnMeta(elapsed: Long?, tokens: Long?) {
+    val c = MikaTheme.colors
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(ChatCopy.APP_TITLE, style = TurnNameText, color = c.ink)
+        if (elapsed != null) {
+            Text("·", style = ClockText, color = c.ink3)
+            Text(ChatCopy.clock(elapsed), style = ClockText, color = c.ink3)
+        }
+        if (tokens != null && tokens > 0) {
+            Text("·", style = ClockText, color = c.ink3)
+            Text(ChatTokensCopy.amount(tokens), style = ClockText, color = c.ink3)
         }
     }
 }
@@ -1191,24 +1219,31 @@ private enum class Dot { Done, Current, Paused, Dim }
  * 前面的收成一行,点开看全部。
  */
 @Composable
-private fun StepLine(steps: List<StepRow>, actions: Map<Int, List<StepAction>>, live: Boolean, paused: Boolean) {
+private fun StepLine(steps: List<StepRow>, actions: Map<Int, List<StepAction>>, steers: List<String>, live: Boolean, paused: Boolean) {
     val c = MikaTheme.colors
     var all by rememberSaveable { mutableStateOf(!live) }
     // 哪几步点开了:按这一屏里的序号记,列表变长也不乱
     val expanded = remember { mutableStateMapOf<Int, Boolean>() }
+    // 步数多到值得收起来(超过这一屏列出的最近几步)时,才给「展开/收起」的开关
+    val collapsible = steps.size > ChatCopy.VISIBLE_STEPS
     val hidden = if (all) 0 else (steps.size - ChatCopy.VISIBLE_STEPS).coerceAtLeast(0)
     Column(
         Modifier.padding(top = 6.dp).fillMaxWidth().drawBehind {
             val x = StepRail.toPx()
-            drawLine(c.hair, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.5.dp.toPx())
+            drawLine(c.hair, Offset(x, 0f), Offset(x, size.height), strokeWidth = 1.dp.toPx())
         },
     ) {
-        if (hidden > 0) {
-            StepItem(ChatCopy.earlierSteps(hidden), "", Dot.Dim, current = false, link = true, onClick = { all = true })
+        // 顶部开关:折叠时「前面还有 N 步」,展开时「收起」,点一下来回切
+        if (collapsible) {
+            val label = if (all) stringResource(R.string.collapse) else ChatCopy.earlierSteps(hidden)
+            StepItem(label, "", Dot.Dim, current = false, link = true, onClick = { all = !all })
         }
-        steps.drop(hidden).forEachIndexed { i, row ->
+        val visible = steps.drop(hidden)
+        visible.forEachIndexed { i, row ->
             val key = hidden + i
             val isLast = key == steps.lastIndex
+            // 用户插话:右侧一步,插在完成的步骤和当前步之间
+            if (isLast) steers.forEach { SteerStepPill(it) }
             val dot = when {
                 live && isLast && paused -> Dot.Paused
                 live && isLast && row.state == StepState.Run -> Dot.Current
@@ -1223,6 +1258,12 @@ private fun StepLine(steps: List<StepRow>, actions: Map<Int, List<StepAction>>, 
                 // 有具体动作才点得开:点开看这一步实际做了什么、对什么、结果如何
                 onClick = if (detail.isEmpty()) null else ({ expanded[key] = !open }),
             )
+        }
+        // 还没有任何步骤时(刚把插话交给任务)只显示插话这一步
+        if (visible.isEmpty()) steers.forEach { SteerStepPill(it) }
+        // 底部「收起」:展开后步数一多,滑到最下面不用再爬回去也能收
+        if (all && collapsible) {
+            StepItem(stringResource(R.string.collapse), "", Dot.Dim, current = false, link = true, onClick = { all = false })
         }
     }
 }
@@ -1274,7 +1315,7 @@ private fun StepItem(
     }
 }
 
-/** 步骤点:8dp 实心;当前步外面一圈 3dp 的淡色光环。 */
+/** 步骤点:6dp 实心;当前步外面一圈 3dp 的淡色光环。 */
 @Composable
 private fun StepDot(dot: Dot) {
     val c = MikaTheme.colors
@@ -1287,13 +1328,13 @@ private fun StepDot(dot: Dot) {
     // 底色先盖住竖线,点才是干净的
     val bg = c.bg
     Box(
-        Modifier.size(14.dp).drawBehind {
+        Modifier.size(12.dp).drawBehind {
             val center = Offset(size.width / 2, size.height / 2)
             if (ring != null) {
-                drawCircle(bg, 7.dp.toPx(), center)
-                drawCircle(ring, 7.dp.toPx(), center)
+                drawCircle(bg, 6.dp.toPx(), center)
+                drawCircle(ring, 6.dp.toPx(), center)
             }
-            drawCircle(fill, 4.dp.toPx(), center)
+            drawCircle(fill, 3.dp.toPx(), center)
         },
     )
 }
@@ -1312,6 +1353,22 @@ internal fun Spinner(modifier: Modifier, spinning: Boolean, track: Color, head: 
                 Brush.sweepGradient(0f to Color.Transparent, 0.62f to Color.Transparent, 0.63f to head, 0.88f to head, 0.89f to Color.Transparent),
                 CircleShape,
             ),
+    )
+}
+
+/** 干活那行「活着」的信号:一颗呼吸的小点(淡→实、微微放大);停下来等你时变橙、静止。 */
+@Composable
+private fun BreathingDot(paused: Boolean, reduceMotion: Boolean) {
+    val c = MikaTheme.colors
+    val active = !paused && !reduceMotion
+    val breathe = if (active) rememberInfiniteTransition(label = "breathe").animateFloat(
+        0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe",
+    ).value else 1f
+    val scale = if (active) 0.8f + 0.38f * breathe else 1f
+    val alpha = if (active) 0.28f + 0.72f * breathe else 1f
+    Box(
+        Modifier.padding(top = 5.dp).size(9.dp).graphicsLayer { scaleX = scale; scaleY = scale; this.alpha = alpha }
+            .background(if (paused) c.warnSolid else c.accent, CircleShape),
     )
 }
 
@@ -1336,13 +1393,18 @@ fun takeoverReasonLabel(reason: String): Int? = when (reason) {
 @Composable
 private fun StatusCard(
     status: ExchangeStatus, stage: Takeover.Stage, vm: ChatViewModel, runId: String?,
+    elapsedMs: Long?, tokens: Long?,
     loadSource: suspend (String) -> EvidenceSource?, openSource: (String?, String?) -> Unit,
     openRun: (String) -> Unit,
     /** 回答的长按菜单认这一条用的(见 [MessageArea])。 */
     key: String,
+    /** 回答里的 /workspace 引用卡片点开要走这个对话的工作区。 */
+    conversationId: String?,
     recover: (Boolean) -> Unit = {},
     goal: String, openReport: (String) -> Unit, openPlayback: (String) -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var shareRequest by remember { mutableStateOf<ShareRequest?>(null) }
     ShareCardHost(shareRequest, onDone = { shareRequest = null })
     when (status) {
@@ -1394,8 +1456,7 @@ private fun StatusCard(
         is ExchangeStatus.Done -> Box(Modifier.padding(bottom = 12.dp)) {
             AnswerArea(key, status.answer, Modifier.fillMaxWidth().answerSurface()) {
                 Column {
-                    if (runId != null) Text(goal, Modifier.padding(bottom = 12.dp), style = MikaType.BodyStrong,
-                        color = MikaTheme.colors.ink, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    TurnMeta(elapsedMs, tokens)
                     status.unverifiedLine?.let { line ->
                         Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(18.dp).background(MikaTheme.colors.warnSoft, CircleShape), contentAlignment = Alignment.Center) {
@@ -1405,6 +1466,10 @@ private fun StatusCard(
                         }
                     }
                     MarkdownText(status.answer, AnswerText.copy(color = MikaTheme.colors.ink))
+                    OutputRefs(status.answer, conversationId) { item ->
+                        val id = conversationId ?: return@OutputRefs
+                        scope.launch { if (!AttachFiles.openSent(context, id, item.path)) Toast.makeText(context, AttachCopy.GONE, Toast.LENGTH_SHORT).show() }
+                    }
                     ReplyActions(runId, status.answer, goal, vm, { shareRequest = ShareRequest(goal, status.answer) }, openRun, loadSource, openSource, status.evidence, openReport, openPlayback)
                 }
             }
@@ -1427,7 +1492,13 @@ private fun StatusCard(
             status.summary?.let { summary ->
                 Box(Modifier.padding(top = 8.dp)) {
                     AnswerArea(key, summary, Modifier.fillMaxWidth().answerSurface()) {
-                        MarkdownText(summary, AnswerText.copy(color = MikaTheme.colors.ink))
+                        Column {
+                            MarkdownText(summary, AnswerText.copy(color = MikaTheme.colors.ink))
+                            OutputRefs(summary, conversationId) { item ->
+                                val id = conversationId ?: return@OutputRefs
+                                scope.launch { if (!AttachFiles.openSent(context, id, item.path)) Toast.makeText(context, AttachCopy.GONE, Toast.LENGTH_SHORT).show() }
+                            }
+                        }
                     }
                 }
             }
@@ -1889,8 +1960,8 @@ internal fun Composer(
                         Icon(MikaIcons.Mic, hint, Modifier.size(MikaSize.Icon), tint = c.ink)
                     }
                 }
-                // 任务在跑时停止一直在;写了字再多一个发送,发出去的话交给当前任务
-                if (busy) {
+                // 任务在跑时没字就停止;写了字停止让位给发送,发出去的话交给当前任务
+                if (busy && !canSend) {
                     Box(
                         Modifier.size(MikaSize.IconButton).background(c.ink, CircleShape).clip(CircleShape)
                             .clickable(onClickLabel = stringResource(R.string.chat_stop), onClick = onStop),
@@ -1961,10 +2032,15 @@ private val SuggestionText = MikaType.Body.copy(fontWeight = FontWeight.Medium)
 private val BubbleText = MikaType.Body
 /** 回答:正文字号,行距放宽到 1.7。 */
 private val AnswerText = MikaType.Body
-private val NowText = MikaType.Value.copy(fontWeight = FontWeight.Medium)
+private val NowText = MikaType.Value
+private val TurnNameText = MikaType.Label.copy(fontWeight = FontWeight.SemiBold)
 private val ClockText = MikaType.Hint.copy(fontFeatureSettings = "tnum")
-private val StepText = MikaType.Body
-private val StepCurrentText = MikaType.Body.copy(fontWeight = FontWeight.Medium)
+private val StepText = MikaType.Caption
+private val StepCurrentText = MikaType.Caption.copy(fontWeight = FontWeight.Medium)
+/** 插话收成的小字:14sp,比正文淡一点点。 */
+private val SupplementText = TextStyle(fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.Normal)
+/** 干活中插话的右侧胶囊:比用户气泡小一圈,右下尾角。 */
+private val SteerPillShape = RoundedCornerShape(14.dp, 14.dp, 5.dp, 14.dp)
 private val NoteText = MikaType.Hint
 private val DoneText = MikaType.Caption
 private val NeedTitle = MikaType.Value.copy(fontWeight = FontWeight.SemiBold)

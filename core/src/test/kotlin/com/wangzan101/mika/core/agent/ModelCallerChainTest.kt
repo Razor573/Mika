@@ -13,17 +13,17 @@ import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.testing.answerReply
 import com.wangzan101.mika.core.tool.FakeScreen
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 
 /** 项目 3 的链行为:主模型失败自动换备援、换过去就留在备援、不该换的原样失败。 */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ModelCallerChainTest {
-    @Before @After fun resetGovernor() = com.wangzan101.mika.core.net.RateLimitGovernor.reset()
 
     private class Scripted(override val name: String, var fail: ModelError?) : ChatModel {
         override val capabilities = Capabilities(toolCalls = true, vision = true, contextTokens = 32_000, reasoning = false)
@@ -72,6 +72,28 @@ class ModelCallerChainTest {
         try { caller.ask(history, emptyList(), step = 1) } catch (e: ModelError) { thrown = e }
         assertEquals(true, thrown is ModelError.QuotaExceeded)
         assertEquals(1, main.calls)
+    }
+
+    @Test fun rateLimitWithNoRetriesFallsToFallbackImmediately() = runTest {
+        val main = Scripted("main-rate-limit-none", ModelError.RateLimited(300_000L))
+        val backup = Scripted("backup-rate-limit-none", null)
+        val caller = caller(main, listOf(backup))
+        caller.ask(history, emptyList(), step = 1)
+        assertEquals(0L, currentTime)
+        assertEquals(1, main.calls)
+        assertEquals(1, backup.calls)
+    }
+
+    @Test fun rateLimitWithFallbackDoesNotWaitForTheFullRetryAfter() = runTest {
+        val main = Scripted("main-rate-limit-fallback", ModelError.RateLimited(30_000L))
+        val backup = Scripted("backup-rate-limit-fallback", null)
+        val retry = RetryPolicy(maxRetries = 3, jitter = { 0.0 })
+        val caller = ModelCaller(main, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, retry, {}, { 0 }, fallbacks = listOf(backup))
+            .also { it.reset("") }
+        caller.ask(history, emptyList(), step = 1)
+        assertEquals(0L, currentTime)
+        assertEquals(1, main.calls)
+        assertEquals(1, backup.calls)
     }
 
     @Test fun chainExhaustionSurfacesPrimaryError() = runTest {

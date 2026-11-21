@@ -57,10 +57,10 @@ class ScreenElementTableTest {
         }
     }
 
-    @Test fun firstObservationSupportsRefTapAndRawSourceRemainsInRecord() = runTest {
-        val original = observeAndTap(false)
-        val packed = observeAndTap(true)
-        assertTrue(TokenEstimate.of(packed) < TokenEstimate.of(original))
+    @Test fun firstObservationSupportsRefTapAndNeverPacksTablesInAgentLoop() = runTest {
+        val withDefault = observeAndTap(false)
+        val withTablesAtBirth = observeAndTap(true)
+        assertEquals(withDefault, withTablesAtBirth)
     }
 
     private suspend fun observeAndTap(enabled: Boolean): String {
@@ -77,8 +77,12 @@ class ScreenElementTableTest {
                     1 -> Part.ToolCall("read", "phone_observe", "{}")
                     2 -> {
                         val s = Json.parseToJsonElement(result!!.content).jsonObject
-                        assertEquals(enabled, "elementTables" in s); assertEquals(!enabled, "elements" in s)
-                        val target = (if (enabled) unpack(s) else s.getValue("elements").jsonArray).single { it.jsonObject["name"] == JsonPrimitive("选项7") }.jsonObject
+                        assertFalse("AgentLoop must never emit elementTables", "elementTables" in s)
+                        assertTrue("AgentLoop must always emit raw elements", "elements" in s)
+                        val elements = s.getValue("elements").jsonArray
+                        val firstEl = elements.first().jsonObject
+                        assertTrue("center" in firstEl && "size" in firstEl)
+                        val target = elements.single { it.jsonObject["name"] == JsonPrimitive("选项7") }.jsonObject
                         Part.ToolCall("tap", "phone_tap", buildJsonObject {
                             put("ref",target.getValue("ref")); put("snapshotId",s.getValue("snapshotId"))
                         }.toString())

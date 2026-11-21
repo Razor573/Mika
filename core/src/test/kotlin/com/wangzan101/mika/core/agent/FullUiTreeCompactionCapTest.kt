@@ -5,21 +5,28 @@ import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
+import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.StreamingChatModel
 import com.wangzan101.mika.core.model.ToolSpec
+import com.wangzan101.mika.core.model.Usage
+import com.wangzan101.mika.core.record.RunEvent
+import com.wangzan101.mika.core.record.RunSink
 import com.wangzan101.mika.core.testing.TOOLS
 import com.wangzan101.mika.core.testing.answerReply
 import com.wangzan101.mika.core.tool.FakeScreen
+import com.wangzan101.mika.core.uistate.ActionResult
 import com.wangzan101.mika.core.uistate.ScreenPort
 import com.wangzan101.mika.core.uistate.ScreenSnapshot
 import com.wangzan101.mika.core.uistate.UiElement
 import com.wangzan101.mika.core.uistate.UiTreeJson
 import com.wangzan101.mika.core.uistate.UiTreeNode
 import com.wangzan101.mika.core.uistate.UiWindowTree
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
@@ -30,6 +37,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class FullUiTreeCompactionCapTest {
     private var seq = 0
@@ -58,6 +66,7 @@ class FullUiTreeCompactionCapTest {
             role = "TextView",
             bounds = listOf(40, 120, 400, 180),
             text = "Static section header",
+            hintText = "Section subtitle",
             resourceId = "com.example:id/header",
         )
         val decorativeIcon = UiTreeNode(
@@ -108,6 +117,8 @@ class FullUiTreeCompactionCapTest {
         assertEquals(3, leaves.size)
         assertEquals("TextView", leaves[0]["role"]!!.jsonPrimitive.content)
         assertEquals("Static section header", leaves[0]["text"]!!.jsonPrimitive.content)
+        assertEquals("Section subtitle", leaves[0]["hintText"]!!.jsonPrimitive.content)
+        assertEquals("com.example:id/header", leaves[0]["resourceId"]!!.jsonPrimitive.content)
         assertEquals(listOf(40, 120, 400, 180), leaves[0]["bounds"]!!.jsonArray.map { it.jsonPrimitive.int })
         assertFalse(leaves[0].containsKey("ref"))
 
@@ -255,11 +266,13 @@ class FullUiTreeCompactionCapTest {
         assertTrue(listOf(12, 14, 15).all { n -> keptObs.any { "mixed-tree-$n" in it } })
     }
 
-    @Test fun speedFlagsTablesAtBirthKeepsFullStructuralAndNonInteractiveTreeWhilePackingElementTables() = runTest {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun agentLoopNeverProducesElementTablesAndPreservesFullTreeAndPrefixCache() = runTest {
         val labelNode = UiTreeNode(
             role = "TextView",
             bounds = listOf(40, 120, 400, 180),
             text = "Static section header",
+            hintText = "Section subtitle",
             resourceId = "com.example:id/header",
         )
         val decorativeIcon = UiTreeNode(
@@ -267,14 +280,20 @@ class FullUiTreeCompactionCapTest {
             bounds = listOf(420, 120, 480, 180),
             description = "Info badge",
         )
+        val editNode = UiTreeNode(
+            role = "EditText",
+            bounds = listOf(40, 200, 1040, 290),
+            hintText = "Search settings",
+            resourceId = "com.example:id/search_box",
+        )
         val elements = (1..6).map { i ->
             UiElement(
                 ref = "@e$i",
                 role = "Button",
                 name = "Action Option $i",
                 centerX = 540,
-                centerY = 200 + i * 120,
-                bounds = listOf(40, 150 + i * 120, 1040, 250 + i * 120),
+                centerY = 240 + i * 120,
+                bounds = listOf(40, 190 + i * 120, 1040, 290 + i * 120),
                 resourceId = "com.example:id/opt_$i",
                 clickable = true,
                 editable = false,
@@ -288,16 +307,18 @@ class FullUiTreeCompactionCapTest {
             role = "LinearLayout",
             bounds = listOf(20, 100, 1060, 1100),
             resourceId = "com.example:id/card",
-            children = listOf(labelNode, decorativeIcon) + interactiveNodes,
+            children = listOf(labelNode, decorativeIcon, editNode) + interactiveNodes,
         )
         val rootContainer = UiTreeNode(
             role = "FrameLayout",
             bounds = listOf(0, 0, 1080, 2400),
             children = listOf(cardContainer),
         )
-        val screen = object : ScreenPort by FakeScreen() {
+        var snapCount = 0
+        val baseScreen = FakeScreen().apply { result = ActionResult.Ok(changed = true) }
+        val screen = object : ScreenPort by baseScreen {
             override suspend fun snapshot() = ScreenSnapshot(
-                snapshotId = "snap-packed",
+                snapshotId = "snap-${++snapCount}",
                 packageName = "com.example",
                 elements = elements,
                 width = 1080,
@@ -305,32 +326,178 @@ class FullUiTreeCompactionCapTest {
                 windows = listOf(UiWindowTree(1, "application", 1, "Settings", "com.example", active = true, focused = true, nodes = listOf(rootContainer))),
             )
         }
-        val model = FakeModel(
-            ModelReply(listOf(Part.ToolCall("o1", "phone_observe", "{}")), StopReason.ToolUse, null),
-            answerReply("done"),
-            contextTokens = 1_000_000,
-        )
-        val end = AgentLoop(model, toolDispatcher(screen), "BASE", flags = SpeedFlags(tablesAtBirth = true)).run("inspect screen")
-        assertTrue(end is TaskState.Succeeded)
 
-        val toolContent = model.requests[1].flatMap { it.parts }.filterIsInstance<Part.ToolResult>().single().content
-        val root = Json.parseToJsonElement(toolContent).jsonObject
-        val screenObj = (root["screen"] as? kotlinx.serialization.json.JsonObject) ?: root
-        assertTrue(toolContent, "elementTables" in screenObj)
-        assertFalse(toolContent, "elements" in screenObj)
-        val treeArr = screenObj["tree"]!!.jsonArray
-        assertEquals(1, treeArr.size)
-        val frameJson = treeArr[0].jsonObject["nodes"]!!.jsonArray.single().jsonObject
-        assertEquals("FrameLayout", frameJson["role"]!!.jsonPrimitive.content)
-        val linearJson = frameJson["children"]!!.jsonArray.single().jsonObject
-        assertEquals("LinearLayout", linearJson["role"]!!.jsonPrimitive.content)
-        assertEquals("com.example:id/card", linearJson["resourceId"]!!.jsonPrimitive.content)
-        val children = linearJson["children"]!!.jsonArray.map { it.jsonObject }
-        assertEquals("TextView", children[0]["role"]!!.jsonPrimitive.content)
-        assertEquals("Static section header", children[0]["text"]!!.jsonPrimitive.content)
-        assertEquals(listOf(40, 120, 400, 180), children[0]["bounds"]!!.jsonArray.map { it.jsonPrimitive.int })
-        assertEquals("ImageView", children[1]["role"]!!.jsonPrimitive.content)
-        assertEquals("Info badge", children[1]["description"]!!.jsonPrimitive.content)
-        assertEquals(8, children.size)
+        for (flags in listOf(SpeedFlags(), SpeedFlags(tablesAtBirth = true))) {
+            snapCount = 0
+            val model = FakeModel(
+                ModelReply(listOf(Part.ToolCall("o1", "phone_observe", "{}")), StopReason.ToolUse, null),
+                ModelReply(listOf(Part.ToolCall("t1", "phone_tap", """{"ref":"@e1","snapshotId":"snap-1"}""")), StopReason.ToolUse, null),
+                ModelReply(listOf(Part.ToolCall("t2", "phone_tap", """{"ref":"@e2","snapshotId":"snap-2"}""")), StopReason.ToolUse, null),
+                ModelReply(listOf(Part.ToolCall("t3", "phone_tap", """{"ref":"@e3","snapshotId":"snap-3"}""")), StopReason.ToolUse, null),
+                answerReply("done"),
+                contextTokens = 1_000_000,
+            )
+            val end = AgentLoop(model, toolDispatcher(screen), "BASE", flags = flags).run("inspect screen")
+            assertTrue(end is TaskState.Succeeded)
+            assertEquals(5, model.requests.size)
+
+            for (i in 1 until model.requests.size) {
+                val prev = model.requests[i - 1]
+                val curr = model.requests[i]
+                assertTrue("prefix shrank unexpectedly at step $i", curr.size >= prev.size)
+                assertEquals("prefix mutated before compaction at step $i", prev, curr.subList(0, prev.size))
+            }
+
+            val toolContent = model.requests[1].flatMap { it.parts }.filterIsInstance<Part.ToolResult>().single().content
+            val root = Json.parseToJsonElement(toolContent).jsonObject
+            val screenObj = (root["screen"] as? kotlinx.serialization.json.JsonObject) ?: root
+            assertFalse(toolContent, "elementTables" in screenObj)
+            assertTrue(toolContent, "elements" in screenObj)
+            val firstEl = screenObj["elements"]!!.jsonArray[0].jsonObject
+            assertTrue(toolContent, "center" in firstEl && "size" in firstEl)
+            val treeArr = screenObj["tree"]!!.jsonArray
+            assertEquals(1, treeArr.size)
+            val frameJson = treeArr[0].jsonObject["nodes"]!!.jsonArray.single().jsonObject
+            assertEquals("FrameLayout", frameJson["role"]!!.jsonPrimitive.content)
+            val linearJson = frameJson["children"]!!.jsonArray.single().jsonObject
+            assertEquals("LinearLayout", linearJson["role"]!!.jsonPrimitive.content)
+            assertEquals("com.example:id/card", linearJson["resourceId"]!!.jsonPrimitive.content)
+            val children = linearJson["children"]!!.jsonArray.map { it.jsonObject }
+            assertEquals("TextView", children[0]["role"]!!.jsonPrimitive.content)
+            assertEquals("Static section header", children[0]["text"]!!.jsonPrimitive.content)
+            assertEquals("Section subtitle", children[0]["hintText"]!!.jsonPrimitive.content)
+            assertEquals("com.example:id/header", children[0]["resourceId"]!!.jsonPrimitive.content)
+            assertEquals(listOf(40, 120, 400, 180), children[0]["bounds"]!!.jsonArray.map { it.jsonPrimitive.int })
+            assertEquals("ImageView", children[1]["role"]!!.jsonPrimitive.content)
+            assertEquals("Info badge", children[1]["description"]!!.jsonPrimitive.content)
+            assertEquals("EditText", children[2]["role"]!!.jsonPrimitive.content)
+            assertEquals("Search settings", children[2]["hintText"]!!.jsonPrimitive.content)
+            assertEquals(9, children.size)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun fortyPlusStepV58VerificationRunProducesUsageJsonlWithBoundedRetryAndPrefixCache() = runTest {
+        val labelNode = UiTreeNode(
+            role = "TextView",
+            bounds = listOf(40, 120, 400, 180),
+            text = "Feed header",
+            hintText = "Updated",
+            resourceId = "com.example:id/feed_header",
+        )
+        val elements = (1..4).map { i ->
+            UiElement(
+                ref = "@e$i",
+                role = "Button",
+                name = "Item $i",
+                centerX = 540,
+                centerY = 200 + i * 120,
+                bounds = listOf(40, 150 + i * 120, 1040, 250 + i * 120),
+                resourceId = "com.example:id/item_$i",
+                clickable = true,
+                editable = false,
+                scrollable = false,
+            )
+        }
+        val rootContainer = UiTreeNode(
+            role = "FrameLayout",
+            bounds = listOf(0, 0, 1080, 2400),
+            children = listOf(labelNode) + elements.map { el ->
+                UiTreeNode(role = el.role, bounds = el.bounds, ref = el.ref, text = el.name, resourceId = el.resourceId, clickable = true)
+            },
+        )
+        var snapId = 0
+        val baseScreen = FakeScreen().apply { result = ActionResult.Ok(changed = true) }
+        val screen = object : ScreenPort by baseScreen {
+            override suspend fun snapshot() = ScreenSnapshot(
+                snapshotId = "v58-${++snapId}",
+                packageName = "com.example",
+                elements = elements,
+                width = 1080,
+                height = 2400,
+                windows = listOf(UiWindowTree(1, "application", 1, "Feed", "com.example", active = true, focused = true, nodes = listOf(rootContainer))),
+            )
+        }
+
+        val totalToolSteps = 42
+        val script = mutableListOf<Any>()
+        for (step in 1..totalToolSteps) {
+            val usage = Usage(
+                inputTokens = 1_200 + step * 350,
+                outputTokens = 64,
+                cachedInputTokens = if (step % ContextCompressor.COMPACT_EVERY_STEPS == 1) 0 else 800 + step * 250,
+                cacheReported = true,
+            )
+            if (step == 3) {
+                script += ModelError.RateLimited(null)
+                script += ModelError.RateLimited(null)
+            }
+            val part = if (step % 15 == 1) {
+                Part.ToolCall("s$step", "phone_observe", "{}")
+            } else {
+                Part.ToolCall("s$step", "phone_tap", """{"x":500,"y":500}""")
+            }
+            script += ModelReply(listOf(part), StopReason.ToolUse, usage)
+        }
+        script += ModelReply(
+            listOf(Part.Text("done")),
+            StopReason.EndTurn,
+            Usage(inputTokens = 16_000, outputTokens = 32, cachedInputTokens = 14_000, cacheReported = true),
+        )
+
+        val model = FakeModel(*script.toTypedArray(), contextTokens = 1_000_000)
+        val events = mutableListOf<RunEvent>()
+        val end = AgentLoop(
+            model,
+            toolDispatcher(screen),
+            "BASE",
+            maxSteps = 60,
+            sink = object : RunSink {
+                override fun event(e: RunEvent) {
+                    events += e
+                }
+            },
+            flags = SpeedFlags(tablesAtBirth = true),
+            clock = { currentTime },
+            retry = RetryPolicy(jitter = { 1.0 }),
+        ).run("run 42 steps for v58 verification")
+        assertTrue("expected Succeeded, got $end", end is TaskState.Succeeded)
+
+        val modelReplies = events.filterIsInstance<RunEvent.ModelReply>()
+        assertEquals(43, modelReplies.size)
+        val step3 = modelReplies.first { it.step == 3 }
+        assertEquals(3_000L, step3.retryWaitMs)
+        assertTrue(modelReplies.filter { it.step > 3 }.all { it.retryWaitMs == 0L })
+
+        val retryStates = events.filterIsInstance<RunEvent.State>().filter { it.name == "model_retry" }
+        assertEquals(2, retryStates.size)
+        assertTrue(retryStates[0].detail.contains("1000ms"))
+        assertTrue(retryStates[1].detail.contains("2000ms"))
+
+        val compressed = events.filterIsInstance<RunEvent.Compressed>()
+        assertTrue("expected 15-step compactions across 43 steps", compressed.size >= 2)
+
+        var shrinkCount = 0
+        for (i in 1 until model.requests.size) {
+            val prev = model.requests[i - 1]
+            val curr = model.requests[i]
+            if (curr.size < prev.size) {
+                shrinkCount++
+            } else {
+                assertEquals("prefix changed without compaction at request $i", prev, curr.subList(0, prev.size))
+            }
+        }
+        assertEquals("message shrinks should match compactions", compressed.size, shrinkCount)
+
+        for (req in model.requests) {
+            val toolContents = req.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
+            assertTrue(toolContents.none { "elementTables" in it })
+        }
+
+        val outFile = File.createTempFile("mika-usage-v58-check", ".jsonl").apply { deleteOnExit() }
+        val lines = events.map { Json.encodeToString(RunEvent.serializer(), it) }
+        outFile.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+        assertTrue(outFile.exists() && outFile.length() > 0L)
+        assertTrue(lines.count { "\"type\":\"model_reply\"" in it } == 43)
     }
 }

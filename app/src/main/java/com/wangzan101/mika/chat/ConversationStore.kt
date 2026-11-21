@@ -8,6 +8,7 @@ import com.wangzan101.mika.core.usage.ConversationUsage
 import com.wangzan101.mika.core.agent.Turn
 import com.wangzan101.mika.settings.PersonaStore
 import com.wangzan101.mika.core.chat.GeneratedAudio
+import com.wangzan101.mika.core.chat.GeneratedPhoto
 import com.wangzan101.mika.core.memory.MemoryNote
 import com.wangzan101.mika.core.memory.NoteKind
 import com.wangzan101.mika.core.skills.SkillNote
@@ -176,10 +177,15 @@ class ConversationStore(
                 val id = f.nameWithoutExtension
                 val archivedAt = archivedAt(id)
                 if (!includeArchived && archivedAt != null) return@mapNotNull null
-                ConversationSummary(id, title(id) ?: first, updatedAt, pinnedAt(id), pageOrigin(id), branchOrigin(id), archivedAt, restoredAt(id))
+                ConversationSummary(id, title(id) ?: first, updatedAt, pinnedAt(id), pageOrigin(id), branchOrigin(id), archivedAt, restoredAt(id), projectId(id))
             }
         return (unsaved + saved).drop(offset).take(limit).toList()
     }
+
+    /** 只读控制台用:最近的对话(不含归档),连同轮数一起返回。 */
+    @Synchronized
+    fun listForConsole(limit: Int): List<ConversationSummary> =
+        listPage(0, limit).map { s -> s.copy(turnCount = read(file(s.id))?.size ?: 0) }
 
     private data class FirstMessage(val modified: Long, val size: Long, val text: String?)
     private val firstMessages = mutableMapOf<String, FirstMessage>()
@@ -224,7 +230,8 @@ class ConversationStore(
         val main = file(conversationId).name
         val metadata = setOf(titleFile(conversationId).name, pinFile(conversationId).name,
             pageFile(conversationId).name, branchFile(conversationId).name, archiveFile(conversationId).name,
-            restoreFile(conversationId).name, personaFile(conversationId).name, personaFile(conversationId).name + ".tmp")
+            restoreFile(conversationId).name, personaFile(conversationId).name, personaFile(conversationId).name + ".tmp",
+            projectFile(conversationId).name, projectFile(conversationId).name + ".tmp")
         val files = dir.listFiles { f -> f.name == main || f.name.startsWith("$main.") || f.name in metadata }
             ?: if (Files.notExists(dir.toPath())) emptyArray() else throw IOException("Cannot list conversation files")
         // Leave the history in place if any of its companion files cannot be removed.
@@ -451,6 +458,44 @@ class ConversationStore(
     }
 
     /**
+     * 这个对话所属的项目;没有、读不到、id 不合法为 null。放在 `<id>.project` 里。
+     * 项目被删后如果旁文件意外还在,调用方经 [WorkspaceResolver] 核对后再用。
+     */
+    @Synchronized
+    fun projectId(conversationId: String): String? =
+        runCatching { projectFile(conversationId).takeIf { it.isFile }?.readText()?.trim() }
+            .getOrNull()?.takeIf(ProjectStore::isValidId)
+
+    /** 绑定对话所属的项目;null 表示解除绑定(删掉旁文件)。删掉的对话或非法项目编号不动。写进去了返回 true。 */
+    @Synchronized
+    fun setProject(conversationId: String, projectId: String?): Boolean {
+        if (safe(conversationId) in deleted) return false
+        val f = projectFile(conversationId)
+        if (projectId == null) {
+            val existed = f.exists()
+            val ok = !existed || f.delete()
+            if (existed && ok) _changes.tryEmit(conversationId)
+            return ok
+        }
+        if (!ProjectStore.isValidId(projectId)) return false
+        dir.mkdirs()
+        val tmp = File(dir, "${f.name}.tmp")
+        val ok = runCatching {
+            tmp.writeText(projectId)
+            try {
+                Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            } catch (_: Exception) {
+                if (!tmp.renameTo(f)) {
+                    f.writeText(projectId)
+                    tmp.delete()
+                }
+            }
+        }.isSuccess
+        if (ok) _changes.tryEmit(conversationId)
+        return ok
+    }
+
+    /**
      * 把 [sourceId] 的轮次复制成新对话 [targetId],复制到 [throughTurn](0 起,含在内)为止。
      * 源不存在、源文件损坏、[throughTurn] 越界、目标已有对话文件时返回 false,什么都不写。
      * [title] 非空白时写成新对话标题;[origin] 非空时写 `<targetId>.branch`。
@@ -490,8 +535,9 @@ class ConversationStore(
         write(targetId, records.take(if (includeTurn) turn + 1 else turn))
         title?.let { writeTitle(targetId, it) }
         pageOrigin(sourceId)?.let { setPageOrigin(targetId, it) }
-        // 人格跟着对话走;切换记录不复制,新对话从当前这一份开始
+        // 人格与项目归属跟着对话走;切换记录不复制,新对话从当前这一份开始
         persona(sourceId)?.let { setPersona(targetId, it.personaId) }
+        projectId(sourceId)?.let { setProject(targetId, it) }
         origin?.let { writeBranchOrigin(targetId, it) }
         return true
     }
@@ -528,6 +574,10 @@ class ConversationStore(
     /** 文件损坏时当作空对话,不让它挡住新任务。 */
     @Synchronized
     fun turns(conversationId: String): List<Turn> = records(conversationId).map { it.first }
+
+    /** 这个对话存过内容(有对话文件);空编号、读不到为 false。 */
+    @Synchronized
+    fun exists(conversationId: String): Boolean = file(conversationId).isFile
 
     /** 每一轮连同这一轮导出的文件(文件卡片)。 */
     @Synchronized
@@ -583,6 +633,7 @@ class ConversationStore(
                 keptPageClosed = field("keptPageClosed"),
                 atMs = field("atMs")?.toLongOrNull(),
                 audios = objects(o, "audios").mapNotNull(::audioOf),
+                photos = objects(o, "photos").mapNotNull(::photoOf),
                 verified = field("verified")?.toBooleanStrictOrNull(),
                 remoteTaskId = field("remoteTaskId"),
                 outcomeSystemType = field("outcomeSystemType"),
@@ -606,6 +657,11 @@ class ConversationStore(
     private fun audioOf(o: JsonObject): GeneratedAudio? {
         val path = str(o, "path") ?: return null
         return GeneratedAudio(path, str(o, "durationMs")?.toLongOrNull(), str(o, "text"), str(o, "atMs")?.toLongOrNull())
+    }
+
+    private fun photoOf(o: JsonObject): GeneratedPhoto? {
+        val path = str(o, "path") ?: return null
+        return GeneratedPhoto(path, str(o, "width")?.toIntOrNull() ?: 0, str(o, "height")?.toIntOrNull() ?: 0, str(o, "prompt"), str(o, "atMs")?.toLongOrNull())
     }
 
     @Synchronized
@@ -678,6 +734,13 @@ class ConversationStore(
                         a.text?.let { t -> put("text", t) }; a.atMs?.let { t -> put("atMs", t) }
                     }
                 }))
+                if (it.photos.isNotEmpty()) put("photos", JsonArray(it.photos.map { p ->
+                    buildJsonObject {
+                        put("path", p.path); put("width", p.width); put("height", p.height)
+                        p.prompt?.let { text -> put("prompt", text) }
+                        p.atMs?.let { t -> put("atMs", t) }
+                    }
+                }))
                 if (it.skillNotes.isNotEmpty()) put("skillNotes", JsonArray(it.skillNotes.map { n ->
                     buildJsonObject { put("text", n.text); n.draftId?.let { d -> put("draftId", d) }; n.suspended?.let { x -> put("suspended", x) } }
                 }))
@@ -723,6 +786,7 @@ class ConversationStore(
     private fun archiveFile(id: String) = File(dir, "${safe(id)}.archive")
     private fun restoreFile(id: String) = File(dir, "${safe(id)}.restored")
     private fun personaFile(id: String) = File(dir, "${safe(id)}.persona")
+    private fun projectFile(id: String) = File(dir, "${safe(id)}.project")
 
     /** 用户此刻在哪个对话,见 [CurrentChat];不是 `.json`,不进 [list]。 */
     private fun currentFile() = File(dir, "current")
@@ -739,6 +803,10 @@ data class ConversationSummary(
     val archivedAt: Long? = null,
     /** 最近一次手动取消归档的时间;自动归档给它一段宽限。 */
     val restoredAt: Long? = null,
+    /** 所属项目编号;独立对话为 null。 */
+    val projectId: String? = null,
+    /** 这个对话已有的轮数;只读控制台查询时填,普通列表为 0。 */
+    val turnCount: Int = 0,
 )
 
 /** 对话用的人格和切换记录;人格本身在 PersonaStore 里,这里只存 id。 */

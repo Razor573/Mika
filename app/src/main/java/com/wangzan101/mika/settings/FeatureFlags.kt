@@ -44,7 +44,16 @@ class FeatureFlags(private val prefs: SharedPreferences) {
 
     /** 还没做过的默认值升级(见 [SPEED_UPGRADES])各做一次;升级之后用户手动关掉就保持关闭。 */
     fun speedFlags(): SpeedFlags {
-        val flags = prefs.getString(SPEED_FLAGS, null)?.let { runCatching { SpeedFlags.parse(it) }.getOrNull() } ?: SpeedFlags.OFF
+        var flags = prefs.getString(SPEED_FLAGS, null)?.let { runCatching { SpeedFlags.parse(it) }.getOrNull() } ?: SpeedFlags.OFF
+        // Revert v57 devices that had speed_defaults_applied_v5 applied back to tablesAtBirth = false.
+        if (prefs.contains(SPEED_V5_KEY)) {
+            if (flags.tablesAtBirth) {
+                flags = flags.copy(tablesAtBirth = false)
+                prefs.edit().putString(SPEED_FLAGS, flags.describe()).remove(SPEED_V5_KEY).commit()
+            } else {
+                prefs.edit().remove(SPEED_V5_KEY).commit()
+            }
+        }
         val pending = SPEED_UPGRADES.filter { (key, _) -> !prefs.getBoolean(key, false) }
         if (pending.isEmpty()) return flags
         val upgraded = pending.fold(flags) { f, (_, upgrade) -> upgrade(f) }
@@ -433,16 +442,15 @@ class FeatureFlags(private val prefs: SharedPreferences) {
         /** 定时任务最长运行时间可选的几档(分钟)。 */
         val TRIGGER_RUN_MINUTES = listOf(15, 30, 60, 120)
         private const val SPEED_FLAGS = "speed_flags"
+        private const val SPEED_V5_KEY = "speed_defaults_applied_v5"
         /**
          * 提速开关默认值的升级,按先后各做一次(键记下做过没有):v2 打开分级读屏、连续操作、按需看图;
-         * v3 打开经验回放(学习改看结局判定之后路线才记得下来);v4 打开大小模型分工(没配轻量模型时空转,配了就省钱);
-         * v5 打开界面元素压成表(重复字段首屏压成列,省 token)。
+         * v3 打开经验回放(学习改看结局判定之后路线才记得下来);v4 打开大小模型分工(没配轻量模型时空转,配了就省钱)。
          */
         private val SPEED_UPGRADES: List<Pair<String, (SpeedFlags) -> SpeedFlags>> = listOf(
             "speed_defaults_applied_v2" to { f -> f.copy(inlineScreen = true, batchSteps = true, adaptiveVision = true) },
             "speed_defaults_applied_v3" to { f -> f.copy(replay = true) },
             "speed_defaults_applied_v4" to { f -> f.copy(lightSteps = true) },
-            "speed_defaults_applied_v5" to { f -> f.copy(tablesAtBirth = true) },
         )
         private const val PARALLEL_MAX = "parallel_max"
         private const val TASK_STEP_LIMIT = "task_step_limit"

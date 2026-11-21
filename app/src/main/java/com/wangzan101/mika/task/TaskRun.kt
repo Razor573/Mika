@@ -19,7 +19,9 @@ import com.wangzan101.mika.ui.StatusCopy
 import com.wangzan101.mika.cap.sandbox.SandboxState
 import com.wangzan101.mika.cap.sandbox.AndroidSandbox
 import com.wangzan101.mika.cap.sandbox.SandboxDirs
+import com.wangzan101.mika.cap.sandbox.WorkspaceKey
 import com.wangzan101.mika.chat.SharedFile
+import com.wangzan101.mika.chat.WorkspaceResolver
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
 import android.os.Build
@@ -31,6 +33,7 @@ import android.view.Display
 import com.wangzan101.mika.BuildConfig
 import com.wangzan101.mika.cap.phone.a11y.AndroidScreen
 import com.wangzan101.mika.cap.phone.a11y.AppCopyReader
+import com.wangzan101.mika.cap.phone.a11y.CalendarBulkWriter
 import com.wangzan101.mika.cap.phone.a11y.LazyPhoneScreen
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.cap.phone.a11y.PhoneUnavailable
@@ -40,6 +43,7 @@ import com.wangzan101.mika.cap.root.RootCommands
 import com.wangzan101.mika.cap.phone.a11y.launchableApps
 import com.wangzan101.mika.confirm.ConfirmationNotifier
 import com.wangzan101.mika.MikaApp
+import com.wangzan101.mika.i18n.AppLanguage
 import com.wangzan101.mika.core.action.ConfirmChoice
 import com.wangzan101.mika.core.agent.TaskStages
 import com.wangzan101.mika.core.agent.AgentLoop
@@ -207,6 +211,9 @@ class TaskRun(
     private fun mcpEndpoints(): List<com.wangzan101.mika.core.cap.mcp.McpConnection> = buildList {
         mcpConnections?.let { addAll(it.connections) }
     }
+    /** 本次任务使用的沙箱工作区(同项目对话共用 `p:<projectId>`,其余沿用对话工作区)。 */
+    private val workspaceKey: WorkspaceKey by lazy { WorkspaceResolver.resolveFor(service, conversationId) }
+
     /** 自己的一份;显示中时同步写到服务对外的那份。[show] 时整份抄过去。 */
     /** App 给的模型来源、评测钩子、屏幕画面的开关。 */
     private val env = TaskEnvironment.of(service)
@@ -254,6 +261,7 @@ class TaskRun(
         phone = { phone }, takeover = { takeover }, gate = { gate },
         handoverRef = { handoverRef }, sideScope = { sideScope }, sandbox = { sandbox },
         setMuteFailedFor = { muteFailedFor = it },
+        workspaceKey = { workspaceKey },
     )
 
     val state: StateFlow<TaskState> get() = runState.state
@@ -262,6 +270,8 @@ class TaskRun(
     val sharedFiles: StateFlow<List<SharedFile>> get() = runState.sharedFiles
     /** 本任务生成并留在工作区里的音频;结束时随这一轮存进对话。 */
     val audios: StateFlow<List<com.wangzan101.mika.core.chat.GeneratedAudio>> get() = runState.audios
+    /** 本任务生成并留在工作区里的图;结束时随这一轮存进对话。 */
+    val photos: StateFlow<List<com.wangzan101.mika.core.chat.GeneratedPhoto>> get() = runState.photos
     val takeoverStage: StateFlow<Takeover.Stage> get() = runState.takeoverStage
     val frames: StateFlow<Bitmap?> get() = runState.frames
     /** 个人助手的缩略图只收本任务获准展示的手机画面。 */
@@ -396,13 +406,46 @@ class TaskRun(
         val choice = com.wangzan101.mika.voice.SpeechSettings.get(service).choice.value as? com.wangzan101.mika.voice.SpeechChoice.Provider
             ?: return@lazy null
         if (provenance.origin != RunOrigin.Ui) null
-        else com.wangzan101.mika.media.AndroidTranscribePort(service, conversationId, choice)
+        else com.wangzan101.mika.media.AndroidTranscribePort(service, conversationId, choice) { workspaceKey }
     }
 
     /**
      * 本任务的音频端口:用户配置并打开了声音模型、且这是手机上开始的任务时才建。
      * 定时、远程、子任务、条件检查没有它,音频工具也就不会发给模型。
      */
+    private val imageSettings by lazy { com.wangzan101.mika.settings.ImageModelSettings.get(service) }
+
+    /** 本任务的图片端口:用户配置并打开了图片模型、且这是手机上开始的任务时才建。 */
+    private val imagePort by lazy {
+        val state = imageSettings.state.value
+        val choice = state.choice
+        if (!state.enabled || choice == null || provenance.origin != RunOrigin.Ui) null
+        else imageSettings.capabilities()?.let { caps ->
+            com.wangzan101.mika.settings.ProviderStore.get(service).imageModel(choice, caps)?.let { model ->
+                com.wangzan101.mika.media.AndroidImagePort(service, conversationId, model, caps, onGenerated = runState::addPhoto, onSaved = runState::addSaved)
+            }
+        }
+    }
+
+    /** 把工作区里的一张图复制成别的 App 可读的 content URI(分享用);越界、不是图片、太大时为 null。 */
+    private suspend fun shareWorkspaceImage(path: String): com.wangzan101.mika.media.ShareableFile? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val trimmed = path.trim()
+        val prefix = com.wangzan101.mika.core.workspace.SandboxPaths.WORKSPACE + "/"
+        if (!trimmed.startsWith(prefix)) return@withContext null
+        val rel = trimmed.removePrefix(prefix)
+        if (rel.isEmpty() || rel.split('/').any { it.isEmpty() || it == "." || it == ".." }) return@withContext null
+        val dirs = com.wangzan101.mika.cap.sandbox.SandboxDirs(service)
+        val bytes = dirs.tree.shared {
+            dirs.gate.openRead(dirs.workspace(com.wangzan101.mika.chat.WorkspaceResolver.resolveFor(service, conversationId)), rel).use { g ->
+                if (g.size > 20L * 1024 * 1024) null else g.read(0, g.size.toInt())
+            }
+        } ?: return@withContext null
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        val mime = opts.outMimeType?.takeIf { it.startsWith("image/") } ?: return@withContext null
+        com.wangzan101.mika.media.ShareFileExporter(service).save(bytes, mime, trimmed.substringAfterLast('/'))
+    }
+
     private val audioPort by lazy {
         val state = audioSettings.state.value
         val choice = state.choice
@@ -411,7 +454,8 @@ class TaskRun(
             com.wangzan101.mika.settings.ProviderStore.get(service).ttsModel(choice, caps)?.let { model ->
                 com.wangzan101.mika.media.AndroidAudioPort(service, conversationId, model, caps, onSaved = ::addSavedAudio,
                     onGenerated = ::addAudio, defaultVoice = choice.voice.ifBlank { null }, defaultSpeed = choice.speed,
-                    onSpeak = { response -> (service.application as com.wangzan101.mika.MikaApp).voicePlayer.play(response.bytes, response.mime) })
+                    onSpeak = { response -> (service.application as com.wangzan101.mika.MikaApp).voicePlayer.play(response.bytes, response.mime) },
+                    resolveWorkspace = { workspaceKey })
             }
         }
     }
@@ -424,6 +468,8 @@ class TaskRun(
 
     /** 音频能力把一段音频存进了音乐库:当作这一轮导出的文件,聊天里出现卡片。 */
     fun addSavedAudio(s: com.wangzan101.mika.core.model.SavedAudio) = runState.addSavedAudio(s)
+
+    fun addSaved(s: com.wangzan101.mika.core.cap.image.SavedImage) = runState.addSaved(s)
 
     fun clearTakeoverStage() = runState.clearTakeoverStage()
 
@@ -574,6 +620,8 @@ class TaskRun(
                 !ProviderStore.get(service).roles.value.sameModel(ModelRole.Main, ModelRole.Light)
             }
             val vision = env.visionModelFactory(service, session)
+            val visionFallbacks = env.visionFallbackFactory(service, session)
+            val lightFallbacks = env.lightFallbackFactory(service, session)
 
             val (knowledge, skills) = withContext(Dispatchers.IO) {
                 // 用户对某个 App/站点的补充放在私有目录 personal/apps、personal/sites 下
@@ -611,7 +659,7 @@ class TaskRun(
                 val conn = connection ?: phoneServices.sharedShell.acquire().also { connection = it }
                 val shell = withTimeoutOrNull(SHELL_WAIT_MS) { conn.shell.filterNotNull().first() }
                     ?: run {
-                        phoneServices.setupPrompt.request()
+                        phoneServices.setupPrompt.request(conversationId, runState.runId.value)
                         // 只用 USB 命令起过的助手停了:照实说要再运行命令,不让人去找无线调试
                         throw PhoneUnavailable(
                             when (phoneServices.shellControl.restart) {
@@ -695,6 +743,7 @@ class TaskRun(
                     notOpened = muter::notOpened,
                     appAccess = appAccess,
                     shareAudioFile = { path -> phoneRuntime.shareWorkspaceAudio(path) },
+                    shareImageFile = { path -> shareWorkspaceImage(path) },
                 )
                 val side0 = PhoneSide(shell, a11y, screen, agentDisplay, muter)
                 phone = side0
@@ -708,7 +757,13 @@ class TaskRun(
                     phoneServices.hub.shell.value?.let { s ->
                         withContext(Dispatchers.IO) { runCatching { AppCopyReader.read(s, launchableApps(service.packageManager, service.packageName)) }.getOrNull() }
                     }.orEmpty()
-                }) { connectPhone() }
+                },
+                // shareWorkspaceAudio is always supplied to AndroidScreen above, so this capability check stays lazy.
+                canShareAudio = true,
+                calendarBulkWriter = { events ->
+                    withContext(Dispatchers.IO) { CalendarBulkWriter.insert(service, events) }
+                },
+            ) { connectPhone() }
             val accessedPhone = com.wangzan101.mika.core.uistate.AppAccessScreenPort(
                 phoneScreen, appAccess,
                 packages = { phone?.screen?.accessPackages().orEmpty() },
@@ -795,8 +850,8 @@ class TaskRun(
             val web = if (!webInstalled) null else LazyWebPort {
                 val stack = resources.acquire(Dispatchers.Main, WebStack::close) { WebStack.create(
                         service, key, metrics.widthPixels, metrics.heightPixels, metrics.densityDpi,
-                        // 下载、上传走本对话的工作区:只是 App 私有目录里的文件夹,不要求沙箱已装好
-                        workspace = SandboxDirs(service).let { d -> WebStack.Workspace(d.workspace(conversationId), d.gate, d.tree) },
+                        // 下载、上传走当前任务解析出的工作区:只是 App 私有目录里的文件夹,不要求沙箱已装好
+                        workspace = SandboxDirs(service).let { d -> WebStack.Workspace(d.workspace(workspaceKey), d.gate, d.tree) },
                     ) }
                 webStack = stack
                 // 模型用 web_keep_open 标过的那一页,任务结束时留在后台,记在这一轮名下(对话里那一轮下面显示、关了补一句)
@@ -851,7 +906,9 @@ class TaskRun(
             // 人格拼在身份、准则、通用规则之后;子任务和主任务用同一份。
             // 正文为空时没有可拼的层,也不记成「这一轮用了某个人格」。
             val personaLayer = persona?.let { PersonaPrompt.layer(it.name, it.prompt) }
-            val basePrompt = SystemPrompt.withPersona(SystemPrompt.identity(), personaLayer)
+            val appLang = AppLanguage.current(service)
+            val promptWithPersona = SystemPrompt.withPersona(SystemPrompt.identity(), personaLayer)
+            val basePrompt = SystemPrompt.withLanguage(promptWithPersona, appLang.tag)
             val personaLabel = if (personaLayer != null && persona != null) {
                 Redactor.text("${persona.name} · v${persona.revision}")
             } else null
@@ -865,8 +922,8 @@ class TaskRun(
                 // 连上的当场归 resources:收尾(含取消、失败、连到一半被停)关作用域时一起关,stdio server 的进程和沙箱租约跟着放掉
                 mcpConnections = (service.application as MikaApp).mcpServers.connectionsFor(
                     resources,
-                    com.wangzan101.mika.mcp.ConversationMcpResultStore(SandboxDirs(service), conversationId),
-                    conversationId,
+                    com.wangzan101.mika.mcp.ConversationMcpResultStore(SandboxDirs(service), workspaceKey),
+                    workspaceKey.wire,
                 )
                 // 连接失败、超过总时限没连上的只在任务卡片上提示一句,不打断任务;详情在设置页的健康状态里
                 mcpConnections?.failures?.takeIf { it.isNotEmpty() }?.let { failures ->
@@ -896,7 +953,7 @@ class TaskRun(
                         web = childWeb, webPacing = { PagePacing.human() }, webPlacePace = { PlacePace.of(catalog.sitePace(it)) },
                         webIdleScroll = { IdleScroll(Random.Default) },
                         appPacing = { pace.appPacing() }, appTempo = { pace.of(it).tempo }, appCapped = { pace.capped(it) }, appIdleScroll = { IdleScroll(Random.Default) },
-                        sandbox = sandbox, workspace = { conversationId }, runSpec = childSpec,
+                        sandbox = sandbox, workspace = { workspaceKey.wire }, runSpec = childSpec,
                         conversationId = conversationId, inlineScreen = speed.inlineScreen,
                         adaptiveVision = speed.adaptiveVision)
                     AgentLoop(model, childTools, basePrompt, maxSteps = childSpec.stepBudget ?: AgentLoop.UNLIMITED_STEPS,
@@ -913,7 +970,12 @@ class TaskRun(
             val selfPort = if (provenance.origin == RunOrigin.Ui && !conditionCheck) {
                 (service.application as? MikaApp)?.let { app -> com.wangzan101.mika.self.AndroidSelfPort(app, conversationId, key) }
             } else null
-            val tools = toolDispatcher(privatePhone, model.capabilities.vision, catalog, recordFrames = true, vision = vision?.let { VisionService(it, BitmapImageOps) },
+            val tools = toolDispatcher(privatePhone, model.capabilities.vision, catalog, recordFrames = true,
+                vision = vision?.let {
+                    VisionService(it, BitmapImageOps, fallbacks = visionFallbacks, onModelSwitch = { from, to, _ ->
+                        sink.event(RunEvent.State(System.currentTimeMillis(), "vision_fallback", "${from.name} -> ${to.name}"))
+                    })
+                },
                 smsLogin = if (provenance.origin == RunOrigin.Ui && !conditionCheck && !runSpec.readOnly) {
                     com.wangzan101.mika.cap.phone.sms.AndroidSmsLogin(service, phoneServices.smsLogin, appAccess,
                         accessedPhone, privatePhone) { phone?.screen }.also { smsLogin = it }
@@ -941,15 +1003,20 @@ class TaskRun(
                 appTempo = { pace.of(it).tempo },
                 appCapped = { pace.capped(it) },
                 appIdleScroll = { IdleScroll(Random.Default) },
-                // 上传只认本对话工作区里的普通文件(与沙箱同一套路径规则);技能目录、工作区外一律越界
-                workspacePath = web?.let { { p: String -> sandbox.uploadCheck(conversationId, p) } },
-                // 工作区 = 对话:同一对话的追问接着用上一轮的文件,不同对话互不可见
-                sandbox = sandbox, workspace = { conversationId },
+                // 上传只认当前工作区里的普通文件(与沙箱同一套路径规则);技能目录、工作区外一律越界
+                workspacePath = web?.let { { p: String -> sandbox.uploadCheck(workspaceKey, p) } },
+                // 同项目对话共用 p:<projectId>,其余按对话隔离
+                sandbox = sandbox, workspace = { workspaceKey.wire },
                 deviceFiles = if (provenance.origin == RunOrigin.Ui && !conditionCheck && FeatureFlags.get(service).deviceFiles()) {
                     AndroidDeviceFiles(phoneServices.hub, com.wangzan101.mika.cap.sandbox.SandboxDirs(service), sandbox,
-                        com.wangzan101.mika.settings.DeviceDirectoryStore.get(service), DeviceImportStore.get(service))
+                        com.wangzan101.mika.settings.DeviceDirectoryStore.get(service), DeviceImportStore.get(service),
+                        resolveWorkspace = { workspaceKey }, conversationIdFor = { conversationId })
                 } else null,
                 audio = audioPort,
+                image = imagePort,
+                imageSaveEnabled = imageSettings.state.value.saveEnabled,
+                imageAskBeforeSave = imageSettings.state.value.askBeforeSave,
+                imageMaxPerTask = imageSettings.state.value.maxPerTask,
                 transcribe = transcribePort,
                 audioSaveEnabled = audioSettings.state.value.saveEnabled,
                 audioAskBeforeSave = audioSettings.state.value.askBeforeSave,
@@ -1009,7 +1076,7 @@ class TaskRun(
                 gate = { w ->
                     if (phoneScreen.acquired && dispatcher?.surface != WEB) phone?.screen?.let { phoneRuntime.awaitUserPick(it, taskGate, w) }
                     taskGate.pass({ phoneScreen.acquired && dispatcher?.surface != WEB }, w)
-                }, knowledge = knowledge, sink = sink, trace = trace, installedApps = { apps },
+                }, knowledge = knowledge, screenMaps = memoryRuntime.screenMaps(), sink = sink, trace = trace, installedApps = { apps },
                 // 选渠道用的事实:装了哪些 App、在 Mika 里登录过哪些网站、有没有内置浏览器
                 channelFacts = {
                     val registry = WebSites.registry(service)
@@ -1034,7 +1101,7 @@ class TaskRun(
                 flags = speed,
                 // 只在 lightSteps 打开、轻量模型能调工具且与主模型不是同一份配置时生效
                 modelFallbacks = chainModels, modelChainProviderIds = chainProviderIds,
-                router = routedLight?.let { ModelRouter(model, it) },
+                router = routedLight?.let { ModelRouter(model, it, fallbacks = lightFallbacks) },
                 intentJudge = if (provenance.origin == RunOrigin.Ui) light ?: model else null,
                 intentDecision = if (provenance.origin == RunOrigin.Ui) decision else null,
                 // 选路线是辅助判断:用轻量模型,没配用主模型

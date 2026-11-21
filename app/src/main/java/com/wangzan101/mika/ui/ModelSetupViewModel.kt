@@ -3,6 +3,7 @@ package com.wangzan101.mika.ui
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.core.model.ApiKeyText
+import com.wangzan101.mika.core.model.KeyPoolManager
 import com.wangzan101.mika.core.model.ListFailure
 import com.wangzan101.mika.core.net.ProxyFailure
 import com.wangzan101.mika.core.model.Capabilities
@@ -144,6 +145,13 @@ data class AddForm(
     /** 填了的模型名;没显示那一栏时不算。 */
     val typedModel: String get() = if (showModel) model.trim() else ""
 
+    val isCloudflare: Boolean get() = preset == "Cloudflare Workers AI"
+
+    val accountId: String
+        get() = if (baseUrl.contains("/accounts/") && !baseUrl.contains("{account_id}")) {
+            baseUrl.substringAfter("/accounts/").substringBefore("/").trim()
+        } else ""
+
     val isCustom: Boolean get() = preset == ProviderPresets.custom.label
 
     val isVertex: Boolean get() = kind == ProviderConfig.Kind.Vertex
@@ -151,13 +159,14 @@ data class AddForm(
     /** 跑在用户自己机器上的服务(见 [ProviderPreset.selfHosted]):地址预填了本机的默认端口,要能改成那台机器的。 */
     val isSelfHosted: Boolean get() = presetFor(preset).selfHosted
 
-    /** 地址要用户填或改:自定义,和自己跑的服务。 */
-    val urlEditable: Boolean get() = isCustom || isSelfHosted
+    /** 地址要用户填或改:自定义,自己跑的服务,或地址含参数的预设。Cloudflare 单独展示 Account ID 输入项。 */
+    val urlEditable: Boolean get() = (isCustom || isSelfHosted || presetFor(preset).urlEditable) && !isCloudflare
 
     val urlProblem: String?
         get() = when {
             baseUrl.isBlank() -> tr(R.string.model_need_url)
             !baseUrl.trim().startsWith("http://") && !baseUrl.trim().startsWith("https://") -> tr(R.string.model_url_scheme)
+            baseUrl.contains("{account_id}") -> tr(R.string.model_url_account_id)
             else -> null
         }
 
@@ -209,14 +218,25 @@ data class AddForm(
     /** 举模型名的例子按哪一类接口:地址对得上某个预设的按那个预设,否则按选的接口类型。 */
     val exampleKind: ProviderConfig.Kind get() = suggestedPreset?.kind ?: kind
 
-    /** 自定义没起名字时用的名字:地址的主机名(地址是某家预设的就用预设名)。 */
-    val defaultName: String get() = ProviderConnection.nameForUrl(baseUrl)
+    val defaultName: String
+        get() = when {
+            isCloudflare && accountId.isNotBlank() -> {
+                val shortId = if (accountId.length >= 8) "${accountId.take(4)}…${accountId.takeLast(4)}" else accountId
+                "$preset ($shortId)"
+            }
+            else -> ProviderConnection.nameForUrl(baseUrl)
+        }
 
     /**
      * 存成服务商时用的名字:预设用预设名,自定义用填的名字、没填用 [defaultName]。
      * 服务商按接口类型、地址和名字归组,同一个地址起不同的名字就是两家(例如同一个中转站的两个 Key)。
      */
-    val providerName: String get() = if (isCustom) name.trim().ifEmpty { defaultName } else preset
+    val providerName: String
+        get() = when {
+            isCustom -> name.trim().ifEmpty { defaultName }
+            isCloudflare -> name.trim().ifEmpty { defaultName }
+            else -> preset
+        }
 
     /** 这家要放会话号的请求头名:选的预设声明了的用它;自定义的地址对得上某个预设也用那个预设的。 */
     val sessionHeader: String? get() = presetFor(preset).sessionHeader ?: ProviderPresets.forBaseUrl(baseUrl.trim())?.sessionHeader
@@ -242,6 +262,7 @@ data class ModelSetupUi(
     val configs: List<ProviderConfig> = emptyList(),
     val roles: RoleChoices = RoleChoices(),
     val keyed: Set<String> = emptySet(),
+    val providerKeyMap: Map<String, List<String>> = emptyMap(),
     val listing: Map<String, ListState> = emptyMap(),
     /** ChatGPT 服务商的账号;没有这家时为 null。 */
     val chatGptAccount: ChatGptAccount? = null,
@@ -437,6 +458,7 @@ class ModelSetupViewModel(
         return ui.copy(
             providers = providers, configs = store.configs.value, roles = store.roles.value,
             keyed = providers.filter { store.hasKey(it.id) }.map { it.id }.toSet(),
+            providerKeyMap = providers.associate { it.id to store.providerKeys(it.id) },
             chatGptAccount = store.chatGptProvider()?.let { p ->
                 store.chatGptSession(p.id).let { ChatGptAccount(it?.email.orEmpty(), it?.signedIn == true) }
             },
@@ -500,6 +522,21 @@ class ModelSetupViewModel(
         }
     }
     fun setBaseUrl(url: String) = edit { it.copy(baseUrl = url, noList = false) }
+    fun setAccountId(input: String) {
+        val trimmed = input.trim()
+        val accountId = when {
+            trimmed.contains("/accounts/") -> trimmed.substringAfter("/accounts/").substringBefore("/").trim()
+            trimmed.contains("dash.cloudflare.com/") -> trimmed.substringAfter("dash.cloudflare.com/").substringBefore("/").trim()
+            else -> trimmed
+        }
+        val newUrl = if (accountId.isBlank()) {
+            "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+        } else {
+            "https://api.cloudflare.com/client/v4/accounts/$accountId/ai/v1"
+        }
+        setBaseUrl(newUrl)
+    }
+
     /** 粘贴或逐字改 Key:去掉零宽;换行和其它放不进请求头的字符原样留下并立刻标出来（Vertex 走 Service Account JSON，不按请求头检查）。 */
     fun setApiKey(key: String) {
         if (_state.value.form.isVertex) {
@@ -715,7 +752,9 @@ class ModelSetupViewModel(
         val accepted = ApiKeyText.accept(raw)
         if (accepted.notice == ApiKeyText.Notice.IllegalCharacters) return null
         val key = accepted.text.trim()
-        return if (ApiKeyText.isHeaderLegal(key)) key else null
+        if (key.isEmpty()) return ""
+        val parsed = KeyPoolManager.shared.parseKeys(key)
+        return if (parsed.isNotEmpty() && parsed.all { ApiKeyText.isHeaderLegal(it) }) key else null
     }
 
     /** 表单上的 Key 放不进请求头:标红,停在表单上,不发请求。 */
@@ -1154,8 +1193,8 @@ class ModelSetupViewModel(
         }
     }
 
-    /** 把 [providerId] 下的 [model] 设为第 [slot] 位主模型备援(项目 3):备好配置再记位子,和选主模型同一条建配置的路。记不上位就不清提示,让用户知道没设成。 */
-    fun pickFallback(slot: Int, providerId: String, model: String) {
+    /** 把 [providerId] 下的 [model] 设为指定角色的第 [slot] 位备援。 */
+    fun pickFallback(role: ModelRole, slot: Int, providerId: String, model: String) {
         val m = model.trim()
         if (m.isEmpty()) return
         scope.launch {
@@ -1163,18 +1202,23 @@ class ModelSetupViewModel(
             withContext(io) {
                 val p = store.provider(providerId) ?: return@withContext
                 val caps = ModelOptions.ofProvider(p, store.list()).firstOrNull { it.id == m }?.capabilities ?: ModelOptions.baseOf(p)
-                ok = store.ensureConfigId(p.id, m, caps)?.let { store.setMainFallback(slot, it) } == true
+                val targetCaps = if (role == ModelRole.Vision) caps.copy(vision = true) else caps.copy(toolCalls = true)
+                ok = store.ensureConfigId(p.id, m, targetCaps)?.let { store.setFallback(role, slot, it) } == true
             }
             _state.update { snapshot(if (ok) it.copy(probeNote = null, pickToProbe = null) else it.copy(probeNote = tr(R.string.main_fallback_failed))) }
         }
     }
 
-    /** 备援手填(或在没试通过的那家选):先试调用,通了才设上;规矩和主模型手填一样(还要会调用工具)。 */
-    fun pickFallbackManual(slot: Int, providerId: String, model: String, onPicked: () -> Unit = {}) {
+    /** 兼容旧方法调用 */
+    fun pickFallback(slot: Int, providerId: String, model: String) =
+        pickFallback(ModelRole.Main, slot, providerId, model)
+
+    /** 备援手填(或在没试通过的那家选):先试调用,通了才设上。 */
+    fun pickFallbackManual(role: ModelRole, slot: Int, providerId: String, model: String, onPicked: () -> Unit = {}) {
         val m = model.trim()
         if (m.isEmpty() || _state.value.manualPick[providerId] == ListState.Running) return
         val p = store.provider(providerId) ?: return
-        if (store.isMainModel(providerId, m)) {
+        if (store.isMainModel(providerId, m) && role == ModelRole.Main) {
             _state.update { it.copy(manualPick = it.manualPick + (providerId to ListState.Failed(tr(R.string.main_fallback_is_main)))) }
             return
         }
@@ -1183,7 +1227,7 @@ class ModelSetupViewModel(
             val outcome = probeSaved(p, m)
             val problem = when {
                 outcome is ProbeOutcome.Failed -> outcome.message
-                outcome is ProbeOutcome.NoToolCall -> tr(R.string.model_probe_no_tools_pick, m)
+                outcome is ProbeOutcome.NoToolCall && role != ModelRole.Vision -> tr(R.string.model_probe_no_tools_pick, m)
                 else -> null
             }
             if (problem != null) {
@@ -1196,7 +1240,8 @@ class ModelSetupViewModel(
                 if (p.models.orEmpty().none { it.id == m }) store.markTyped(p.id, m)
                 store.provider(p.id)?.let { fresh ->
                     val caps = ModelOptions.ofProvider(fresh, store.list()).firstOrNull { it.id == m }?.capabilities ?: ModelOptions.baseOf(fresh)
-                    ok = store.ensureConfigId(fresh.id, m, caps)?.let { store.setMainFallback(slot, it) } == true
+                    val targetCaps = if (role == ModelRole.Vision) caps.copy(vision = true) else caps.copy(toolCalls = true)
+                    ok = store.ensureConfigId(fresh.id, m, targetCaps)?.let { store.setFallback(role, slot, it) } == true
                 }
             }
             if (!ok) {
@@ -1208,13 +1253,20 @@ class ModelSetupViewModel(
         }
     }
 
-    /** 撤掉第 [slot] 位主模型备援(项目 3)。 */
-    fun clearFallback(slot: Int) {
+    /** 兼容旧方法调用 */
+    fun pickFallbackManual(slot: Int, providerId: String, model: String, onPicked: () -> Unit = {}) =
+        pickFallbackManual(ModelRole.Main, slot, providerId, model, onPicked)
+
+    /** 撤掉指定角色的第 [slot] 位备援。 */
+    fun clearFallback(role: ModelRole, slot: Int) {
         scope.launch {
-            withContext(io) { store.setMainFallback(slot, null) }
+            withContext(io) { store.setFallback(role, slot, null) }
             sync()
         }
     }
+
+    /** 撤掉第 [slot] 位主模型备援(项目 3)。 */
+    fun clearFallback(slot: Int) = clearFallback(ModelRole.Main, slot)
 
     /** 看图、轻量的固定选项:「用主模型」或(只有看图)「不用」。 */
     fun choose(role: ModelRole, choice: RoleChoice) {
@@ -1414,6 +1466,41 @@ class ModelSetupViewModel(
             sync()
             refreshJobs.remove(providerId)?.cancel()
             refresh(providerId)
+            sync()
+        }
+    }
+
+    fun addProviderKey(providerId: String, apiKey: String) {
+        val k = headerKey(apiKey) ?: return
+        if (k.isEmpty()) return
+        scope.launch {
+            try {
+                withContext(io) { store.addProviderKey(providerId, k) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(listing = it.listing + (providerId to ListState.Failed(listFailureText(e)))) }
+                return@launch
+            }
+            refreshJobs.remove(providerId)?.cancel()
+            refresh(providerId)
+            sync()
+        }
+    }
+
+    fun removeProviderKey(providerId: String, keyToRemove: String) {
+        scope.launch {
+            try {
+                withContext(io) { store.removeProviderKey(providerId, keyToRemove) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(listing = it.listing + (providerId to ListState.Failed(listFailureText(e)))) }
+                return@launch
+            }
+            refreshJobs.remove(providerId)?.cancel()
+            refresh(providerId)
+            sync()
         }
     }
 

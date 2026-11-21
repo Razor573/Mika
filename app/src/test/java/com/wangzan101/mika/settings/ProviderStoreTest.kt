@@ -1,8 +1,10 @@
 package com.wangzan101.mika.settings
 
 import com.wangzan101.mika.core.proactive.ProactiveCall
+import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
+import com.wangzan101.mika.core.model.KeyPoolManager
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelError
@@ -11,6 +13,8 @@ import com.wangzan101.mika.core.model.ModelProtocol
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.model.ModelSession
+import com.wangzan101.mika.core.model.Part
+import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
@@ -29,6 +33,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -113,6 +118,40 @@ class ProviderStoreTest {
         val s = store()
         assertFalse(s.setMainFallback(0, "nope"))
         assertEquals(emptyList<String>(), s.roles.value.mainFallbacks)
+    }
+
+    // ---------- 密钥池接线:401/403 标耗尽、429 冷却 ----------
+
+    /** 真接线(不换 buildModel):401 的坏 key 在池里被标耗尽,不再被轮询选中;好 key 接手完成请求。 */
+    @Test fun authFailureMarksKeyExhaustedThroughWiredModel() = runTest {
+        val server = MockWebServer().also { it.start() }
+        try {
+            server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":{"message":"bad key"}}"""))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("""{"choices":[{"message":{"content":"hi"}}]}"""))
+            val s = ProviderStore(tmp.root, AesGcmKeyCipher { key }, userAgent = "Mika/1.2.3")
+            val c = cfg("auth-x").copy(baseUrl = server.url("/v1").toString().trimEnd('/'))
+            s.saveAsMain(c, "sk-bad, sk-good")
+            val pid = s.list().first { it.id == c.id }.providerId
+            try {
+                val m = s.modelForConfig(c.id)!!
+                val reply = m.complete("s", listOf(Message(Role.User, listOf(Part.Text("hi")), Author.Mika)), emptyList())
+                assertEquals("hi", reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+                // 轮询位置跨注册保留(#757):先后两棒各用一把,不假设哪把先跑
+                val first = server.takeRequest().getHeader("Authorization")
+                val second = server.takeRequest().getHeader("Authorization")
+                assertNotEquals(first, second)
+                assertEquals(setOf("Bearer sk-bad", "Bearer sk-good"), setOf(first, second))
+                // 401 的那把已标耗尽:池里只剩接手的那把可用,轮询不会再选回去
+                assertEquals(2, KeyPoolManager.shared.keyCount(pid))
+                assertEquals(1, KeyPoolManager.shared.activeKeyCount(pid))
+                assertEquals(second?.removePrefix("Bearer "), KeyPoolManager.shared.getActiveKey(pid))
+            } finally {
+                KeyPoolManager.shared.reset(pid)
+            }
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test fun mainFallbackRejectsSlotAtMax() {

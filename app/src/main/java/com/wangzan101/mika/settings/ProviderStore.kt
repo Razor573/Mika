@@ -17,6 +17,7 @@ import com.wangzan101.mika.core.oauth.XaiAuth
 import com.wangzan101.mika.core.model.AnthropicModel
 import com.wangzan101.mika.core.model.AntigravityModel
 import com.wangzan101.mika.core.model.ApiKeyText
+import com.wangzan101.mika.core.model.KeyPoolManager
 import com.wangzan101.mika.core.model.BearerToken
 import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.Capabilities
@@ -28,6 +29,10 @@ import com.wangzan101.mika.core.model.GeminiTtsModel
 import com.wangzan101.mika.core.model.OpenAiSpeechModel
 import com.wangzan101.mika.core.model.TtsCapabilities
 import com.wangzan101.mika.core.model.TtsModel
+import com.wangzan101.mika.core.model.GeminiImageModel
+import com.wangzan101.mika.core.model.ImageCapabilities
+import com.wangzan101.mika.core.model.ImageModel
+import com.wangzan101.mika.core.model.OpenAiImagesModel
 import com.wangzan101.mika.core.model.ListFailure
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.Message
@@ -199,8 +204,9 @@ data class Provider(
 /** OkHttp 把超时换算为 Int 毫秒，秒数必须在换算后仍能存下。 */
 internal val MODEL_READ_TIMEOUT_SECONDS = 1..(Int.MAX_VALUE / 1_000)
 
-/** 主模型备援链最长几位(项目 3)。 */
-internal const val MAX_MAIN_FALLBACKS = 2
+/** 各用途备援链最长几位。支持多达 8 层瀑布级联（Waterfall Cascade）。 */
+internal const val MAX_MAIN_FALLBACKS = 8
+internal const val MAX_FALLBACKS = 8
 
 /** 留空的窗口沿用所选模型配置，留空的触发点交给核心自动计算，留空的读超时用全局默认(120 秒)。 */
 data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens: Int? = null, val readTimeoutSeconds: Int? = null) {
@@ -222,6 +228,7 @@ sealed interface RoleChoice {
 /**
  * 三个用途各选了什么,都是用户明说的,没有按能力推断的默认分配。
  * [main] 是主模型的配置 id,为 null 表示还没选;看图默认不用,轻量默认用主模型。
+ * 现已支持所有角色 (Main, Vision, Light) 拥有独立的备援链 (Waterfall Chain)。
  */
 data class RoleChoices(
     val main: String? = null,
@@ -229,9 +236,27 @@ data class RoleChoices(
     val light: RoleChoice = RoleChoice.SameAsMain,
     /** 主模型的备援配置 id(项目 3),按接手顺序;主模型失败时换不换由 Failover 的决策表定。 */
     val mainFallbacks: List<String> = emptyList(),
+    /** 视觉模型的备援配置 id，按接手顺序。 */
+    val visionFallbacks: List<String> = emptyList(),
+    /** 轻量模型的备援配置 id，按接手顺序。 */
+    val lightFallbacks: List<String> = emptyList(),
     /** 按用途保存,同一个模型可在不同用途选不同档位;「用主模型」连同它的档位一起跟随。 */
     val reasoningEfforts: Map<ModelRole, String> = emptyMap(),
 ) {
+    /** 获取指定角色的备援配置列表 */
+    fun fallbacks(role: ModelRole): List<String> = when (role) {
+        ModelRole.Main -> mainFallbacks
+        ModelRole.Vision -> visionFallbacks
+        ModelRole.Light -> lightFallbacks
+    }
+
+    /** 更新指定角色的备援配置列表 */
+    fun withFallbacks(role: ModelRole, list: List<String>): RoleChoices = when (role) {
+        ModelRole.Main -> copy(mainFallbacks = list)
+        ModelRole.Vision -> copy(visionFallbacks = list)
+        ModelRole.Light -> copy(lightFallbacks = list)
+    }
+
     /** 这个用途的选择;主模型没选时为 null。 */
     operator fun get(role: ModelRole): RoleChoice? = when (role) {
         ModelRole.Main -> main?.let(RoleChoice::Model)
@@ -253,7 +278,7 @@ data class RoleChoices(
     }
 
     /** 有用途在用的配置 id;其余的配置没人用,会被删掉。 */
-    val referenced: Set<String> get() = ModelRole.entries.mapNotNull(::resolve).toSet() + mainFallbacks
+    val referenced: Set<String> get() = ModelRole.entries.mapNotNull(::resolve).toSet() + mainFallbacks + visionFallbacks + lightFallbacks
 
     /** 改一个用途;这个用途不接受的选择(主模型只能是具体模型,轻量不能不用)返回 null。 */
     fun with(role: ModelRole, choice: RoleChoice): RoleChoices? = (when (role) {
@@ -278,6 +303,8 @@ data class RoleChoices(
             vision = if (vision.gone()) RoleChoice.Off else vision,
             light = if (light.gone()) RoleChoice.SameAsMain else light,
             mainFallbacks = mainFallbacks.filter { it in valid },
+            visionFallbacks = visionFallbacks.filter { it in valid },
+            lightFallbacks = lightFallbacks.filter { it in valid },
             reasoningEfforts = reasoningEfforts.filterKeys { role -> (get(role) as? RoleChoice.Model)?.configId in valid },
         )
     }
@@ -424,11 +451,59 @@ class ProviderStore(
         writeConfig()
     }
 
-    /** 这个模型配置所属服务商的 Key。 */
-    fun apiKey(configId: String): String? =
-        _configs.value.firstOrNull { it.id == configId }?.let { providerKey(it.providerId) }
+    /** 服务商的所有配置密钥 (KeyPool)。OAuth 与 Vertex 服务账号 JSON 不按多密钥池拆分。 */
+    fun providerKeys(providerId: String): List<String> {
+        val kind = provider(providerId)?.kind
+        if (kind == ProviderConfig.Kind.Vertex ||
+            kind == ProviderConfig.Kind.ChatGpt ||
+            kind == ProviderConfig.Kind.Xai ||
+            kind == ProviderConfig.Kind.Antigravity
+        ) {
+            return emptyList()
+        }
+        val raw = providerKey(providerId) ?: return emptyList()
+        if (raw.trimStart().startsWith("{")) return emptyList()
+        return KeyPoolManager.shared.parseKeys(raw)
+    }
 
-    /** 服务商的 Key。解不开(例如密钥库被系统清掉)时当作没有 Key。 */
+    /** 向服务商密钥池中追加新密钥。 */
+    @Synchronized
+    fun addProviderKey(providerId: String, newKey: String) {
+        val current = providerKeys(providerId)
+        val added = KeyPoolManager.shared.parseKeys(newKey)
+        val combined = (current + added).distinct()
+        setKey(providerId, combined.joinToString(", "))
+    }
+
+    /** 从服务商密钥池中移除指定密钥。 */
+    @Synchronized
+    fun removeProviderKey(providerId: String, keyToRemove: String) {
+        val current = providerKeys(providerId)
+        val remaining = current.filterNot { it == keyToRemove }
+        setKey(providerId, remaining.joinToString(", "))
+    }
+
+    /** 服务商当前活跃可用的密钥 (优先从 KeyPool 中自动轮询、避开限流密钥)。 */
+    fun activeApiKey(providerId: String): String? {
+        val raw = providerKey(providerId) ?: return null
+        val kind = provider(providerId)?.kind
+        if (kind == ProviderConfig.Kind.Vertex ||
+            kind == ProviderConfig.Kind.ChatGpt ||
+            kind == ProviderConfig.Kind.Xai ||
+            kind == ProviderConfig.Kind.Antigravity ||
+            raw.trimStart().startsWith("{")
+        ) {
+            return raw
+        }
+        KeyPoolManager.shared.register(providerId, raw)
+        return KeyPoolManager.shared.getActiveKey(providerId) ?: providerKeys(providerId).firstOrNull()
+    }
+
+    /** 这个模型配置所属服务商的 Key。动态优先从 KeyPool 中返回健康的活跃密钥。 */
+    fun apiKey(configId: String): String? =
+        _configs.value.firstOrNull { it.id == configId }?.let { activeApiKey(it.providerId) }
+
+    /** 服务商的 Key 原文。解不开(例如密钥库被系统清掉)时当作没有 Key。 */
     fun providerKey(providerId: String): String? {
         val enc = synchronized(this) { keys[providerId] } ?: return null
         return runCatching { String(cipher.decrypt(decode(enc))) }.getOrNull()
@@ -656,12 +731,16 @@ class ProviderStore(
         return id
     }
 
-    /** 备援链里混进的主模型自己清掉(MK-1 D2):留着界面会显示成有效备援,运行时却跳过,两边对不上。 */
+    /** 备援链里混进的角色自身配置清掉。 */
+    private fun dropRoleFromFallbacks(role: ModelRole) {
+        val roleId = _roles.value.resolve(role) ?: return
+        val current = _roles.value.fallbacks(role)
+        if (roleId !in current) return
+        _roles.value = _roles.value.withFallbacks(role, current.filter { it != roleId })
+    }
+
     private fun dropMainFromFallbacks() {
-        val mainId = _roles.value.resolve(ModelRole.Main) ?: return
-        val current = _roles.value.mainFallbacks
-        if (mainId !in current) return
-        _roles.value = _roles.value.copy(mainFallbacks = current.filter { it != mainId })
+        dropRoleFromFallbacks(ModelRole.Main)
     }
 
     /** [providerId] 下的 [model] 是不是当前主模型(备援手填时挡下用,MK-1 D1)。 */
@@ -669,15 +748,15 @@ class ProviderStore(
         configFor(ModelRole.Main)?.let { it.providerId == providerId && it.model == model } == true
 
     /**
-     * 改主模型备援链的第 [slot] 位(项目 3):[configId] 为 null 是撤掉这一位(后面的往前补);
+     * 改指定角色备援链的第 [slot] 位: [configId] 为 null 是撤掉这一位(后面的往前补);
      * 已在链里的配置是移动到目标位(不重复占位);新配置在目标位有空位时替换、链未满时接在末尾
-     * (中间有空槽也照接,不留空位)。链最长 [MAX_MAIN_FALLBACKS]。
+     * (中间有空槽也照接,不留空位)。链最长 [MAX_FALLBACKS]。
      */
     @Synchronized
-    fun setMainFallback(slot: Int, configId: String?): Boolean {
-        if (slot < 0 || slot >= MAX_MAIN_FALLBACKS) return false
+    fun setFallback(role: ModelRole, slot: Int, configId: String?): Boolean {
+        if (slot < 0 || slot >= MAX_FALLBACKS) return false
         if (configId != null && _configs.value.none { it.id == configId }) return false
-        val current = _roles.value.mainFallbacks
+        val current = _roles.value.fallbacks(role)
         val next = when {
             configId == null -> if (slot in current.indices) current.toMutableList().apply { removeAt(slot) } else return true
             configId in current -> {
@@ -685,16 +764,20 @@ class ProviderStore(
                 rest.toMutableList().apply { add(minOf(slot, rest.size), configId) }
             }
             slot in current.indices -> current.toMutableList().apply { this[slot] = configId }
-            current.size < MAX_MAIN_FALLBACKS -> current + configId
+            current.size < MAX_FALLBACKS -> current + configId
             else -> return false
         }
         if (next == current) return true
-        _roles.value = _roles.value.copy(mainFallbacks = next)
-        dropMainFromFallbacks()
+        _roles.value = _roles.value.withFallbacks(role, next)
+        dropRoleFromFallbacks(role)
         prune()
         writeConfig()
         return true
     }
+
+    /** 保持旧方法签名完全兼容 */
+    @Synchronized
+    fun setMainFallback(slot: Int, configId: String?): Boolean = setFallback(ModelRole.Main, slot, configId)
 
     /** 只改这个用途;不支持的协议、跟随主模型的用途或列表明确不支持的档位不接受。 */
     @Synchronized
@@ -869,53 +952,80 @@ class ProviderStore(
     /** [configId] 这条配置本身(不按用途推看图标记);不存在为 null。 */
     fun configById(configId: String): ProviderConfig? = _configs.value.firstOrNull { it.id == configId }
 
-    /** 这条配置当主模型用时的样子:看图标记按主模型的规矩推(和 [configFor] 对主模型的推法一致)。 */
-    private fun asMain(cfg: ProviderConfig): ProviderConfig {
-        val sees = ModelOptions.seesImages(cfg.capabilities.vision,
+    /** 这条配置当指定角色用时的样子: 看图标记按角色规矩推导。 */
+    private fun asRole(cfg: ProviderConfig, role: ModelRole): ProviderConfig {
+        val sees = role == ModelRole.Vision || ModelOptions.seesImages(cfg.capabilities.vision,
             provider(cfg.providerId)?.visionOverrides?.get(cfg.model), usedForVision = _roles.value.resolve(ModelRole.Vision) == cfg.id)
         return if (sees == cfg.capabilities.vision) cfg else cfg.copy(capabilities = cfg.capabilities.copy(vision = sees))
+    }
+
+    private fun asMain(cfg: ProviderConfig): ProviderConfig = asRole(cfg, ModelRole.Main)
+
+    /**
+     * 按配置 id 建一个当指定角色用的模型(备援链用):计量、每日预算检查都和该角色同一条路。
+     * 配置不存在为 null。
+     */
+    fun modelForRoleConfig(role: ModelRole, configId: String, session: ModelSession = ModelSession.fresh()): ChatModel? {
+        val raw = configById(configId) ?: return null
+        val p = provider(raw.providerId)
+        val source = UsageSource(raw.providerId, p?.name ?: raw.name, raw.model, UsagePurpose.of(role))
+        val listed = listedOf(raw)
+        val settings = p?.contextSettings?.get(raw.model)
+        val adjusted = asRole(raw, role)
+        val configured = applyContextSettings(adjusted, settings)
+        // 备援接手时带上对应用途设的思考强度,但只在备援自己写明支持这个档位时才带:
+        // 不支持就不指定、用它自己的默认,不能让请求因为这个参数被拒(MK-1 B-D1)。
+        val roleEffort = _roles.value.reasoningEffort(role)
+        val effort = roleEffort?.takeIf { ReasoningOptions.of(configured, listed)?.levels?.contains(it) == true }
+        val isLight = role == ModelRole.Light
+        return modelFactory(configured, apiKey(raw.id), listed?.endpoint, ClientSetup(
+            headers(p?.sessionHeader, session),
+            maxOutputTokens = CallOptions.LIGHT_MAX_OUTPUT_TOKENS.takeIf { isLight },
+            reasoningEffort = effort,
+            thinkingTypes = listed?.thinkingTypes,
+            readTimeoutSeconds = settings?.readTimeoutSeconds,
+            forceToolCall = isLight,
+        )).metered(source, usage, beforeCall = ::checkDailyBudget)
     }
 
     /**
      * 按配置 id 建一个当主模型用的模型(备援链用,见 [RoleChoices.mainFallbacks]):计量、每日预算检查都和主模型同一条路,
      * 用量记在主模型名下。配置不存在为 null。
      */
-    fun modelForConfig(configId: String, session: ModelSession = ModelSession.fresh()): ChatModel? {
-        val raw = configById(configId) ?: return null
-        val p = provider(raw.providerId)
-        val source = UsageSource(raw.providerId, p?.name ?: raw.name, raw.model, UsagePurpose.of(ModelRole.Main))
-        val listed = listedOf(raw)
-        val settings = p?.contextSettings?.get(raw.model)
-        val adjusted = asMain(raw)
-        val configured = applyContextSettings(adjusted, settings)
-        // 备援接手时带上主模型设的思考强度,但只在备援自己写明支持这个档位时才带:
-        // 不支持就不指定、用它自己的默认,不能让请求因为这个参数被拒(MK-1 B-D1)。
-        val mainEffort = _roles.value.reasoningEffort(ModelRole.Main)
-        val effort = mainEffort?.takeIf { ReasoningOptions.of(configured, listed)?.levels?.contains(it) == true }
-        return modelFactory(configured, apiKey(raw.id), listed?.endpoint, ClientSetup(
-            headers(p?.sessionHeader, session), reasoningEffort = effort, thinkingTypes = listed?.thinkingTypes,
-            readTimeoutSeconds = settings?.readTimeoutSeconds,
-        )).metered(source, usage, beforeCall = ::checkDailyBudget)
-    }
+    fun modelForConfig(configId: String, session: ModelSession = ModelSession.fresh()): ChatModel? =
+        modelForRoleConfig(ModelRole.Main, configId, session)
 
     /**
-     * 按 [RoleChoices.mainFallbacks] 的顺序返回备援模型及其服务商 ID，供故障转移判断预算归属。
+     * 按指定角色的备援链顺序返回备援模型及其服务商 ID，供故障转移判断预算归属。
      * 配置没了、建不出的位子跳过,链短一点照样能跑。
      */
-    fun mainFallbackChain(session: ModelSession = ModelSession.fresh()): Pair<List<ChatModel>, List<String?>> {
+    fun fallbackChain(role: ModelRole, session: ModelSession = ModelSession.fresh()): Pair<List<ChatModel>, List<String?>> {
         val models = ArrayList<ChatModel>()
         val providerIds = ArrayList<String>()
-        // 旧设定里若把主模型自己也排进备援,载入时略过:切给自己没有意义(MK-1 B-D2)。
-        val mainId = _roles.value.resolve(ModelRole.Main)
-        for (id in _roles.value.mainFallbacks) {
-            if (id == mainId) continue
+        val rolePrimaryId = _roles.value.resolve(role)
+        for (id in _roles.value.fallbacks(role)) {
+            if (id == rolePrimaryId) continue
             val cfg = configById(id) ?: continue
-            val m = modelForConfig(id, session) ?: continue
+            val m = modelForRoleConfig(role, id, session) ?: continue
             models += m
             providerIds += cfg.providerId
         }
         return models to providerIds
     }
+
+    /**
+     * 按 [RoleChoices.mainFallbacks] 的顺序返回备援模型及其服务商 ID，供故障转移判断预算归属。
+     */
+    fun mainFallbackChain(session: ModelSession = ModelSession.fresh()): Pair<List<ChatModel>, List<String?>> =
+        fallbackChain(ModelRole.Main, session)
+
+    /** 视觉模型备援链 */
+    fun visionFallbackChain(session: ModelSession = ModelSession.fresh()): List<ChatModel> =
+        fallbackChain(ModelRole.Vision, session).first
+
+    /** 轻量模型备援链 */
+    fun lightFallbackChain(session: ModelSession = ModelSession.fresh()): List<ChatModel> =
+        fallbackChain(ModelRole.Light, session).first
 
     fun mainProviderId(): String? = configFor(ModelRole.Main)?.providerId
 
@@ -1078,10 +1188,25 @@ class ProviderStore(
         val p = provider(choice.providerId) ?: return null
         val client = modelHttp.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
         val header = headers(p.sessionHeader, ModelSession.fresh())
-        val key = providerKey(p.id)
+        val key = activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() }
         return when (choice.protocol) {
             TtsProtocol.OpenAiSpeech -> OpenAiSpeechModel(p.baseUrl, key, choice.model, capabilities, client, header)
             TtsProtocol.GeminiTts -> GeminiTtsModel(p.baseUrl, key.orEmpty(), choice.model, capabilities, client, header)
+        }
+    }
+
+    /**
+     * 图片生成用的模型:地址、Key、请求头都取这家服务商;不套对话模型的计量(图片用量由调用方另记)。
+     * 服务商、模型或协议缺失时为 null。图比一句话慢,读超时放到 180 秒。
+     */
+    fun imageModel(choice: ImageChoice, capabilities: ImageCapabilities): ImageModel? {
+        val p = provider(choice.providerId) ?: return null
+        val client = modelHttp.newBuilder().readTimeout(180, TimeUnit.SECONDS).build()
+        val header = headers(p.sessionHeader, ModelSession.fresh())
+        val key = providerKey(p.id)
+        return when (choice.protocol) {
+            ImageProtocol.OpenAiImages -> OpenAiImagesModel(p.baseUrl, key, choice.model, capabilities, client, header)
+            ImageProtocol.GeminiImage -> GeminiImageModel(p.baseUrl, key.orEmpty(), choice.model, capabilities, client, header)
         }
     }
 
@@ -1096,9 +1221,17 @@ class ProviderStore(
         model: String, endpoint: ModelEndpoint?, caps: Capabilities,
         projectId: String = "", location: String = "",
     ): ProbeResult {
+        val probeKey = if (kind == ProviderConfig.Kind.Vertex ||
+            kind == ProviderConfig.Kind.Antigravity ||
+            apiKey?.trimStart()?.startsWith("{") == true
+        ) {
+            apiKey
+        } else {
+            apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
+        }
         val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true), projectId = projectId, location = location)
         return try {
-            val m = modelFactory(cfg, apiKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
+            val m = modelFactory(cfg, probeKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
             val reply = m.complete(PROBE_SYSTEM, listOf(Message(Role.User, listOf(Part.Text(PROBE_TEXT)), Author.Mika)), listOf(PROBE_TOOL))
             if (reply.parts.any { it is Part.ToolCall }) ProbeResult.ToolCalled else ProbeResult.NoToolCall
         } catch (e: ModelError) {
@@ -1125,10 +1258,18 @@ class ProviderStore(
         projectId: String = "", location: String = "",
     ): ModelListResult {
         val hdrs = headers(sessionHeader, ModelSession.fresh())
-        return if (modelLister === defaultModelLister && (kind == ProviderConfig.Kind.Vertex || kind == ProviderConfig.Kind.Antigravity)) {
-            listAvailable(kind, baseUrl, apiKey, hdrs, projectId, location)
+        val probeKey = if (kind == ProviderConfig.Kind.Vertex ||
+            kind == ProviderConfig.Kind.Antigravity ||
+            apiKey?.trimStart()?.startsWith("{") == true
+        ) {
+            apiKey
         } else {
-            modelLister(kind, baseUrl, apiKey, hdrs)
+            apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
+        }
+        return if (modelLister === defaultModelLister && (kind == ProviderConfig.Kind.Vertex || kind == ProviderConfig.Kind.Antigravity)) {
+            listAvailable(kind, baseUrl, probeKey, hdrs, projectId, location)
+        } else {
+            modelLister(kind, baseUrl, probeKey, hdrs)
         }
     }
 
@@ -1139,7 +1280,8 @@ class ProviderStore(
             p.kind != ProviderConfig.Kind.Antigravity &&
             p.kind != ProviderConfig.Kind.Vertex
         ) {
-            return listModels(p.kind, p.baseUrl, providerKey(p.id), p.sessionHeader)
+            val key = activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() }
+            return listModels(p.kind, p.baseUrl, key, p.sessionHeader)
         }
         return try {
             val base = provider(p.id)?.baseUrl?.takeIf { it.isNotBlank() } ?: p.baseUrl
@@ -1418,8 +1560,16 @@ class ProviderStore(
         val compatMaxOut = setup.maxOutputTokens?.takeIf { setup.forceToolCall }
         return when (kind) {
             ProviderConfig.Kind.OpenAiCompat ->
-                OpenAiCompatModel(baseUrl, apiKey, cfg.model, cfg.capabilities, http, endpoint?.reasoningField, setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
+                OpenAiCompatModel(
+                    baseUrl, apiKey, cfg.model, cfg.capabilities, http, endpoint?.reasoningField, setup.headers,
+                    reasoningEffort = setup.reasoningEffort,
+                    maxOutputTokens = compatMaxOut,
+                    forceToolCall = setup.forceToolCall,
+                    keySupplier = { activeApiKey(cfg.providerId) },
+                    onKeyRejected = { key, retryMs, status ->
+                        KeyPoolManager.shared.markRejected(cfg.providerId, key, status, retryMs)
+                    },
+                )
             ProviderConfig.Kind.Anthropic -> AnthropicModel(
                 baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http,
                 maxTokens = setup.maxOutputTokens,
@@ -1427,8 +1577,15 @@ class ProviderStore(
                 forceToolCall = setup.forceToolCall,
             )
             ProviderConfig.Kind.Gemini ->
-                GeminiModel(baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http, setup.headers, setup.maxOutputTokens,
-                    reasoningEffort = setup.reasoningEffort, forceToolCall = setup.forceToolCall)
+                GeminiModel(
+                    baseUrl, apiKey.orEmpty(), cfg.model, cfg.capabilities, http, setup.headers, setup.maxOutputTokens,
+                    reasoningEffort = setup.reasoningEffort,
+                    forceToolCall = setup.forceToolCall,
+                    keySupplier = { activeApiKey(cfg.providerId) },
+                    onKeyRejected = { key, retryMs, status ->
+                        KeyPoolManager.shared.markRejected(cfg.providerId, key, status, retryMs)
+                    },
+                )
             ProviderConfig.Kind.OpenAiResponses ->
                 ResponsesModel(baseUrl, BearerToken.fixed(apiKey), cfg.model, cfg.capabilities, http, headers = setup.headers,
                     reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
@@ -1493,6 +1650,17 @@ class ProviderStore(
         writeAtomically(keyFile, keysJson())
         val revisions = _providerKeyRevisions.value
         _providerKeyRevisions.value = revisions + (providerId to ((revisions[providerId] ?: 0L) + 1))
+        val kind = provider(providerId)?.kind
+        if (kind == ProviderConfig.Kind.Vertex ||
+            kind == ProviderConfig.Kind.ChatGpt ||
+            kind == ProviderConfig.Kind.Xai ||
+            kind == ProviderConfig.Kind.Antigravity ||
+            apiKey.trimStart().startsWith("{")
+        ) {
+            KeyPoolManager.shared.register(providerId, emptyList())
+        } else {
+            KeyPoolManager.shared.register(providerId, apiKey)
+        }
     }
 
     /** 删掉没有用途在用的模型配置。Key 存在服务商上,不受影响。 */
@@ -1511,6 +1679,19 @@ class ProviderStore(
         }
         if (keyFile.isFile) runCatching {
             keys = json.parseToJsonElement(keyFile.readText()).jsonObject.mapValues { it.value.jsonPrimitive.content }
+            keys.forEach { (pid, _) ->
+                val kind = provider(pid)?.kind
+                providerKey(pid)?.let { rawKey ->
+                    if (kind != ProviderConfig.Kind.Vertex &&
+                        kind != ProviderConfig.Kind.ChatGpt &&
+                        kind != ProviderConfig.Kind.Xai &&
+                        kind != ProviderConfig.Kind.Antigravity &&
+                        !rawKey.trimStart().startsWith("{")
+                    ) {
+                        KeyPoolManager.shared.register(pid, rawKey)
+                    }
+                }
+            }
         }
         migrate()
         collapseAntigravitySavedModels()
@@ -1749,8 +1930,17 @@ class ProviderStore(
         ModelRole.entries.forEach { role -> choice(role)?.let { c -> r.with(role, c)?.let { r = it } } }
         r = r.copy(mainFallbacks = runCatching {
             o["MainFallbacks"]?.jsonArray?.mapNotNull { el -> runCatching { el.jsonPrimitive.content }.getOrNull() }
-                ?.distinct()?.take(MAX_MAIN_FALLBACKS)
+                ?.distinct()?.take(MAX_FALLBACKS)
         }.getOrNull().orEmpty())
+        val vf = runCatching {
+            o["VisionFallbacks"]?.jsonArray?.mapNotNull { el -> runCatching { el.jsonPrimitive.content }.getOrNull() }
+                ?.distinct()?.take(MAX_FALLBACKS)
+        }.getOrNull().orEmpty()
+        val lf = runCatching {
+            o["LightFallbacks"]?.jsonArray?.mapNotNull { el -> runCatching { el.jsonPrimitive.content }.getOrNull() }
+                ?.distinct()?.take(MAX_FALLBACKS)
+        }.getOrNull().orEmpty()
+        r = r.copy(visionFallbacks = vf, lightFallbacks = lf)
         return r.copy(reasoningEfforts = ModelRole.entries.mapNotNull { role ->
             val effort = runCatching { o[role.name]?.jsonObject?.get("reasoningEffort")?.jsonPrimitive?.content }.getOrNull()
             if (r[role] is RoleChoice.Model && !effort.isNullOrBlank()) role to effort else null
@@ -1844,6 +2034,12 @@ class ProviderStore(
                 }
                 if (_roles.value.mainFallbacks.isNotEmpty()) putJsonArray("MainFallbacks") {
                     _roles.value.mainFallbacks.forEach { add(it) }
+                }
+                if (_roles.value.visionFallbacks.isNotEmpty()) putJsonArray("VisionFallbacks") {
+                    _roles.value.visionFallbacks.forEach { add(it) }
+                }
+                if (_roles.value.lightFallbacks.isNotEmpty()) putJsonArray("LightFallbacks") {
+                    _roles.value.lightFallbacks.forEach { add(it) }
                 }
             }
         }

@@ -24,10 +24,15 @@ class GeminiModel(
     private val reasoningEffort: String? = null,
     private val googleSearch: Boolean = false,
     private val forceToolCall: Boolean = false,
+    private val keySupplier: (() -> String?)? = null,
+    /** 密钥被上游拒绝(429/401/403)时带上 HTTP 状态码回调;接线处按状态决定冷却(429)还是标耗尽(401/403)。 */
+    private val onKeyRejected: ((key: String, retryAfterMs: Long?, status: Int) -> Unit)? = null,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:generateContent"
     private val streamEndpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:streamGenerateContent?alt=sse"
+
+    private fun resolveKey(): String = keySupplier?.invoke()?.takeIf { it.isNotBlank() } ?: apiKey
 
     override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
         complete(system, messages, tools, CallOptions.DEFAULT)
@@ -38,7 +43,9 @@ class GeminiModel(
         tools: List<ToolSpec>,
         options: CallOptions,
     ): ModelReply {
-        val (status, retryAfter, text) = HttpSupport.execute(http, request(system, messages, tools, stream = false, options = options))
+        val (status, retryAfter, text) = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
+            HttpSupport.execute(http, request(system, messages, tools, stream = false, options = options, key = key.orEmpty()))
+        }
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return GeminiCodec.parseReply(text)
     }
@@ -54,8 +61,11 @@ class GeminiModel(
         options: CallOptions,
         onText: (String) -> Unit,
     ): ModelReply {
-        val stream = GeminiCodec.GeminiStream(onText)
-        val (status, retryAfter, text) = HttpSupport.stream(http, request(system, messages, tools, stream = true, options = options), stream::accept)
+        var stream = GeminiCodec.GeminiStream(onText)
+        val (status, retryAfter, text) = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
+            stream = GeminiCodec.GeminiStream(onText)
+            HttpSupport.stream(http, request(system, messages, tools, stream = true, options = options, key = key.orEmpty()), stream::accept)
+        }
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return GeminiCodec.finishOrBuffered(text, stream, onText)
     }
@@ -66,6 +76,7 @@ class GeminiModel(
         tools: List<ToolSpec>,
         stream: Boolean,
         options: CallOptions = CallOptions.DEFAULT,
+        key: String = resolveKey(),
     ): Request {
         val force = forceToolCall || options.forceToolCall
         val effectiveForce = force && tools.isNotEmpty()
@@ -83,7 +94,7 @@ class GeminiModel(
         )
         return Request.Builder().url(if (stream) streamEndpoint else endpoint)
             .withHeaders(headers)
-            .headerOrReject("x-goog-api-key", apiKey)
+            .headerOrReject("x-goog-api-key", key)
             .postInference(InferenceProtocol.Gemini, payload)
             .build()
     }

@@ -43,11 +43,16 @@ class OpenAiCompatModel(
     private val reasoningEffort: String? = null,
     private val maxOutputTokens: Int? = null,
     private val forceToolCall: Boolean = false,
+    private val keySupplier: (() -> String?)? = null,
+    /** 密钥被上游拒绝(429/401/403)时带上 HTTP 状态码回调;接线处按状态决定冷却(429)还是标耗尽(401/403)。 */
+    private val onKeyRejected: ((key: String, retryAfterMs: Long?, status: Int) -> Unit)? = null,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
     private val declaredVia = ReasoningVia.ofField(reasoningField)
     private val json = Json { ignoreUnknownKeys = true }
+
+    private fun resolveKey(): String? = keySupplier?.invoke()?.takeIf { it.isNotBlank() } ?: apiKey
 
     private companion object {
         val MARKABLE_ROLES = setOf("system", "user", "tool")
@@ -69,23 +74,26 @@ class OpenAiCompatModel(
         var sendForce = force && tools.isNotEmpty()
         val effectiveSystem = if (force) LightPrompt.ensure(system) else system
         var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
-        var response = HttpSupport.execute(
-            http,
-            request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut),
-        )
-        if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(response.status, response.body)) {
-            if (response.body.contains("max_tokens", ignoreCase = true) && !response.body.contains("tool_choice", ignoreCase = true)) {
-                sendMaxOut = null
-            } else if (response.body.contains("tool_choice", ignoreCase = true) && !response.body.contains("max_tokens", ignoreCase = true)) {
-                sendForce = false
-            } else {
-                sendForce = false
-                sendMaxOut = null
-            }
-            response = HttpSupport.execute(
+        val response = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
+            var raw = HttpSupport.execute(
                 http,
-                request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
             )
+            if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(raw.status, raw.body)) {
+                if (raw.body.contains("max_tokens", ignoreCase = true) && !raw.body.contains("tool_choice", ignoreCase = true)) {
+                    sendMaxOut = null
+                } else if (raw.body.contains("tool_choice", ignoreCase = true) && !raw.body.contains("max_tokens", ignoreCase = true)) {
+                    sendForce = false
+                } else {
+                    sendForce = false
+                    sendMaxOut = null
+                }
+                raw = HttpSupport.execute(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                )
+            }
+            raw
         }
         val (status, retryAfter, text) = response
         if (status !in 200..299) throw mapError(status, retryAfter, text)
@@ -113,36 +121,40 @@ class OpenAiCompatModel(
         var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
         var includeUsage = true
         var stream = OpenAiStream(onText, ::parseUsage, ::thinking)
-        var response = HttpSupport.stream(
-            http,
-            request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut),
-            stream::accept,
-        )
-        if (response.status == 400 && response.body.contains("stream_options")) {
-            // 一些兼容端点能流式生成，却没有用量选项。
-            includeUsage = false
+        val response = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
             stream = OpenAiStream(onText, ::parseUsage, ::thinking)
-            response = HttpSupport.stream(
+            var raw = HttpSupport.stream(
                 http,
-                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
                 stream::accept,
             )
-        }
-        if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(response.status, response.body)) {
-            if (response.body.contains("max_tokens", ignoreCase = true) && !response.body.contains("tool_choice", ignoreCase = true)) {
-                sendMaxOut = null
-            } else if (response.body.contains("tool_choice", ignoreCase = true) && !response.body.contains("max_tokens", ignoreCase = true)) {
-                sendForce = false
-            } else {
-                sendForce = false
-                sendMaxOut = null
+            if (raw.status == 400 && raw.body.contains("stream_options")) {
+                // 一些兼容端点能流式生成，却没有用量选项。
+                includeUsage = false
+                stream = OpenAiStream(onText, ::parseUsage, ::thinking)
+                raw = HttpSupport.stream(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                    stream::accept,
+                )
             }
-            stream = OpenAiStream(onText, ::parseUsage, ::thinking)
-            response = HttpSupport.stream(
-                http,
-                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut),
-                stream::accept,
-            )
+            if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(raw.status, raw.body)) {
+                if (raw.body.contains("max_tokens", ignoreCase = true) && !raw.body.contains("tool_choice", ignoreCase = true)) {
+                    sendMaxOut = null
+                } else if (raw.body.contains("tool_choice", ignoreCase = true) && !raw.body.contains("max_tokens", ignoreCase = true)) {
+                    sendForce = false
+                } else {
+                    sendForce = false
+                    sendMaxOut = null
+                }
+                stream = OpenAiStream(onText, ::parseUsage, ::thinking)
+                raw = HttpSupport.stream(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                    stream::accept,
+                )
+            }
+            raw
         }
         val (status, retryAfter, text) = response
         if (status !in 200..299) {
@@ -172,6 +184,7 @@ class OpenAiCompatModel(
         includeUsage: Boolean = true,
         forceToolChoice: Boolean = false,
         maxTokens: Int? = null,
+        key: String? = resolveKey(),
     ): Request {
         val payload = buildJsonObject {
             put("model", model)
@@ -197,7 +210,7 @@ class OpenAiCompatModel(
         return Request.Builder().url(endpoint)
             .withHeaders(headers)
             .header("Accept", if (stream) "text/event-stream" else "application/json")
-            .apply { if (!apiKey.isNullOrEmpty()) headerOrReject("Authorization", "Bearer $apiKey") }
+            .apply { if (!key.isNullOrEmpty()) headerOrReject("Authorization", "Bearer $key") }
             .postInference(InferenceProtocol.Chat, payload)
             .build()
     }
@@ -431,8 +444,8 @@ private class OpenAiStream(
         if (data == "[DONE]") { done = true; return true }
         val root = try { json.parseToJsonElement(data).jsonObject }
         catch (e: Exception) { throw ModelError.BadResponse("流式响应不是合法 JSON", e) }
-        // 有的服务流式请求一开头就出错时回 200,在事件流里给一帧错误;说的是超长,和 400 一样按超长处理
-        root["error"]?.toString()?.let { e -> throw if (ModelHttp.saysContextTooLong(e)) ModelError.ContextTooLong() else ModelError.BadResponse(e.take(200)) }
+        // 有的服务流式请求一开头就出错时回 200,也要按错误类型接入重试与备援
+        ModelHttp.streamError(root)?.let { throw it }
         chunks++
         usageOf(root["usage"])?.let { usage = it }
         val choice = (root["choices"] as? JsonArray)?.firstOrNull() as? JsonObject ?: return false

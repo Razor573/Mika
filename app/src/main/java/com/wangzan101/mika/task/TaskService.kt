@@ -102,8 +102,14 @@ class TaskService : Service() {
     /** 最近一次 start 时读到的开关;关着时登记处上限恒为 1。 */
     @Volatile private var parallel = false
     private val center by lazy {
-        TaskCenter<TaskRun>(::limit, { it.conversationId }, { it.key }, (application as com.wangzan101.mika.MikaApp).runStore,
-            (application as com.wangzan101.mika.MikaApp).resources, (application as com.wangzan101.mika.MikaApp).followUpQueue) { c, g ->
+        val app = application as com.wangzan101.mika.MikaApp
+        val wsOf: (String) -> String = { id -> com.wangzan101.mika.chat.WorkspaceResolver.resolveFor(app, id).wire }
+        TaskCenter<TaskRun>(
+            ::limit, { it.conversationId }, { it.key }, app.runStore,
+            app.resources, app.followUpQueue,
+            workspaceOf = { wsOf(it.conversationId) },
+            resolveWorkspace = wsOf,
+        ) { c, g ->
             TaskRun(c, g, this, scope, freeSlot(), parallel)
         }
     }
@@ -355,11 +361,23 @@ class TaskService : Service() {
         return app.teachReady && app.teach.blocksTasks()
     }
 
+    /** A start rejected before a TaskRun exists still has to close its external owners. */
+    private fun finishRejectedStart(triggerKey: String?, mcpExternalId: String?) {
+        val reason = tr(R.string.teach_blocked_task)
+        triggerKey?.let { TriggerRuntime.actionFailed(this, it, reason) }
+        mcpExternalId?.let {
+            (application as com.wangzan101.mika.MikaApp).remoteTasks.ended(
+                it, TaskState.Failed(reason, FailKind.Environment), emptyList(),
+            )
+        }
+    }
+
     private fun begin(newGoal: String, requestedConversation: String?,
         provenance: RunProvenance = RunProvenance(), triggerKey: String? = null,
         triggerActionGoal: String? = null, triggerThreadId: String? = null, mcpExternalId: String? = null, messageId: String? = null,
         channelPeer: ChannelPeer? = null, channelMessageId: String? = null, triggerCondition: String? = null, workflowAttemptId: String? = null) {
         if (teachingBlocks()) {
+            finishRejectedStart(triggerKey, mcpExternalId)
             if (provenance.origin == RunOrigin.Ui) {
                 android.widget.Toast.makeText(this, tr(R.string.teach_blocked_task), android.widget.Toast.LENGTH_LONG).show()
             }
@@ -402,6 +420,7 @@ class TaskService : Service() {
         followUp: QueuedFollowUp? = null, triggerCondition: String? = null,
         channelPeer: ChannelPeer? = null, channelMessageId: String? = null, workflowAttemptId: String? = null) {
         if (teachingBlocks()) {
+            finishRejectedStart(triggerKey, mcpExternalId)
             if (followUp != null) center.followUps.add(followUp)
             else if (provenance.origin == RunOrigin.Ui) {
                 android.widget.Toast.makeText(this, tr(R.string.teach_blocked_task), android.widget.Toast.LENGTH_LONG).show()
@@ -551,7 +570,7 @@ class TaskService : Service() {
             stopRunId?.let { id -> taskState._summarizing.update { it + id } }
             run.mcpExternalId?.let { (application as com.wangzan101.mika.MikaApp).remoteTasks.ended(it, end, run.steers.value, run.runId.value, run.sharedFiles.value) }
             run.end(end)
-            if (!run.conditionCheck) recordTurn(store, run, end, run.runId.value, run.sharedFiles.value, run.audios.value, run.joinedSteers(), run.usedGroups, run.joinedInterrupted(), run.joinedFinished())
+            if (!run.conditionCheck) recordTurn(store, run, end, run.runId.value, run.sharedFiles.value, run.audios.value, run.photos.value, run.joinedSteers(), run.usedGroups, run.joinedInterrupted(), run.joinedFinished())
             // Sequential workflows must know whether the step actually completed before dispatching the next one.
             // Reuse the existing outcome judge once; unknown/partial results remain for the user to resolve.
             val workflowJudged = if (run.workflowAttemptId != null) runCatching { run.settleOutcome(end, store) }.getOrNull() else null
@@ -598,11 +617,10 @@ class TaskService : Service() {
                 center.markResult(run, describe(end).second, deliveryId, successful = end is TaskState.Succeeded)
                 RunLearning.launchAfter(MemoryRuntime.of(this@TaskService).scope + meter, {
                     delivered = notifyResult(run, delivery) == DeliveryState.Delivered
-                    // 定时任务的结果当场按结局记(和以前一样),判下来没办成再改记;不靠服务一直在
-                    if (delivered) run.triggerWindowKey?.let { key ->
+                    // 失败结局不需要额外判定,送达后立即结束定时窗口。
+                    if (delivered && end !is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
                         runCatching {
-                            if (end is TaskState.Succeeded) TriggerRuntime.delivered(app, key)
-                            else TriggerRuntime.actionFailed(app, key, describe(end).second)
+                            TriggerRuntime.actionFailed(app, key, describe(end).second)
                         }.onFailure { Log.w(TAG, "could not record trigger result", it) }
                     }
                 }) {
@@ -613,6 +631,9 @@ class TaskService : Service() {
                     if (delivered && notDone && end is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
                         runCatching { TriggerRuntime.actionFailed(app, key, judged?.reason?.ifBlank { null } ?: describe(end).second) }
                             .onFailure { Log.w(TAG, "could not downgrade trigger result", it) }
+                    } else if (delivered && end is TaskState.Succeeded) run.triggerWindowKey?.let { key ->
+                        runCatching { TriggerRuntime.delivered(app, key) }
+                            .onFailure { Log.w(TAG, "could not record trigger result", it) }
                     }
                     if (run.provenance.origin == RunOrigin.Ui && run.workflowAttemptId == null) runCatching { run.learnAfter(end, judged?.outcome, store) }
                         .onFailure { Log.w(TAG, "learning after run failed", it) }
@@ -727,8 +748,12 @@ class TaskService : Service() {
         run.workflowAttemptId?.let { attempt ->
             (application as com.wangzan101.mika.MikaApp).workflowInterrupted(attempt)
         }
+        run.triggerWindowKey?.let { key ->
+            TriggerRuntime.actionFailed(this, key, Conversation.CANCELLED_OUTCOME)
+        }
         run.end(TaskState.Cancelled)
         recordTurn(ConversationStore.shared(this), run, TaskState.Cancelled, null, audios = run.audios.value)
+        run.mcpExternalId = null
         publishRuns()
         center.queued().forEachIndexed { i, q -> q.queue(i + 1) }
         drainReady(run.conversationId)
@@ -782,6 +807,7 @@ class TaskService : Service() {
     /** 任务结束时记一轮,后续消息可带上它作参考。写盘失败不影响任务结果。 */
     private fun recordTurn(store: ConversationStore, run: TaskRun, end: TaskState, runId: String?, files: List<SharedFile> = emptyList(),
         audios: List<com.wangzan101.mika.core.chat.GeneratedAudio> = emptyList(),
+        photos: List<com.wangzan101.mika.core.chat.GeneratedPhoto> = emptyList(),
         steers: List<String> = emptyList(), groups: List<String> = emptyList(), interrupted: List<String> = emptyList(),
         finished: List<String> = emptyList()) {
         val goal = run.triggerCondition ?: run.goal
@@ -793,7 +819,7 @@ class TaskService : Service() {
             TaskState.Cancelled -> Turn(goal, Conversation.CANCELLED_OUTCOME, "cancelled", outcomeSystemType = "task_cancelled")
             else -> return
         }.copy(runId = runId, remoteTaskId = run.mcpExternalId, steers = steers, groups = groups, interruptedReplies = interrupted, finishedReplies = finished,
-            audios = audios)
+            audios = audios, photos = photos)
             // 这一轮留下了一页:记下站点(已经关了的连同原因),对话页那一轮下面据此显示
             .let { t -> keeper.recordFor(runId)?.let { (host, closed) -> t.copy(keptPage = host, keptPageClosed = closed) } ?: t }
         runCatching { store.append(run.conversationId, turn, files) }.onFailure { Log.w(TAG, "could not save conversation turn", it) }
@@ -1051,6 +1077,8 @@ class TaskService : Service() {
             taskState.shownRun = null
         }
         taskState._busy.value = false // 收尾被取消时也不能一直挡着新任务
+        runCatching { TriggerRuntime.recoverAfterServiceStop(this) }
+            .onFailure { Log.w(TAG, "could not recover trigger windows after service stop", it) }
         super.onDestroy()
     }
 

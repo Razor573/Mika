@@ -317,7 +317,7 @@ object HistoryPruner {
             val toolStarts = work.indices.filter { work[it].role == Role.Assistant && work[it].parts.any { p -> p is Part.ToolCall } }
             if (toolStarts.size <= 1) break
             val aIdx = toolStarts.dropLast(1).firstOrNull { idx ->
-                val call = work[idx].parts.filterIsInstance<Part.ToolCall>().firstOrNull()
+                val call = work[idx].parts.firstActionCall()
                 tools.verb(call?.name) !in PINNED_VERBS
             } ?: break
             val end = work.indices.firstOrNull { it > aIdx && work[it].role == Role.Assistant } ?: work.size
