@@ -1077,7 +1077,7 @@ class ModelSetupViewModelTest {
         assertEquals("proj-v1", p.projectId)
         assertEquals("global", p.location)
         assertEquals("sa1@proj-v1.iam.gserviceaccount.com (proj-v1)", vm.state.value.vertexSummaries[p.id])
-        assertEquals("gemini-4-hydrogen", store.configFor(ModelRole.Main)!!.model)
+        assertEquals("gemini-4-argon", store.configFor(ModelRole.Main)!!.model)
         tmp.root.walk().filter(File::isFile).forEach { f -> assertFalse(f.name, f.readText().contains("PRIVATE KEY")) }
 
         assertTrue(vm.updateVertexSettings(p.id, "proj-renamed", "us-central1")); runCurrent()
