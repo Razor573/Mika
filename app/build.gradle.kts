@@ -38,7 +38,7 @@ android {
     // 所以只在这次构建要出 perf/release 包时打开,单独构建调试包时产物仍是 app-debug.apk。
     splits {
         abi {
-            isEnable = gradle.startParameter.taskNames.any { it.startsWith("assemble") && Regex("(?i)(perf|release)").containsMatchIn(it) }
+            isEnable = gradle.startParameter.taskNames.any { Regex("(?i)(perf|release)").containsMatchIn(it) }
             reset()
             include("arm64-v8a")
             isUniversalApk = true
@@ -160,7 +160,7 @@ tasks.withType<Test>().configureEach {
     inputs.file(rootProject.file("licenses/THIRD_PARTY_NOTICES.md")).withPropertyName("thirdPartyNotices")
 }
 
-tasks.matching { it.name in setOf("packageRelease", "bundleRelease") }.configureEach {
+tasks.matching { it.name == "packageRelease" }.configureEach {
     doFirst {
         val required = listOf(
             "ANDROID_KEYSTORE_PATH",
