@@ -1439,6 +1439,7 @@ object ModelsCopy {
         ProviderConfig.Kind.OpenAiCompat -> tr(R.string.models_openai_compat)
         ProviderConfig.Kind.Anthropic -> "Anthropic"
         ProviderConfig.Kind.Gemini -> "Gemini"
+        ProviderConfig.Kind.Vertex -> "Vertex AI"
         ProviderConfig.Kind.OpenAiResponses -> "OpenAI Responses"
         ProviderConfig.Kind.ChatGpt -> "ChatGPT"
         ProviderConfig.Kind.Xai -> "xAI Responses"
