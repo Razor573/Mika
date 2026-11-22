@@ -1217,12 +1217,9 @@ class ProviderStore(
     }
 
     private fun applyContextSettings(cfg: ProviderConfig, settings: ModelContextSettings?): ProviderConfig =
-        if (settings == null) cfg.copy(capabilities = cfg.capabilities.copy(
-            compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
-        )) else cfg.copy(capabilities = cfg.capabilities.copy(
+        if (settings == null) cfg else cfg.copy(capabilities = cfg.capabilities.copy(
             contextTokens = settings.windowTokens ?: cfg.capabilities.contextTokens,
             compactionTriggerTokens = settings.triggerTokens?.coerceAtMost(ContextLimits.MAX_INPUT_TOKENS),
-            compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
         ))
 
     /**
