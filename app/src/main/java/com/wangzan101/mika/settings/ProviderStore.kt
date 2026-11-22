@@ -1,7 +1,17 @@
 package com.wangzan101.mika.settings
 
 import android.content.Context
+import com.wangzan101.mika.core.agent.GroupPool
+import com.wangzan101.mika.core.agent.GroupWeights
+import com.wangzan101.mika.core.agent.ModelHealthRegistry
+import com.wangzan101.mika.core.agent.PoolMember
+import com.wangzan101.mika.core.agent.StickyTable
 import com.wangzan101.mika.core.agent.ContextLimits
+import com.wangzan101.mika.core.model.GroupMember
+import com.wangzan101.mika.core.model.GroupLimits
+import com.wangzan101.mika.core.model.GroupStrategy
+import com.wangzan101.mika.core.model.MemberKey
+import com.wangzan101.mika.core.model.ModelGroup
 import com.wangzan101.mika.core.chatgpt.ChatGptAuth
 import com.wangzan101.mika.core.chatgpt.ChatGptSession
 import com.wangzan101.mika.core.chatgpt.ChatGptTokens
@@ -44,6 +54,7 @@ import com.wangzan101.mika.core.model.ModelProtocol
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.model.ModelSession
 import com.wangzan101.mika.core.model.OpenAiCompatModel
+import com.wangzan101.mika.core.model.OpenAiServiceTier
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.PromptCaching
 import com.wangzan101.mika.core.model.ResponsesModel
@@ -67,6 +78,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -74,12 +86,13 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -87,13 +100,16 @@ import com.wangzan101.mika.core.net.NetProxy
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
  * 一个模型接入:属于哪个服务商([providerId])、模型名、能力。接口类型、地址和名字照抄所属服务商(建模型时用);
- * Key 存在服务商上。这是存储内部的一层:用户只选「哪个用途用哪个模型」,配置随选择建、没人用就删。
+ * Key 存在服务商上。这是存储内部的一层:用户选「哪个用途用哪个模型」或把模型加进组,配置随选择建;没人用、也不在任何组里就删。
  */
 data class ProviderConfig(
     val id: String,
@@ -186,8 +202,22 @@ data class Provider(
     /** Vertex AI 区域（空值回退为 `global`）。 */
     val location: String = "",
     val modelsRefreshedAtMs: Long? = null,
+    /** OpenAI 直连和 ChatGPT 登录的速度档位，按模型名保存。 */
+    val serviceTiers: Map<String, OpenAiServiceTier> = emptyMap(),
+    /** 用户标为 TTS 的模型名，独立于对话用途和服务商模型列表。 */
+    val ttsModels: Set<String> = emptySet(),
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
+
+    fun supportsServiceTier(model: String, endpoint: ModelEndpoint? = models?.firstOrNull { it.id == model }?.endpoint): Boolean {
+        if (kind != ProviderConfig.Kind.OpenAiResponses && kind != ProviderConfig.Kind.ChatGpt) return false
+        if (endpoint != null && endpoint.protocol != ModelProtocol.Responses) return false
+        val url = (endpoint?.adapterBaseUrl ?: baseUrl).toHttpUrlOrNull()
+        return url?.isHttps == true && url.host == "api.openai.com"
+    }
+
+    internal fun requestedServiceTier(model: String, endpoint: ModelEndpoint?): OpenAiServiceTier? =
+        serviceTiers[model]?.takeIf { supportsServiceTier(model, endpoint) }
 
     /**
      * [model] 在这家还没测试通过:这家没有可用的列表(不提供,或跳过测试存下时没列过),模型名是手填的,又没在
@@ -217,21 +247,24 @@ data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens
         (readTimeoutSeconds == null || readTimeoutSeconds in MODEL_READ_TIMEOUT_SECONDS)
 }
 
-/** 一个用途选了什么:一个具体模型、用主模型,或不用(只有看图可以不用)。 */
+/** 一个用途选了什么:一个具体模型、一个模型组、用主模型,或不用(只有看图可以不用)。 */
 sealed interface RoleChoice {
     /** 用 [configId] 这条模型配置。 */
     data class Model(val configId: String) : RoleChoice
+    /** 用 [groupId] 这个模型组(按组成员和策略路由)。 */
+    data class Group(val groupId: String) : RoleChoice
     data object SameAsMain : RoleChoice
     data object Off : RoleChoice
 }
 
 /**
  * 三个用途各选了什么,都是用户明说的,没有按能力推断的默认分配。
- * [main] 是主模型的配置 id,为 null 表示还没选;看图默认不用,轻量默认用主模型。
- * 现已支持所有角色 (Main, Vision, Light) 拥有独立的备援链 (Waterfall Chain)。
+ * [main] 是主模型的配置 id,[mainGroup] 是主模型组的 id,最多一个非空;都为 null 表示还没选。
+ * 看图默认不用,轻量默认用主模型。所有角色 (Main, Vision, Light) 都有独立的备援链 (Waterfall Chain)。
  */
 data class RoleChoices(
     val main: String? = null,
+    val mainGroup: String? = null,
     val vision: RoleChoice = RoleChoice.Off,
     val light: RoleChoice = RoleChoice.SameAsMain,
     /** 主模型的备援配置 id(项目 3),按接手顺序;主模型失败时换不换由 Failover 的决策表定。 */
@@ -257,18 +290,21 @@ data class RoleChoices(
         ModelRole.Light -> copy(lightFallbacks = list)
     }
 
+    /** 主模型选了没有:具体模型或模型组都算。 */
+    val hasMain: Boolean get() = main != null || mainGroup != null
+
     /** 这个用途的选择;主模型没选时为 null。 */
     operator fun get(role: ModelRole): RoleChoice? = when (role) {
-        ModelRole.Main -> main?.let(RoleChoice::Model)
+        ModelRole.Main -> mainGroup?.let(RoleChoice::Group) ?: main?.let(RoleChoice::Model)
         ModelRole.Vision -> vision
         ModelRole.Light -> light
     }
 
-    /** 这个用途实际用的配置 id:「用主模型」取主模型的;不用、或主模型还没选时为 null。 */
-    fun resolve(role: ModelRole): String? = when (val c = get(role)) {
+    /** 这个用途实际用的配置 id:「用主模型」取主模型的;组、不用、或主模型还没选时为 null。 */
+    fun resolveConfig(role: ModelRole): String? = when (val c = get(role)) {
         is RoleChoice.Model -> c.configId
-        RoleChoice.SameAsMain -> main
-        RoleChoice.Off, null -> null
+        RoleChoice.SameAsMain -> resolveConfig(ModelRole.Main)
+        is RoleChoice.Group, RoleChoice.Off, null -> null
     }
 
     /** 两个用途是否解析到同一条配置;任一用途没配时不算相同。 */
@@ -277,12 +313,26 @@ data class RoleChoices(
         return a == resolve(second)
     }
 
+    /** 这个用途实际用的组 id:「用主模型」取主模型的;具体模型、不用、或主模型还没选时为 null。 */
+    fun resolveGroup(role: ModelRole): String? = when (val c = get(role)) {
+        is RoleChoice.Group -> c.groupId
+        RoleChoice.SameAsMain -> resolveGroup(ModelRole.Main)
+        is RoleChoice.Model, RoleChoice.Off, null -> null
+    }
+
     /** 有用途在用的配置 id;其余的配置没人用,会被删掉。 */
     val referenced: Set<String> get() = ModelRole.entries.mapNotNull(::resolve).toSet() + mainFallbacks + visionFallbacks + lightFallbacks
 
-    /** 改一个用途;这个用途不接受的选择(主模型只能是具体模型,轻量不能不用)返回 null。 */
+    /** 兼容旧调用方:这个用途实际用的配置 id。 */
+    fun resolve(role: ModelRole): String? = resolveConfig(role)
+
+    /** 改一个用途;这个用途不接受的选择(主模型只能是具体模型或组,轻量不能不用)返回 null。 */
     fun with(role: ModelRole, choice: RoleChoice): RoleChoices? = (when (role) {
-        ModelRole.Main -> (choice as? RoleChoice.Model)?.let { copy(main = it.configId) }
+        ModelRole.Main -> when (choice) {
+            is RoleChoice.Model -> copy(main = choice.configId, mainGroup = null)
+            is RoleChoice.Group -> copy(main = null, mainGroup = choice.groupId)
+            RoleChoice.SameAsMain, RoleChoice.Off -> null
+        }
         ModelRole.Vision -> copy(vision = choice)
         ModelRole.Light -> if (choice == RoleChoice.Off) null else copy(light = choice)
     })?.let { next ->
@@ -290,22 +340,38 @@ data class RoleChoices(
     }
 
     fun reasoningEffort(role: ModelRole): String? = when (get(role)) {
-        is RoleChoice.Model -> reasoningEfforts[role]
-        RoleChoice.SameAsMain -> main?.let { reasoningEfforts[ModelRole.Main] }
+        is RoleChoice.Model, is RoleChoice.Group -> reasoningEfforts[role]
+        RoleChoice.SameAsMain -> reasoningEfforts[ModelRole.Main]
         else -> null
     }
 
-    /** 指向 [valid] 之外的选择退回默认:主模型变成没选,看图不用,轻量用主模型。 */
-    fun keepOnly(valid: Set<String>): RoleChoices {
-        fun RoleChoice.gone() = this is RoleChoice.Model && configId !in valid
+    /**
+     * 指向 [validConfigs] / [validGroups] 之外的选择退回默认:主模型变成没选,看图不用,轻量用主模型。
+     * 组为空、或组里没有可用成员时由调用方把它从 [validGroups] 里拿掉。
+     */
+    fun keepOnly(validConfigs: Set<String>, validGroups: Set<String> = emptySet()): RoleChoices {
+        fun RoleChoice.gone() = when (this) {
+            is RoleChoice.Model -> configId !in validConfigs
+            is RoleChoice.Group -> groupId !in validGroups
+            else -> false
+        }
+        val mainModel = main?.takeIf { it in validConfigs }
+        val mainGroupId = mainGroup?.takeIf { it in validGroups }
         return RoleChoices(
-            main = main?.takeIf { it in valid },
+            main = mainModel,
+            mainGroup = if (mainModel == null) mainGroupId else null,
             vision = if (vision.gone()) RoleChoice.Off else vision,
             light = if (light.gone()) RoleChoice.SameAsMain else light,
-            mainFallbacks = mainFallbacks.filter { it in valid },
-            visionFallbacks = visionFallbacks.filter { it in valid },
-            lightFallbacks = lightFallbacks.filter { it in valid },
-            reasoningEfforts = reasoningEfforts.filterKeys { role -> (get(role) as? RoleChoice.Model)?.configId in valid },
+            mainFallbacks = mainFallbacks.filter { it in validConfigs },
+            visionFallbacks = visionFallbacks.filter { it in validConfigs },
+            lightFallbacks = lightFallbacks.filter { it in validConfigs },
+            reasoningEfforts = reasoningEfforts.filterKeys { role ->
+                when (val c = get(role)) {
+                    is RoleChoice.Model -> c.configId in validConfigs
+                    is RoleChoice.Group -> c.groupId in validGroups
+                    else -> false
+                }
+            },
         )
     }
 }
@@ -323,6 +389,7 @@ data class ClientSetup(
     val thinkingTypes: List<String>? = null,
     val readTimeoutSeconds: Int? = null,
     val forceToolCall: Boolean = false,
+    val serviceTier: OpenAiServiceTier? = null,
 )
 
 /** 「测试并保存」试调用(见 [ProviderStore.probe])的结果。 */
@@ -338,9 +405,10 @@ sealed interface ProbeResult {
 /**
  * 服务商、模型配置的存取与用途选择。配置存成 JSON 文件,API Key 经 [KeyCipher] 加密后另存一个文件,每个服务商一份。
  *
- * 用户只管两层:连了哪些服务商、每个用途([RoleChoices])用哪个模型。模型配置([ProviderConfig])是内部的一层:
- * 选模型时当场建,没有用途再用它就删掉(见 [prune];Key 按服务商存,删配置不动 Key)。
- * 用途选什么就是什么,不看能力标记;选具体模型时把对应标记记为 true(见 [choose])。
+ * 用户管三层:连了哪些服务商、每个用途([RoleChoices])用哪个模型或模型组、模型组里有哪些模型。
+ * 模型配置([ProviderConfig])是内部的一层:选模型或用进组时当场建,没有用途、也没有组再用它就删掉
+ * (见 [prune];Key 按服务商存,删配置不动 Key)。
+ * 对话用途和组成员只接受非 TTS 模型(见 [ModelOptions.canUseForChat]);选具体模型时把对应的能力标记记为 true(见 [choose])。
  *
  * 旧版本的文件:只有模型配置、Key 按配置 id 存的,读入时按 [ProviderConnection.keyOf] 归成服务商,
  * Key 取那组里任一条的,原来按配置 id 存的 Key 清掉(见 [migrate]);用途只记了显式指定的,
@@ -407,6 +475,17 @@ class ProviderStore(
     /** 三个用途各选了什么;指向的配置都在 [configs] 里。 */
     val roles: StateFlow<RoleChoices> = _roles.asStateFlow()
 
+    private val _groups = MutableStateFlow<List<ModelGroup>>(emptyList())
+    /** 模型组,按创建/保存的先后。 */
+    val groups: StateFlow<List<ModelGroup>> = _groups.asStateFlow()
+
+    /** 组成员健康状态,进程内共享:同一服务商的同一模型冷却一次就够。 */
+    private val health = ModelHealthRegistry()
+    /** 同一对话固定成员,进程内;重启清空。 */
+    private val sticky = StickyTable()
+    /** 加权轮询的累计值,按组共享;每个任务新建池时沿用。 */
+    private val weights = GroupWeights()
+
     /** 服务商 id → 加密后的 Key。 */
     private var keys: Map<String, String> = emptyMap()
 
@@ -418,6 +497,9 @@ class ProviderStore(
     fun list(): List<ProviderConfig> = _configs.value
 
     fun provider(id: String): Provider? = _providers.value.firstOrNull { it.id == id }
+
+    private fun ProviderConfig.canUseForChat(): Boolean =
+        provider(providerId)?.let { ModelOptions.canUseForChat(it, model) } == true
 
     /**
      * 新增或替换同 id 的模型配置(新增的要再交给 [choose],否则下次读入时没人用会被删掉)。
@@ -446,6 +528,9 @@ class ProviderStore(
         )
         val list = _configs.value
         val i = list.indexOfFirst { it.id == cfg.id }
+        if (attached.id in _roles.value.referenced && !attached.canUseForChat()) {
+            require(list.getOrNull(i)?.let { it.providerId == p.id && it.model == attached.model } == true)
+        }
         _configs.value = if (i >= 0) list.toMutableList().also { it[i] = attached } else list + attached
         if (apiKey != null) setKey(p.id, apiKey)
         writeConfig()
@@ -654,8 +739,14 @@ class ProviderStore(
             writeAtomically(chatGptHostFile, buildJsonObject { put("hostId", chatGptRegistration().first) }.toString())
         }
         _providers.value = _providers.value.filterNot { it.id == providerId }
+        val gone = _configs.value.filter { it.providerId == providerId }.map { it.id }.toSet()
         _configs.value = _configs.value.filterNot { it.providerId == providerId }
-        _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet())
+        // 组失去这些成员;成员全没了的组删掉,用它的用途退回默认
+        _groups.value = _groups.value
+            .map { g -> g.copy(members = g.members.filterNot { it.configId in gone }) }
+            .filter { it.members.isNotEmpty() }
+        repairGroupRoles()
+        _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet(), usableGroupIds())
         prune()
         invalidateVertexTokens(providerId)
         synchronized(accountTokens) { accountTokens.remove(providerId) }
@@ -666,34 +757,43 @@ class ProviderStore(
     }
 
     /**
-     * 把服务商 [providerId] 下的 [model] 用作 [role]:这个模型还没有配置就按 [caps] 建一条,再交给 [choose]。
-     * 服务商不存在时返回 false。
+     * 保存用户选定的模型用途。服务商详情允许同时撤销 TTS 标记，其他入口仍按现有标记过滤。
      */
     @Synchronized
-    fun use(role: ModelRole, providerId: String, model: String, caps: Capabilities): Boolean {
+    fun use(role: ModelRole, providerId: String, model: String, caps: Capabilities, reassignTts: Boolean = false): Boolean {
         val p = provider(providerId) ?: return false
-        val cleanModel = if (p.kind == ProviderConfig.Kind.Antigravity) AntigravityAuth.collapseModelId(model) else model
-        val id = _configs.value.firstOrNull { it.providerId == p.id && it.model == cleanModel }?.id
-            ?: newId().also {
-                save(
-                    ProviderConfig(
-                        it, p.kind, p.baseUrl, cleanModel, caps, p.name, p.id,
-                        projectId = p.projectId, location = p.location,
-                    ),
-                    null,
-                )
-            }
-        return choose(role, RoleChoice.Model(id))
+        val rawName = model.trim()
+        val name = if (p.kind == ProviderConfig.Kind.Antigravity && rawName.isNotEmpty()) {
+            AntigravityAuth.collapseModelId(rawName)
+        } else rawName
+        if (name.isEmpty() || (!reassignTts && name in p.ttsModels)) return false
+        val provider = if (reassignTts) p.withTtsMark(name, false) else p
+        val providers = _providers.value.map { if (it.id == p.id) provider else it }
+        val existing = _configs.value.firstOrNull { it.providerId == p.id && it.model == name }
+        val config = existing ?: ProviderConfig(
+            newId(), p.kind, p.baseUrl, name, caps, p.name, p.id,
+            projectId = p.projectId, location = p.location,
+        )
+        val selected = if (role == ModelRole.Main) config.copy(capabilities = config.capabilities.copy(toolCalls = true)) else config
+        var roles = _roles.value.with(role, RoleChoice.Model(config.id)) ?: return false
+        roles.main?.let { roles = roles.copy(mainFallbacks = roles.mainFallbacks - it) }
+        val configs = if (existing == null) _configs.value + selected else _configs.value.map {
+            if (it.id == existing.id) selected else it
+        }
+        // 没有用途、也不在任何组里的配置删掉(和 [prune] 一样)
+        val used = roles.referenced + _groups.value.flatMap { g -> g.members.map { it.configId } }
+        return saveRoleSelection(providers, configs.filter { it.id in used }, roles)
     }
 
     /**
      * 定一个用途:用户选什么就是什么,不看能力标记。选具体模型当主模型时把工具调用标记记为 true(运行时据此发工具定义);
      * 看图标记不改存着的,在 [configFor] 里按当下的选择推出来,换走了就跟着回去。之后没人用的配置删掉。
-     * 配置不存在、或这个用途不接受这种选择(见 [RoleChoices.with])时返回 false。
+     * 配置不存在、标为 TTS 或这个用途不接受这种选择(见 [RoleChoices.with])时返回 false。
      */
     @Synchronized
     fun choose(role: ModelRole, choice: RoleChoice): Boolean {
-        if (choice is RoleChoice.Model && _configs.value.none { it.id == choice.configId }) return false
+        if (choice is RoleChoice.Model && configById(choice.configId)?.canUseForChat() != true) return false
+        if (choice is RoleChoice.Group && !groupUsable(choice.groupId, role)) return false
         val next = _roles.value.with(role, choice) ?: return false
         if (choice is RoleChoice.Model) {
             _configs.value = _configs.value.map { c ->
@@ -716,7 +816,9 @@ class ProviderStore(
     @Synchronized
     fun ensureConfigId(providerId: String, model: String, caps: Capabilities): String? {
         val p = provider(providerId) ?: return null
-        val existing = _configs.value.firstOrNull { it.providerId == p.id && it.model == model }
+        val name = model.trim()
+        if (!ModelOptions.canUseForChat(p, name)) return null
+        val existing = _configs.value.firstOrNull { it.providerId == p.id && it.model == name }
         if (existing != null) {
             if (!existing.capabilities.toolCalls) {
                 _configs.value = _configs.value.map { c ->
@@ -727,7 +829,7 @@ class ProviderStore(
             return existing.id
         }
         val id = newId()
-        save(ProviderConfig(id, p.kind, p.baseUrl, model, caps.copy(toolCalls = true), p.name, p.id), null)
+        save(ProviderConfig(id, p.kind, p.baseUrl, name, caps.copy(toolCalls = true), p.name, p.id), null)
         return id
     }
 
@@ -755,7 +857,7 @@ class ProviderStore(
     @Synchronized
     fun setFallback(role: ModelRole, slot: Int, configId: String?): Boolean {
         if (slot < 0 || slot >= MAX_FALLBACKS) return false
-        if (configId != null && _configs.value.none { it.id == configId }) return false
+        if (configId != null && configById(configId)?.canUseForChat() != true) return false
         val current = _roles.value.fallbacks(role)
         val next = when {
             configId == null -> if (slot in current.indices) current.toMutableList().apply { removeAt(slot) } else return true
@@ -779,14 +881,95 @@ class ProviderStore(
     @Synchronized
     fun setMainFallback(slot: Int, configId: String?): Boolean = setFallback(ModelRole.Main, slot, configId)
 
+    /** 这个组;不存在为 null。 */
+    fun group(id: String): ModelGroup? = _groups.value.firstOrNull { it.id == id }
+
+    /** 这个用途绑定的组;没绑组、或组已不存在时为 null。 */
+    fun groupFor(role: ModelRole): ModelGroup? = _roles.value.resolveGroup(role)?.let(::group)
+
+    /**
+     * 组能不能被 [role] 选中:主模型要求全员支持工具,看图要求至少一个成员能看图,轻量不强制。
+     * 组为空、或成员指向的配置已经不在时按不可用算。
+     */
+    fun groupUsable(groupId: String, role: ModelRole): Boolean =
+        group(groupId)?.usableFor(role) { id -> _configs.value.firstOrNull { it.id == id }?.capabilities } == true
+
+    /** 一个组能不能用于某个用途;UI 用它给组列表打标。 */
+    fun groupUsable(group: ModelGroup, role: ModelRole): Boolean =
+        group.usableFor(role) { id -> _configs.value.firstOrNull { it.id == id }?.capabilities }
+
+    /**
+     * 新增或替换同 id 的组。成员指向的配置必须都在;主模型的组必须全员支持工具,看图的组至少要有一个能看图。
+     * 不满足时返回 false,不改已有的组。
+     */
+    @Synchronized
+    fun saveGroup(group: ModelGroup): Boolean {
+        if (group.members.any { m -> _configs.value.none { it.id == m.configId } }) return false
+        // 新加进来的成员不能是标为 TTS 的模型;旧设置里已经在组里的留着,由用户在服务商详情里解决
+        val before = group(group.id)?.members?.mapTo(hashSetOf()) { it.configId }.orEmpty()
+        if (group.members.any { m -> m.configId !in before && configById(m.configId)?.canUseForChat() != true }) return false
+        // 只看显式绑定的角色;Vision/Light 的「用主模型」不算自己在用这个组,不能拿它来拦保存
+        val usedRoles = ModelRole.entries.filter { role -> (_roles.value[role] as? RoleChoice.Group)?.groupId == group.id }
+        if (usedRoles.any { role -> !group.usableFor(role) { id -> _configs.value.firstOrNull { it.id == id }?.capabilities } }) return false
+        val i = _groups.value.indexOfFirst { it.id == group.id }
+        _groups.value = if (i >= 0) _groups.value.toMutableList().also { it[i] = group } else _groups.value + group
+        repairGroupRoles()
+        _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet(), usableGroupIds())
+        prune()
+        writeConfig()
+        return true
+    }
+
+    /** 删掉一个组;用它当主模型/看图/轻量的用途退回默认。成员配置没人再用时一起删。 */
+    @Synchronized
+    fun deleteGroup(groupId: String) {
+        _groups.value = _groups.value.filterNot { it.id == groupId }
+        _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet(), usableGroupIds())
+        prune()
+        writeConfig()
+    }
+
+    /** 建组/加成员时用:有这个服务商的这个模型的配置就复用,没有就按 [caps] 建一条(不选用途)。标为 TTS 的模型为 null。 */
+    @Synchronized
+    fun ensureConfig(providerId: String, model: String, caps: Capabilities): String? {
+        val p = provider(providerId) ?: return null
+        if (!ModelOptions.canUseForChat(p, model)) return null
+        _configs.value.firstOrNull { it.providerId == p.id && it.model == model }?.let { return it.id }
+        val id = newId()
+        save(ProviderConfig(id, p.kind, p.baseUrl, model, caps, p.name, p.id), null)
+        return id
+    }
+
+    private fun usableGroupIds(): Set<String> = _groups.value.filter { g ->
+        g.enabledMembers.any { m -> _configs.value.any { it.id == m.configId } }
+    }.map { it.id }.toSet()
+
+    /** 组失去成员或能力变化后,把显式绑在它上面、却已经不满足角色要求的用途退回默认。 */
+    private fun repairGroupRoles() {
+        var roles = _roles.value
+        for (role in ModelRole.entries) {
+            val choice = roles[role]
+            if (choice !is RoleChoice.Group || groupUsable(choice.groupId, role)) continue
+            roles = when (role) {
+                ModelRole.Main -> roles.copy(main = null, mainGroup = null)
+                ModelRole.Vision -> roles.copy(vision = RoleChoice.Off)
+                ModelRole.Light -> roles.copy(light = RoleChoice.SameAsMain)
+            }
+        }
+        _roles.value = roles
+    }
+
     /** 只改这个用途;不支持的协议、跟随主模型的用途或列表明确不支持的档位不接受。 */
     @Synchronized
     fun setReasoningEffort(role: ModelRole, effort: String?): Boolean {
-        if (_roles.value[role] !is RoleChoice.Model) return false
-        val cfg = configFor(role) ?: return false
-        val listed = provider(cfg.providerId)?.models?.firstOrNull { it.id == cfg.model }
-        val options = ReasoningOptions.of(cfg, listed)
-        if (effort != null && (options == null || effort !in options.levels)) return false
+        if (_roles.value[role] !is RoleChoice.Model && _roles.value[role] !is RoleChoice.Group) return false
+        val cfgs = groupFor(role)?.enabledMembers?.mapNotNull { m -> _configs.value.firstOrNull { it.id == m.configId } }
+            ?: listOfNotNull(configFor(role))
+        if (cfgs.isEmpty()) return false
+        if (effort != null && cfgs.none { cfg ->
+                val options = ReasoningOptions.of(cfg, listedOf(cfg))
+                options != null && effort in options.levels
+            }) return false
         _roles.value = _roles.value.copy(reasoningEfforts =
             if (effort == null) _roles.value.reasoningEfforts - role else _roles.value.reasoningEfforts + (role to effort))
         writeConfig()
@@ -800,14 +983,15 @@ class ProviderStore(
         if (!settings.validFor(cfg.capabilities.contextTokens)) return false
         val saved = if (settings == ModelContextSettings()) p.contextSettings - cfg.model
             else p.contextSettings + (cfg.model to settings)
-        val updated = _providers.value.map { if (it.id == p.id) p.copy(contextSettings = saved) else it }
-        try {
-            writeAtomically(configFile, configJson(updated))
-        } catch (_: Exception) {
-            return false
-        }
-        _providers.value = updated
-        return true
+        return saveProviderSettings(p.copy(contextSettings = saved))
+    }
+
+    @Synchronized
+    fun setModelServiceTier(providerId: String, model: String, tier: OpenAiServiceTier?): Boolean {
+        val p = provider(providerId) ?: return false
+        if (model.isBlank() || !p.supportsServiceTier(model)) return false
+        val tiers = if (tier == null) p.serviceTiers - model else p.serviceTiers + (model to tier)
+        return saveProviderSettings(p.copy(serviceTiers = tiers))
     }
 
     /** 修改这家每日 Token 预算；写盘失败时保留内存和盘上原值。 */
@@ -815,7 +999,11 @@ class ProviderStore(
     fun setDailyTokenBudget(providerId: String, limit: Long?): Boolean {
         if (limit != null && !TokenBudgetLimits.valid(limit)) return false
         val p = provider(providerId) ?: return false
-        val updated = _providers.value.map { if (it.id == p.id) p.copy(dailyTokenBudget = limit) else it }
+        return saveProviderSettings(p.copy(dailyTokenBudget = limit))
+    }
+
+    private fun saveProviderSettings(p: Provider): Boolean {
+        val updated = _providers.value.map { if (it.id == p.id) p else it }
         try {
             writeAtomically(configFile, configJson(updated))
         } catch (_: Exception) {
@@ -834,12 +1022,76 @@ class ProviderStore(
         return true
     }
 
+    /** 迁移只补记已有朗读选择；用户决定如何处理同时用于对话的旧模型。 */
+    @Synchronized
+    internal fun importLegacyTtsChoice(providerId: String, model: String): Boolean {
+        // 旧版点服务商就存下空模型名:不补记,由调用方清掉这个选择
+        if (model.isBlank()) return true
+        val p = provider(providerId) ?: return false
+        if (model in p.ttsModels) return true
+        return saveProviderSettings(p.withTtsMark(model, true))
+    }
+
+    /** 用户明确设置模型的 TTS 用途，也接受手填模型。 */
+    @Synchronized
+    fun setTtsModel(providerId: String, model: String, enabled: Boolean): Boolean {
+        val p = provider(providerId) ?: return false
+        val id = model.trim().takeIf { it.isNotEmpty() } ?: return false
+        val updated = _providers.value.map { if (it.id == providerId) p.withTtsMark(id, enabled) else it }
+        val removedIds = if (enabled) _configs.value.filter { it.providerId == p.id && it.model.trim() == id }.mapTo(hashSetOf()) { it.id }
+            else emptySet()
+        if ((id in p.ttsModels) == enabled && removedIds.isEmpty()) return true
+        val configs = _configs.value.filterNot { it.id in removedIds }
+        if (removedIds.isEmpty()) return saveRoleSelection(updated, configs, _roles.value)
+        // 组里也去掉这个模型;成员全没了的组删掉,绑在不再满足要求的组上的用途退回默认
+        val groups = _groups.value
+            .map { g -> g.copy(members = g.members.filterNot { it.configId in removedIds }) }
+            .filter { it.members.isNotEmpty() }
+        val caps = { cid: String -> configs.firstOrNull { it.id == cid }?.capabilities }
+        var roles = _roles.value
+        for (role in ModelRole.entries) {
+            val choice = roles[role] as? RoleChoice.Group ?: continue
+            if (groups.firstOrNull { it.id == choice.groupId }?.usableFor(role, caps) == true) continue
+            roles = when (role) {
+                ModelRole.Main -> roles.copy(main = null, mainGroup = null)
+                ModelRole.Vision -> roles.copy(vision = RoleChoice.Off)
+                ModelRole.Light -> roles.copy(light = RoleChoice.SameAsMain)
+            }
+        }
+        val validGroups = groups.filter { g -> g.enabledMembers.any { m -> configs.any { it.id == m.configId } } }.mapTo(hashSetOf()) { it.id }
+        roles = roles.keepOnly(configs.mapTo(hashSetOf()) { it.id }, validGroups)
+        return saveRoleSelection(updated, configs, roles, groups)
+    }
+
+    private fun Provider.withTtsMark(model: String, enabled: Boolean): Provider = copy(
+        ttsModels = if (enabled) ttsModels + model else ttsModels - model,
+        typedModels = if (models.orEmpty().none { it.id == model }) typedModels + model else typedModels,
+    )
+
+    private fun saveRoleSelection(
+        providers: List<Provider>, configs: List<ProviderConfig>, roles: RoleChoices, groups: List<ModelGroup> = _groups.value,
+    ): Boolean {
+        try {
+            writeAtomically(configFile, configJson(providers, configs, roles, groups))
+        } catch (_: IOException) {
+            return false
+        }
+        _providers.value = providers
+        _configs.value = configs
+        _groups.value = groups
+        _roles.value = roles
+        return true
+    }
+
     /** 看图模型的「看图定位已验证」(开发者选项里改);看图用主模型时改的是主模型那条配置。没有看图模型时不动。 */
     @Synchronized
     fun setVisionGroundingVerified(verified: Boolean) {
-        val id = _roles.value.resolve(ModelRole.Vision) ?: return
+        // 看图是具体模型时改那一条;是组(含「用主模型」跟到主组)时改组里所有启用成员
+        val ids = _roles.value.resolveConfig(ModelRole.Vision)?.let { setOf(it) }
+            ?: groupFor(ModelRole.Vision)?.enabledMembers?.map { it.configId }?.toSet()
+            ?: return
         _configs.value = _configs.value.map { c ->
-            if (c.id == id) c.copy(capabilities = c.capabilities.copy(groundingVerified = verified)) else c
+            if (c.id in ids) c.copy(capabilities = c.capabilities.copy(groundingVerified = verified)) else c
         }
         writeConfig()
     }
@@ -851,25 +1103,59 @@ class ProviderStore(
      */
     fun configFor(role: ModelRole): ProviderConfig? {
         val choices = _roles.value
-        val cfg = choices.resolve(role)?.let { id -> _configs.value.firstOrNull { it.id == id } } ?: return null
+        // 组按「排在最前的启用成员」给界面一个代表;真正的路由在 modelFor 里按成员走
+        val id = choices.resolveConfig(role) ?: groupFor(role)?.enabledMembers?.firstOrNull()?.configId ?: return null
+        val cfg = _configs.value.firstOrNull { it.id == id } ?: return null
         val sees = role == ModelRole.Vision || ModelOptions.seesImages(cfg.capabilities.vision,
-            provider(cfg.providerId)?.visionOverrides?.get(cfg.model), usedForVision = choices.resolve(ModelRole.Vision) == cfg.id)
+            provider(cfg.providerId)?.visionOverrides?.get(cfg.model), usedForVision = choices.resolveConfig(ModelRole.Vision) == cfg.id)
         return if (sees == cfg.capabilities.vision) cfg else cfg.copy(capabilities = cfg.capabilities.copy(vision = sees))
     }
 
     /** 主模型在它那家还没测试通过时给出那一家(见 [Provider.untested]);任务因模型失败时据此提示去「重新测试」。 */
     fun untestedMainProvider(): Provider? {
         val cfg = configFor(ModelRole.Main) ?: return null
-        return provider(cfg.providerId)?.takeIf { it.untested(cfg.model) }
+        val candidates = groupFor(ModelRole.Main)?.enabledMembers?.mapNotNull { m -> _configs.value.firstOrNull { it.id == m.configId } }
+            ?: listOf(cfg)
+        return candidates.firstNotNullOfOrNull { c -> provider(c.providerId)?.takeIf { it.untested(c.model) } }
     }
 
     /**
      * 这个用途用的模型,套好计量;没选、不用时为 null。用量记在 [role] 名下:「用主模型」的看图、轻量调用
      * 记作看图、轻量,服务商和模型是主模型那条配置的。这是 App 里建可调用模型的唯一入口(主动能力走 [proactiveModel])。
+     * 选了模型组时返回 [GroupPool]:成员各自计量,组本身只负责选择和转移。
      * [session] 是这次调用属于的对话(同一段对话里建的模型都给同一个);服务商声明了会话头的,每个请求都带上它。
      */
-    fun modelFor(role: ModelRole, session: ModelSession = ModelSession.fresh()): ChatModel? =
-        meteredFor(role, session, UsagePurpose.of(role), ::checkDailyBudget)
+    fun modelFor(role: ModelRole, session: ModelSession = ModelSession.fresh()): ChatModel? {
+        groupFor(role)?.let { group -> return groupModelFor(role, group, session) }
+        return meteredFor(role, session, UsagePurpose.of(role), ::checkDailyBudget)
+    }
+
+    /** 按组的成员顺序建出每个成员;成员的上下文设置、思考档位、请求头都按各自的配置来。 */
+    private fun groupModelFor(role: ModelRole, group: ModelGroup, session: ModelSession): ChatModel? {
+        val members = group.members.filter { it.enabled }.mapNotNull { m ->
+            val cfg = _configs.value.firstOrNull { it.id == m.configId } ?: return@mapNotNull null
+            val p = provider(cfg.providerId) ?: return@mapNotNull null
+            val effort = memberReasoningEffort(cfg, p, m.reasoningEffort ?: _roles.value.reasoningEffort(role))
+            val model = meteredWith(cfg, role, session, UsagePurpose.of(role), ::checkDailyBudget, effortOverride = effort)
+            PoolMember(
+                key = MemberKey(p.id, cfg.model), model = model, priority = m.priority,
+                weight = m.weight.takeIf { it > 0 } ?: 1, costRank = m.costRank, providerName = p.name,
+            )
+        }
+        if (members.isEmpty()) return null
+        return GroupPool(
+            group, members, health, sticky,
+            stickyKey = "${group.id}/${session.id}",
+            weightedWeights = weights.forGroup(group.id),
+        )
+    }
+
+    /** 成员不支持角色选的档位时传 null,免得把一个服务商不认的值发出去。 */
+    private fun memberReasoningEffort(cfg: ProviderConfig, p: Provider, effort: String?): String? {
+        if (effort == null) return null
+        val levels = ReasoningOptions.of(cfg, listedOf(cfg))?.levels ?: return null
+        return effort.takeIf { it in levels }
+    }
 
     /**
      * 主动能力用的模型:轻量模型,没有时用主模型;用量记在 [UsagePurpose.Proactive] 名下。
@@ -901,11 +1187,12 @@ class ProviderStore(
         role: ModelRole, session: ModelSession, purpose: UsagePurpose, beforeCall: (UsageSource) -> Unit,
     ): ChatModel? = configFor(role)?.let { cfg -> meteredWith(cfg, role, session, purpose, beforeCall) }
 
-    /** 用 [cfg](已按 [role] 取出的那条配置)建模型,套好计量。 */
+    /** 用 [cfg](已按 [role] 取出的那条配置)建模型,套好计量。[effortOverride] 为组里成员各自的思考档位。 */
     private fun meteredWith(
         cfg: ProviderConfig, role: ModelRole, session: ModelSession, purpose: UsagePurpose, beforeCall: (UsageSource) -> Unit,
         call: ProactiveCall = ProactiveCall.Triage,
         beforeRetry: (UsageSource, Int) -> Unit = { _, _ -> },
+        effortOverride: String? = null,
     ): ChatModel {
         val p = provider(cfg.providerId)
         val listed = listedOf(cfg)
@@ -913,7 +1200,7 @@ class ProviderStore(
             deepSeekDirect = DeepSeekPriceTable.isOfficialEndpoint(adapterFor(cfg, listed?.endpoint).second))
         val settings = p?.contextSettings?.get(cfg.model)
         val configured = applyContextSettings(cfg, settings)
-        val roleEffort = _roles.value.reasoningEffort(role)
+        val roleEffort = effortOverride ?: _roles.value.reasoningEffort(role)
         // 主动能力:思考取服务商写明的最低档;回复短的那两种请求另设上限(见 ProactiveModelSetup)
         val (effort, cap) = when (purpose) {
             UsagePurpose.Proactive -> ProactiveModelSetup.of(adapterFor(cfg, listed?.endpoint).first, ReasoningOptions.of(cfg, listed), roleEffort, call)
@@ -925,13 +1212,17 @@ class ProviderStore(
             headers(p?.sessionHeader, session), maxOutputTokens = cap, reasoningEffort = effort,
             thinkingTypes = listed?.thinkingTypes, readTimeoutSeconds = settings?.readTimeoutSeconds,
             forceToolCall = forceToolCall,
+            serviceTier = p?.requestedServiceTier(cfg.model, listed?.endpoint),
         )).metered(source, usage, beforeRetry = beforeRetry, beforeCall = beforeCall)
     }
 
     private fun applyContextSettings(cfg: ProviderConfig, settings: ModelContextSettings?): ProviderConfig =
-        if (settings == null) cfg else cfg.copy(capabilities = cfg.capabilities.copy(
+        if (settings == null) cfg.copy(capabilities = cfg.capabilities.copy(
+            compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
+        )) else cfg.copy(capabilities = cfg.capabilities.copy(
             contextTokens = settings.windowTokens ?: cfg.capabilities.contextTokens,
             compactionTriggerTokens = settings.triggerTokens?.coerceAtMost(ContextLimits.MAX_INPUT_TOKENS),
+            compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
         ))
 
     /**
@@ -967,6 +1258,7 @@ class ProviderStore(
      */
     fun modelForRoleConfig(role: ModelRole, configId: String, session: ModelSession = ModelSession.fresh()): ChatModel? {
         val raw = configById(configId) ?: return null
+        if (!raw.canUseForChat() && configId !in _roles.value.referenced) return null
         val p = provider(raw.providerId)
         val source = UsageSource(raw.providerId, p?.name ?: raw.name, raw.model, UsagePurpose.of(role))
         val listed = listedOf(raw)
@@ -985,6 +1277,7 @@ class ProviderStore(
             thinkingTypes = listed?.thinkingTypes,
             readTimeoutSeconds = settings?.readTimeoutSeconds,
             forceToolCall = isLight,
+            serviceTier = p?.requestedServiceTier(raw.model, listed?.endpoint),
         )).metered(source, usage, beforeCall = ::checkDailyBudget)
     }
 
@@ -1182,16 +1475,19 @@ class ProviderStore(
 
     /**
      * 声音模型:地址、Key、请求头取这家服务商;不套对话模型的计量(朗读用量由调用方另记)。
-     * 服务商、模型或协议缺失时为 null。合成比一句话慢,读超时放到 120 秒。
+     * 服务商不存在、模型未标为 TTS 或地址不合法时为 null。合成比一句话慢，读超时放到 120 秒。
      */
     fun ttsModel(choice: VoiceChoice, capabilities: TtsCapabilities): TtsModel? {
         val p = provider(choice.providerId) ?: return null
+        val model = choice.model.trim()
+        if (model !in p.ttsModels) return null
+        if (p.baseUrl.trim().toHttpUrlOrNull() == null) return null
         val client = modelHttp.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
         val header = headers(p.sessionHeader, ModelSession.fresh())
         val key = activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() }
         return when (choice.protocol) {
-            TtsProtocol.OpenAiSpeech -> OpenAiSpeechModel(p.baseUrl, key, choice.model, capabilities, client, header)
-            TtsProtocol.GeminiTts -> GeminiTtsModel(p.baseUrl, key.orEmpty(), choice.model, capabilities, client, header)
+            TtsProtocol.OpenAiSpeech -> OpenAiSpeechModel(p.baseUrl, key, model, capabilities, client, header)
+            TtsProtocol.GeminiTts -> GeminiTtsModel(p.baseUrl, key.orEmpty(), model, capabilities, client, header)
         }
     }
 
@@ -1201,6 +1497,7 @@ class ProviderStore(
      */
     fun imageModel(choice: ImageChoice, capabilities: ImageCapabilities): ImageModel? {
         val p = provider(choice.providerId) ?: return null
+        if (choice.model.isBlank() || ModelOptions.isTtsOnly(p, choice.model)) return null
         val client = modelHttp.newBuilder().readTimeout(180, TimeUnit.SECONDS).build()
         val header = headers(p.sessionHeader, ModelSession.fresh())
         val key = providerKey(p.id)
@@ -1211,7 +1508,7 @@ class ProviderStore(
     }
 
     /**
-     * 「测试并保存」的试调用:还没存下的服务商,按真实任务同一条路([modelFactory]、同样的请求头)建出 [model],
+     * 用户确认测试指定模型后，按真实任务的适配器和请求头建出 [model]，
      * 带一个无参数的工具([PROBE_TOOL])、请它调用;回复限得很短(协议允许的话,见 [buildModel])。
      * 回了工具调用为 [ProbeResult.ToolCalled],只回了话为 [ProbeResult.NoToolCall],请求失败带着服务端的报错原样返回。
      * 不计量:这几个 token 不属于任何用途。会话号用新的,不属于任何对话。超时由调用方管。
@@ -1220,7 +1517,13 @@ class ProviderStore(
         kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, sessionHeader: String?,
         model: String, endpoint: ModelEndpoint?, caps: Capabilities,
         projectId: String = "", location: String = "",
+        providerId: String = "",
+        /** 服务商详情里改选用途(同时撤掉 TTS 标记)前的试调用,不按标记拦。 */
+        allowTtsMarked: Boolean = false,
     ): ProbeResult {
+        if (!allowTtsMarked && provider(providerId)?.let { ModelOptions.isTtsOnly(it, model) } == true) {
+            return ProbeResult.Failed(ModelError.ToolsUnsupported(model))
+        }
         val probeKey = if (kind == ProviderConfig.Kind.Vertex ||
             kind == ProviderConfig.Kind.Antigravity ||
             apiKey?.trimStart()?.startsWith("{") == true
@@ -1229,7 +1532,10 @@ class ProviderStore(
         } else {
             apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
         }
-        val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true), projectId = projectId, location = location)
+        val cfg = ProviderConfig(
+            PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true),
+            providerId = providerId, projectId = projectId, location = location,
+        )
         return try {
             val m = modelFactory(cfg, probeKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
             val reply = m.complete(PROBE_SYSTEM, listOf(Message(Role.User, listOf(Part.Text(PROBE_TEXT)), Author.Mika)), listOf(PROBE_TOOL))
@@ -1588,10 +1894,12 @@ class ProviderStore(
                 )
             ProviderConfig.Kind.OpenAiResponses ->
                 ResponsesModel(baseUrl, BearerToken.fixed(apiKey), cfg.model, cfg.capabilities, http, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall,
+                    serviceTier = setup.serviceTier)
             ProviderConfig.Kind.ChatGpt ->
                 ResponsesModel(baseUrl, tokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, chatGptPlan = true, headers = setup.headers,
-                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
+                    reasoningEffort = setup.reasoningEffort, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall,
+                    serviceTier = setup.serviceTier)
             ProviderConfig.Kind.Xai ->
                 ResponsesModel(baseUrl, accountTokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, headers = setup.headers,
                     reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT, maxOutputTokens = compatMaxOut, forceToolCall = setup.forceToolCall)
@@ -1663,9 +1971,9 @@ class ProviderStore(
         }
     }
 
-    /** 删掉没有用途在用的模型配置。Key 存在服务商上,不受影响。 */
+    /** 删掉没有用途、也没有组在用的模型配置。Key 存在服务商上,不受影响。 */
     private fun prune() {
-        val used = _roles.value.referenced
+        val used = _roles.value.referenced + _groups.value.flatMap { g -> g.members.map { it.configId } }
         _configs.value = _configs.value.filter { it.id in used }
     }
 
@@ -1674,6 +1982,7 @@ class ProviderStore(
             val root = json.parseToJsonElement(configFile.readText()).jsonObject
             _providers.value = root["services"]?.jsonArray?.mapNotNull { runCatching { providerOf(it.jsonObject) }.getOrNull() }.orEmpty()
             _configs.value = root["providers"]?.jsonArray?.mapNotNull { runCatching { configOf(it.jsonObject) }.getOrNull() }.orEmpty()
+            _groups.value = root["groups"]?.jsonArray?.mapNotNull { runCatching { groupOf(it.jsonObject) }.getOrNull() }.orEmpty()
             val uses = root["uses"]?.jsonObject
             _roles.value = if (uses != null) choicesOf(uses) else migrateRoles(root["roles"]?.jsonObject)
         }
@@ -1696,8 +2005,14 @@ class ProviderStore(
         migrate()
         collapseAntigravitySavedModels()
         repairStaleContextDefaults()
-        // 指向不存在的配置的选择退回默认,没人用的配置删掉;和文件里的不一样(含刚迁移的用途)才写回
-        _roles.value = _roles.value.keepOnly(_configs.value.map { it.id }.toSet())
+        // 组成员指向的配置不在了(旧文件、服务商被删):从组里去掉;成员全没了的组删掉
+        val validConfigIds = _configs.value.map { it.id }.toSet()
+        _groups.value = _groups.value
+            .map { g -> g.copy(members = g.members.filter { it.configId in validConfigIds }) }
+            .filter { it.members.isNotEmpty() }
+        repairGroupRoles()
+        // 指向不存在的配置/组的选择退回默认,没人用的配置删掉;和文件里的不一样(含刚迁移的用途)才写回
+        _roles.value = _roles.value.keepOnly(validConfigIds, usableGroupIds())
         dropMainFromFallbacks()
         repairUnavailableReasoningEfforts()
         prune()
@@ -1821,10 +2136,16 @@ class ProviderStore(
      */
     private fun repairUnavailableReasoningEfforts() {
         val repaired = _roles.value.reasoningEfforts.mapNotNull { (role, effort) ->
-            val cfg = configFor(role) ?: return@mapNotNull null
-            val listed = provider(cfg.providerId)?.models?.firstOrNull { it.id == cfg.model }
-            val options = ReasoningOptions.of(cfg, listed)
-            if (options == null || effort in options.levels) role to effort else null
+            // 组里只要有一个成员支持这个档位就留着:路由到不支持的成员时由 memberReasoningEffort 去掉
+            val cfgs = groupFor(role)?.enabledMembers?.mapNotNull { m -> _configs.value.firstOrNull { it.id == m.configId } }
+                ?: listOfNotNull(configFor(role))
+            if (cfgs.isEmpty()) return@mapNotNull null
+            val supported = cfgs.any { cfg ->
+                val listed = provider(cfg.providerId)?.models?.firstOrNull { it.id == cfg.model }
+                val options = ReasoningOptions.of(cfg, listed)
+                options != null && effort in options.levels
+            }
+            if (supported) role to effort else null
         }.toMap()
         _roles.value = _roles.value.copy(reasoningEfforts = repaired)
     }
@@ -1857,6 +2178,10 @@ class ProviderStore(
         sessionHeader = o["sessionHeader"]?.jsonPrimitive?.content ?: ProviderPresets.forBaseUrl(o.str("baseUrl"))?.sessionHeader,
         signIn = o["signIn"]?.jsonPrimitive?.content,
         dailyTokenBudget = o.positiveLong("dailyTokenBudget")?.takeIf(TokenBudgetLimits::valid),
+        serviceTiers = (o["serviceTiers"] as? JsonObject).orEmpty().mapNotNull { (model, raw) ->
+            val value = (raw as? JsonPrimitive)?.contentOrNull
+            OpenAiServiceTier.entries.firstOrNull { it.requestValue == value }?.let { model to it }
+        }.toMap(),
         verifiedModels = o["verifiedModels"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(),
         contextSettings = (o["contextSettings"] as? JsonObject).orEmpty().mapNotNull { (model, raw) ->
             val entry = raw as? JsonObject ?: return@mapNotNull null
@@ -1867,7 +2192,10 @@ class ProviderStore(
         visionOverrides = (o["visionOverrides"] as? JsonObject).orEmpty().mapNotNull { (model, raw) ->
             (raw as? JsonPrimitive)?.booleanOrNull?.let { model to it }
         }.toMap(),
-        typedModels = o["typedModels"]?.jsonArray?.map { it.jsonPrimitive.content }?.toSet().orEmpty(),
+        typedModels = o["typedModels"]?.jsonArray?.map { it.jsonPrimitive.content }?.filter { it.isNotBlank() }?.toSet().orEmpty(),
+        ttsModels = (o["ttsModels"] as? JsonArray).orEmpty().mapNotNull {
+            (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.content?.trim()?.takeIf(String::isNotEmpty)
+        }.toSet(),
         // 旧版本存下的没有这一项:那时每一家都走过「测试并保存」,按测过算
         savedUntested = o["untested"]?.jsonPrimitive?.booleanOrNull ?: false,
         projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
@@ -1915,12 +2243,41 @@ class ProviderStore(
         location = o["location"]?.jsonPrimitive?.content.orEmpty(),
     )
 
-    /** `uses` 里的一个用途:`{"use":"model","config":id}`、`{"use":"main"}` 或 `{"use":"none"}`;认不出的按默认。 */
+    private fun groupOf(o: JsonObject) = ModelGroup(
+        id = o.str("id"),
+        name = o.str("name"),
+        strategy = GroupStrategy.of(o["strategy"]?.jsonPrimitive?.content),
+        sticky = o["sticky"]?.jsonPrimitive?.booleanOrNull ?: true,
+        raceReadOnly = o["raceReadOnly"]?.jsonPrimitive?.booleanOrNull ?: false,
+        members = o["members"]?.jsonArray?.mapNotNull { e ->
+            val m = e as? JsonObject ?: return@mapNotNull null
+            val config = m["config"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            GroupMember(
+                configId = config,
+                priority = (m["priority"] as? JsonPrimitive)?.intOrNull ?: 0,
+                weight = ((m["weight"] as? JsonPrimitive)?.intOrNull ?: 1).coerceIn(1, 100),
+                enabled = m["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+                reasoningEffort = m["reasoningEffort"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() },
+                costRank = (m["costRank"] as? JsonPrimitive)?.intOrNull,
+            )
+        }.orEmpty(),
+        limits = (o["limits"] as? JsonObject)?.let { l ->
+            GroupLimits(
+                requestsPerMinute = (l["requestsPerMinute"] as? JsonPrimitive)?.intOrNull,
+                maxConcurrent = (l["maxConcurrent"] as? JsonPrimitive)?.intOrNull,
+                dailyTokens = (l["dailyTokens"] as? JsonPrimitive)?.longOrNull,
+                dailyCostMicros = (l["dailyCostMicros"] as? JsonPrimitive)?.longOrNull,
+            )
+        } ?: GroupLimits(),
+    )
+
+    /** `uses` 里的一个用途:`{"use":"model","config":id}`、`{"use":"group","group":id}`、`{"use":"main"}` 或 `{"use":"none"}`;认不出的按默认。 */
     private fun choicesOf(o: JsonObject): RoleChoices {
         fun choice(role: ModelRole): RoleChoice? {
             val c = runCatching { o[role.name]?.jsonObject }.getOrNull() ?: return null
             return when (c["use"]?.jsonPrimitive?.content) {
                 USE_MODEL -> c["config"]?.jsonPrimitive?.content?.let(RoleChoice::Model)
+                USE_GROUP -> c["group"]?.jsonPrimitive?.content?.let(RoleChoice::Group)
                 USE_MAIN -> RoleChoice.SameAsMain
                 USE_NONE -> RoleChoice.Off
                 else -> null
@@ -1943,7 +2300,7 @@ class ProviderStore(
         r = r.copy(visionFallbacks = vf, lightFallbacks = lf)
         return r.copy(reasoningEfforts = ModelRole.entries.mapNotNull { role ->
             val effort = runCatching { o[role.name]?.jsonObject?.get("reasoningEffort")?.jsonPrimitive?.content }.getOrNull()
-            if (r[role] is RoleChoice.Model && !effort.isNullOrBlank()) role to effort else null
+            if ((r[role] is RoleChoice.Model || r[role] is RoleChoice.Group) && !effort.isNullOrBlank()) role to effort else null
         }.toMap())
     }
 
@@ -1953,7 +2310,12 @@ class ProviderStore(
 
     private fun writeConfig() = writeAtomically(configFile, configJson())
 
-    private fun configJson(providers: List<Provider> = _providers.value): String {
+    private fun configJson(
+        providers: List<Provider> = _providers.value,
+        configs: List<ProviderConfig> = _configs.value,
+        roles: RoleChoices = _roles.value,
+        groups: List<ModelGroup> = _groups.value,
+    ): String {
         val root = buildJsonObject {
             putJsonArray("services") {
                 providers.forEach { p ->
@@ -1965,6 +2327,9 @@ class ProviderStore(
                         p.modelsRefreshedAtMs?.let { put("modelsRefreshedAtMs", it) }
                         if (p.projectId.isNotEmpty()) put("projectId", p.projectId)
                         if (p.location.isNotEmpty()) put("location", p.location)
+                        if (p.serviceTiers.isNotEmpty()) putJsonObject("serviceTiers") {
+                            for ((model, tier) in p.serviceTiers) put(model, tier.requestValue)
+                        }
                         if (p.savedUntested) put("untested", true)
                         if (p.verifiedModels.isNotEmpty()) putJsonArray("verifiedModels") { p.verifiedModels.forEach { add(it) } }
                         if (p.contextSettings.isNotEmpty()) putJsonObject("contextSettings") {
@@ -1978,6 +2343,7 @@ class ProviderStore(
                             for ((model, sees) in p.visionOverrides) put(model, sees)
                         }
                         if (p.typedModels.isNotEmpty()) putJsonArray("typedModels") { p.typedModels.forEach { add(it) } }
+                        if (p.ttsModels.isNotEmpty()) putJsonArray("ttsModels") { p.ttsModels.forEach { add(it) } }
                         p.models?.let { models ->
                             putJsonArray("models") {
                                 models.forEach { m ->
@@ -2007,7 +2373,7 @@ class ProviderStore(
                 }
             }
             putJsonArray("providers") {
-                _configs.value.forEach { c ->
+                configs.forEach { c ->
                     addJsonObject {
                         put("id", c.id); put("providerId", c.providerId); put("name", c.name); put("kind", c.kind.name)
                         put("baseUrl", c.baseUrl); put("model", c.model)
@@ -2020,26 +2386,55 @@ class ProviderStore(
                     }
                 }
             }
+            if (groups.isNotEmpty()) putJsonArray("groups") {
+                groups.forEach { g ->
+                    addJsonObject {
+                        put("id", g.id); put("name", g.name); put("strategy", g.strategy.wire); put("sticky", g.sticky)
+                        if (g.raceReadOnly) put("raceReadOnly", true)
+                        putJsonArray("members") {
+                            g.members.forEach { m ->
+                                addJsonObject {
+                                    put("config", m.configId); put("priority", m.priority); put("weight", m.weight)
+                                    if (!m.enabled) put("enabled", false)
+                                    m.reasoningEffort?.let { put("reasoningEffort", it) }
+                                    m.costRank?.let { put("costRank", it) }
+                                }
+                            }
+                        }
+                        val l = g.limits
+                        if (l != GroupLimits()) putJsonObject("limits") {
+                            l.requestsPerMinute?.let { put("requestsPerMinute", it) }
+                            l.maxConcurrent?.let { put("maxConcurrent", it) }
+                            l.dailyTokens?.let { put("dailyTokens", it) }
+                            l.dailyCostMicros?.let { put("dailyCostMicros", it) }
+                        }
+                    }
+                }
+            }
             putJsonObject("uses") {
                 ModelRole.entries.forEach { role ->
-                    when (val c = _roles.value[role]) {
+                    when (val c = roles[role]) {
                         is RoleChoice.Model -> putJsonObject(role.name) {
                             put("use", USE_MODEL); put("config", c.configId)
-                            _roles.value.reasoningEfforts[role]?.let { put("reasoningEffort", it) }
+                            roles.reasoningEfforts[role]?.let { put("reasoningEffort", it) }
+                        }
+                        is RoleChoice.Group -> putJsonObject(role.name) {
+                            put("use", USE_GROUP); put("group", c.groupId)
+                            roles.reasoningEfforts[role]?.let { put("reasoningEffort", it) }
                         }
                         RoleChoice.SameAsMain -> putJsonObject(role.name) { put("use", USE_MAIN) }
                         RoleChoice.Off -> putJsonObject(role.name) { put("use", USE_NONE) }
                         null -> Unit
                     }
                 }
-                if (_roles.value.mainFallbacks.isNotEmpty()) putJsonArray("MainFallbacks") {
-                    _roles.value.mainFallbacks.forEach { add(it) }
+                if (roles.mainFallbacks.isNotEmpty()) putJsonArray("MainFallbacks") {
+                    roles.mainFallbacks.forEach { add(it) }
                 }
-                if (_roles.value.visionFallbacks.isNotEmpty()) putJsonArray("VisionFallbacks") {
-                    _roles.value.visionFallbacks.forEach { add(it) }
+                if (roles.visionFallbacks.isNotEmpty()) putJsonArray("VisionFallbacks") {
+                    roles.visionFallbacks.forEach { add(it) }
                 }
-                if (_roles.value.lightFallbacks.isNotEmpty()) putJsonArray("LightFallbacks") {
-                    _roles.value.lightFallbacks.forEach { add(it) }
+                if (roles.lightFallbacks.isNotEmpty()) putJsonArray("LightFallbacks") {
+                    roles.lightFallbacks.forEach { add(it) }
                 }
             }
         }
@@ -2051,10 +2446,7 @@ class ProviderStore(
     private fun writeAtomically(f: File, text: String) {
         val tmp = File(f.parentFile, f.name + ".tmp")
         tmp.writeText(text)
-        if (!tmp.renameTo(f)) {
-            f.delete()
-            check(tmp.renameTo(f)) { "cannot write ${f.name}" }
-        }
+        Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     }
 
     private fun encode(b: ByteArray) = Base64.getEncoder().encodeToString(b)
@@ -2073,8 +2465,9 @@ class ProviderStore(
         /** 各家预设沿用的旧上下文默认值;预设改了默认后,存着这个值的配置由 [repairStaleContextDefaults] 跟上去。 */
         private const val LEGACY_DEFAULT_CONTEXT_TOKENS = 64_000
 
-        /** `uses` 里每个用途的 `use`:具体模型(另记 `config`)、用主模型、不用。旧版本的文件里只有 `roles`。 */
+        /** `uses` 里每个用途的 `use`:具体模型(另记 `config`)、模型组(另记 `group`)、用主模型、不用。旧版本的文件里只有 `roles`。 */
         private const val USE_MODEL = "model"
+        private const val USE_GROUP = "group"
         private const val USE_MAIN = "main"
         private const val USE_NONE = "none"
 

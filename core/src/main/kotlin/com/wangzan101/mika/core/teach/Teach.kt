@@ -77,6 +77,10 @@ data class TeachSession(
     val truncated: Boolean = false,
     val draftId: String? = null,
     val updatedAt: Long = 0L,
+    /** 收下后展示给用户的技能名。旧会话没有这个字段。 */
+    val acceptedName: String? = null,
+    /** 整理时正文是模型写的（false 是按本机规则整理）；旧会话没有这个字段。 */
+    val byModel: Boolean? = null,
 ) {
     fun step(id: Int): TeachStep? = steps.find { it.id == id }
 }
@@ -310,31 +314,44 @@ object TeachWatch {
 
 /** 发给模型的脱敏摘要，或本机直接整理出的草稿。 */
 object TeachDraft {
-    fun request(session: TeachSession, targetLanguage: String = "English"): String = buildString {
+    /** 整理出来的技能，以及它是不是模型写的（不是就按本机规则整理）。 */
+    data class Result(val skill: PersonalSkill, val byModel: Boolean)
+
+    fun request(session: TeachSession, route: TeachRoute, targetLanguage: String = "English"): String = buildString {
         appendLine("Target language: $targetLanguage")
-        appendLine("Goal: ${plain(session.goal)}")
-        appendLine("Each step below comes from the same human demonstration. Allowed sources are only observed, changed by you, or noted by you. Do not claim an unused entry point does not exist.")
-        appendLine("Typed text is not saved. Do not invent coordinates, passwords, verification codes, or payment details.")
-        if (session.truncated) appendLine("There were many steps; only the first ${session.steps.size} steps are kept.")
-        session.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${teachLine(step)}") }
-        if (session.steps.none { it.needsClarification }) appendLine("No steps require extra explanation from the user.")
+        appendLine("目标:${plain(session.goal)}")
+        appendLine("这是同一次人工示范折叠后的路线。回桌面、找图标、打开浏览器这类只因为人在做才有的动作已经省略。")
+        route.apps.forEach { app ->
+            appendLine("App: ${app.label}(${app.packageName})${if (app.browser) "，是这台手机的默认浏览器" else ""}")
+        }
+        if (route.folded.isNotEmpty()) appendLine("已按 Mika 的直达能力省掉:${route.folded.joinToString("；")}")
+        appendLine("整理规则:")
+        appendLine("- 回桌面、找图标、点开 App 只是人在做:Mika 直接打开 App,不要写桌面和图标。")
+        appendLine("- 打开浏览器、点地址栏、输入、点搜索:写成「直接打开 <链接>」或「在 <站点> 搜索」;链接和关键词由使用时的请求提供,示范里没有保存。")
+        appendLine("- 点输入框、输入、提交:合成一步「输入 <内容> 并提交」。")
+        appendLine("- 只写真正决定结果的入口、具体按钮、选项、判据和停手条件;等待、重复滚动、无意义返回不写。")
+        appendLine("输入的文字没有保存。不要编造坐标、密码、验证码或支付内容。")
+        appendLine("每一步都来自同一次示范。来源只有观察到的、你改成的、你说明的。没有写到的入口不能推断成不存在。")
+        if (session.truncated) appendLine("步骤较多，只保留了前 ${session.steps.size} 步。")
+        route.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${step.text}") }
+        if (session.steps.none { it.needsClarification }) appendLine("没有需要用户另作说明的步骤。")
     }
 
-    fun assemble(session: TeachSession, name: String): String {
-        val packages = session.steps.mapNotNull { it.packageName }.distinct().take(8)
-        val apps = packages.joinToString(", ") { "\"$it\"" }
+    fun assemble(session: TeachSession, route: TeachRoute, name: String): String {
+        val apps = route.apps.map { it.packageName }.distinct().take(8).joinToString(", ") { "\"$it\"" }
         val explained = session.steps.mapNotNull { it.explanation }
         val body = buildString {
-            appendLine("## Entry")
-            appendLine("Applies to: ${plain(session.goal)}")
-            val first = session.steps.firstOrNull { it.kind == TeachKind.Window } ?: session.steps.firstOrNull()
-            if (first != null) appendLine("[Observed] Started around ${first.packageName.orEmpty()} ${first.window.orEmpty()}. Only treat screens actually seen this time as preconditions.")
-            explained.forEach { appendLine("[You noted] $it") }
-            appendLine("Sources are limited to three kinds: observed, noted by you, and explicitly marked as inferred. This draft was assembled locally from steps with no extra inference.")
-            appendLine("## Steps")
-            if (session.steps.isEmpty()) appendLine("(No viewable steps were recorded.)")
-            session.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${teachLine(step)}") }
-            appendLine("These are entry cues and interaction strategies, not a coordinate macro.")
+            appendLine("## 入口")
+            appendLine("适用：${plain(session.goal)}")
+            val first = route.apps.firstOrNull()
+            if (first != null) appendLine("Mika 直接打开 ${first.label}（${first.packageName}）。只把这次真正出现过的界面当前置条件。")
+            else appendLine("这次没有留下可用的 App 入口。只把这次真正出现过的界面当前置条件。")
+            explained.forEach { appendLine("[你说明的] $it") }
+            appendLine("来源只分三种：观察到的、你说明的、以及标明为推测的。这份由本机按示范路线整理，没有另作推测。")
+            appendLine("## 步骤")
+            if (route.steps.isEmpty()) appendLine("（没有留下可看的步骤）")
+            route.steps.forEachIndexed { i, step -> appendLine("${i + 1}. ${step.text}") }
+            appendLine("这些是入口线索和操作策略，不是坐标宏。")
             appendLine(TeachSkill.NOT_ABSENT)
             appendLine("## Common pitfalls")
             val thin = session.steps.filter { it.insufficient }
@@ -376,7 +393,6 @@ object TeachDraft {
 
     fun acceptsModel(md: String): Boolean {
         val lower = md.lowercase()
-        if ("[Observed]" !in md && "Observed" !in md && "[观察到]" !in md && "观察到" !in md) return false
         if (("trial-run succeeded" in lower || "trial run succeeded" in lower || "试跑成功" in md) && TeachSkill.NOT_TRIAL_RUN !in md) return false
         if (SensitiveFilter.hit(md) != null) return false
         return true
@@ -384,10 +400,11 @@ object TeachDraft {
 
     /**
      * 有模型就先把脱敏摘要交给它；稿不可用或没有模型时，用本机整理的那份。
-     * 返回的技能始终是待确认，且标明来自示范。
+     * 返回的技能始终是待确认，且标明来自示范；[Result.byModel] 说明这次正文是不是模型写的。
      */
     suspend fun draft(
         session: TeachSession,
+        route: TeachRoute,
         model: ChatModel?,
         toolNames: Set<String>,
         scriptTool: String?,
@@ -395,15 +412,18 @@ object TeachDraft {
         nameTaken: (String) -> Boolean,
         nowMs: Long,
         targetLanguage: String = "English",
-    ): PersonalSkill? {
-        if (session.steps.isEmpty() || !teachGoalAccepted(session.goal)) return null
-        val fromModel = model?.let { ask(it, session, targetLanguage) }?.let { raw ->
-            val caveated = ensureCaveats(PersonalSkills.withoutField(SkillDrafter.stripFence(raw), "updates"))
-            caveated.takeIf { acceptsModel(it) && SkillDrafter.validate(it, toolNames, scriptTool, runnableScripts) == null }
+    ): Result? {
+        if (route.steps.none { it.kind != null } || !teachGoalAccepted(session.goal)) return null
+        val fromModel = model?.let { ask(it, session, route, targetLanguage) }?.let { raw ->
+            val body = PersonalSkills.withoutField(SkillDrafter.stripFence(raw), "updates")
+            // 「试跑成功」要查模型原稿:先补上出处提示再查,那句话就被盖过去了,永远查不出来。
+            if (!acceptsModel(body)) return@let null
+            val caveated = ensureCaveats(body)
+            caveated.takeIf { SkillDrafter.validate(caveated, toolNames, scriptTool, runnableScripts) == null }
         }
-        val base = fromModel ?: assemble(session, "placeholder")
-        val validated = SkillDrafter.validate(base, toolNames, scriptTool, runnableScripts)
-        val md0 = if (validated == null && fromModel != null) base else assemble(session, "placeholder")
+        val base = fromModel ?: assemble(session, route, "placeholder")
+        val useModel = fromModel != null && SkillDrafter.validate(base, toolNames, scriptTool, runnableScripts) == null
+        val md0 = if (useModel) base else assemble(session, route, "placeholder")
         if (SkillDrafter.validate(md0, toolNames, scriptTool, runnableScripts) != null) return null
         val name = freshName(session.id, nameTaken)
         val md = PersonalSkills.withField(
@@ -411,22 +431,25 @@ object TeachDraft {
             "learned_from", TeachSkill.PREFIX + session.id,
         )
         if (SkillDrafter.validate(md, toolNames, scriptTool, runnableScripts) != null) return null
-        return PersonalSkill(
-            name = name,
-            markdown = md,
-            status = SkillStatus.pending,
-            learnedFrom = TeachSkill.PREFIX + session.id,
-            replacesDraftOf = null,
-            createdAt = nowMs,
-            outcomes = emptyList(),
-            source = TeachSkill.SOURCE,
+        return Result(
+            skill = PersonalSkill(
+                name = name,
+                markdown = md,
+                status = SkillStatus.pending,
+                learnedFrom = TeachSkill.PREFIX + session.id,
+                replacesDraftOf = null,
+                createdAt = nowMs,
+                outcomes = emptyList(),
+                source = TeachSkill.SOURCE,
+            ),
+            byModel = useModel,
         )
     }
 
-    private suspend fun ask(model: ChatModel, session: TeachSession, targetLanguage: String = "English"): String? = try {
+    private suspend fun ask(model: ChatModel, session: TeachSession, route: TeachRoute, targetLanguage: String = "English"): String? = try {
         val reply = model.complete(
             Prompts.role("teach_skill"),
-            listOf(Message(Role.User, listOf(Part.Text(request(session, targetLanguage))), Author.Mika)),
+            listOf(Message(Role.User, listOf(Part.Text(request(session, route, targetLanguage))), Author.Mika)),
             emptyList(),
         )
         reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }.trim().takeIf { it.isNotEmpty() }

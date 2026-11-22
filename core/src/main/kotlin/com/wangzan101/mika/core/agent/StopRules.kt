@@ -92,6 +92,10 @@ internal fun userReason(e: ModelError): String = when (e) {
     is ModelError.ContentRefused -> "The model refused to process this content. Rephrase the request or try a different model."
     is ModelError.ReasoningEffortRejected ->
         "The model rejected the selected reasoning effort. Server reply: ${quoted(e.detail)}. Go to Settings › Models and set reasoning effort to Default or a supported level."
+    is ModelError.ServiceTierRejected ->
+        "OpenAI rejected the selected service tier." +
+            (if (e.detail.isBlank()) "" else " Server reply: ${quoted(e.detail)}.") +
+            " Go to Settings › Models › Providers, open this model, and set service tier to Default or another supported level."
     is ModelError.RateLimited -> "Rate limited by the model service; still too many requests after retrying. Please try again later or check your account rate limits."
     is ModelError.Network -> "Failed to connect to the model service after retrying. Check your network connection and Base URL."
     is ModelError.Proxy -> when (e.failure) {
@@ -117,6 +121,10 @@ internal fun userReason(e: ModelError): String = when (e) {
         }
         userReason(e.primary) + " Tried the entire fallback chain for this task, and all failed: $trail."
     }
+    is ModelError.GroupUnavailable ->
+        "模型组「${e.group}」没有可用的模型${if (e.detail.isEmpty()) "" else "(${e.detail})"}。请到设置 › 模型检查组成员是否启用、能力是否符合,或稍后再试。"
+    is ModelError.GroupExhausted ->
+        "模型组「${e.group}」的模型都达到限额了${if (e.detail.isEmpty()) "" else "(${e.detail})"}。请稍后再试或调整组设置。"
 }
 
 /** 链失败记录里每个错误的短标签:认得出的写 HTTP 状态码,其余写故障名。 */

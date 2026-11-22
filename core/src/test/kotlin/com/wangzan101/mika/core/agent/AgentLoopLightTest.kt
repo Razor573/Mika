@@ -8,9 +8,13 @@ import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.GeminiModel
+import com.wangzan101.mika.core.model.GroupMember
+import com.wangzan101.mika.core.model.GroupStrategy
 import com.wangzan101.mika.core.model.LightPrompt
+import com.wangzan101.mika.core.model.MemberKey
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelError
+import com.wangzan101.mika.core.model.ModelGroup
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.OpenAiCompatModel
 import com.wangzan101.mika.core.model.Part
@@ -709,5 +713,93 @@ class AgentLoopLightTest {
         assertEquals(5, main.requests.size)
         assertEquals(7_000L, currentTime)
         assertEquals("second-request-ok", second.parts.filterIsInstance<Part.Text>().single().text)
+    }
+
+    @Test fun modelPool429RetriesOncePerMemberThenFailsOverWithoutGlobalCooldown() = runTest {
+        val m1 = Named("pool-m1", FakeModel(ModelError.RateLimited(null), ModelError.RateLimited(null)))
+        val m2 = Named("pool-m2", FakeModel(ModelError.RateLimited(null), finish("m2-ok"), finish("m2-next")))
+        val group = ModelGroup(
+            id = "g-main",
+            name = "MainPool",
+            strategy = GroupStrategy.Failover,
+            members = listOf(GroupMember("m1", priority = 1), GroupMember("m2", priority = 2)),
+            sticky = false,
+        )
+        val pool = GroupPool(
+            group = group,
+            members = listOf(
+                PoolMember(MemberKey("p1", m1.name), m1, priority = 1),
+                PoolMember(MemberKey("p2", m2.name), m2, priority = 2),
+            ),
+            health = ModelHealthRegistry(),
+            stickyTable = StickyTable(),
+            stickyKey = null,
+        )
+        val dispatcher = toolDispatcher(SafeActionScreen())
+        val sink = Events()
+        val caller = ModelCaller(pool, dispatcher, null, SpeedFlags.OFF, RetryPolicy(maxRetries = 3, jitter = { 1.0 }), sink::event, { currentTime })
+        caller.reset("BASE")
+
+        val req = listOf(Message(Role.User, listOf(Part.Text("Step 1")), Author.User))
+        val first = caller.ask(req, emptyList(), step = 1)
+        assertEquals("m2-ok", first.parts.filterIsInstance<Part.Text>().single().text)
+        // Multi-member pool caps per-member retries to 1 (1 initial + 1 retry = 2 calls on m1, then failover to m2).
+        assertEquals(2, m1.requests.size)
+        assertEquals(2, m2.requests.size)
+        assertEquals(m2, caller.lastMainUsed)
+
+        // Subsequent request starts immediately without any global cooldown carryover.
+        val timeAfterFirst = currentTime
+        val second = caller.ask(req, emptyList(), step = 2)
+        assertEquals("m2-next", second.parts.filterIsInstance<Part.Text>().single().text)
+        assertEquals(timeAfterFirst, currentTime)
+    }
+
+    @Test fun lightModelPoolForcesToolCallingAndRetriesNoTool() = runTest {
+        val main = Named("main", FakeModel(finish("main-unused")))
+        val l1 = Named(
+            "light-pool-1",
+            FakeModel(
+                finish("I think you should tap the button."),
+                tools(call("phone_observe")),
+            ),
+        )
+        val group = ModelGroup(
+            id = "g-light",
+            name = "LightPool",
+            strategy = GroupStrategy.Failover,
+            members = listOf(GroupMember("l1", priority = 1)),
+            sticky = false,
+        )
+        val lightPool = GroupPool(
+            group = group,
+            members = listOf(PoolMember(MemberKey("pl1", l1.name), l1, priority = 1)),
+            health = ModelHealthRegistry(),
+            stickyTable = StickyTable(),
+            stickyKey = null,
+        )
+        val router = ModelRouter(main, lightPool)
+        val dispatcher = toolDispatcher(SafeActionScreen())
+        val sink = Events()
+        val caller = ModelCaller(
+            main, dispatcher, router,
+            SpeedFlags(lightSteps = true, tablesAtBirth = false),
+            RetryPolicy.NONE, sink::event, { currentTime },
+        )
+        caller.reset("BASE")
+
+        val track = StepTrack()
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
+
+        val specs = listOf(ToolSpec("phone_observe", "Read screen", "{}"))
+        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
+        val (reply, usedModel) = caller.routed(history, specs, track, 3, {})
+
+        assertEquals(l1, usedModel)
+        assertEquals(2, l1.requests.size)
+        assertTrue(l1.callOptions.all { it == CallOptions.LIGHT_TOOL_ONLY && it.forceToolCall })
+        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
+        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
     }
 }

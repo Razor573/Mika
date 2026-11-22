@@ -90,22 +90,24 @@ class ToolRiskTest {
                 "phone_call_state", "phone_call_dial", "phone_call_answer", "phone_call_hangup", "phone_call_takeover",
                 "list_device_files", "copy_device_file", "search_device_files", "list_device_directory_hints", "update_device_directory_description",
                 "audio_generate", "audio_save", "audio_transcribe", "speak",
-                "image_generate", "image_edit", "image_save")
+                "image_generate", "image_edit", "image_save", "wechat_send_owner")
         assertEquals(refused, allTools().filter { !it.readOnly }.map { it.name }.toSet())
         // root 命令、通话工具都只在给了端口时登记:各给一个,所有工具都在
         val d = toolDispatcher(FakeScreen(), audio = NoAudioPort, audioSaveEnabled = true, audioSpeakTool = true, transcribe = NoTranscribePort,
             image = NoImagePort, imageSaveEnabled = true, root = object : com.wangzan101.mika.core.cap.root.RootPort {
             override suspend fun run(command: String, timeoutMs: Long) = com.wangzan101.mika.core.cap.root.RootRun.Unavailable
         }, deviceFiles = object : com.wangzan101.mika.core.cap.devicefiles.DeviceFilesPort {
-            override suspend fun search(query: com.wangzan101.mika.core.cap.devicefiles.DeviceFileSearchQuery): com.wangzan101.mika.core.cap.devicefiles.DeviceFileSearchResult = error("read call reached device files")
+            override suspend fun search(query: com.wangzan101.mika.core.workspace.DeviceFileSearchQuery): com.wangzan101.mika.core.workspace.DeviceFileSearchResult = error("read call reached device files")
             override suspend fun list(path: String?, cursor: String?, limit: Int): com.wangzan101.mika.core.cap.devicefiles.DeviceFilePage = error("read call reached device files")
-            override suspend fun importFile(path: String, workspace: String): com.wangzan101.mika.core.cap.devicefiles.DeviceFileImport = error("read call reached device files")
+            override suspend fun importFile(path: String, workspace: String): com.wangzan101.mika.core.workspace.DeviceFileImport = error("read call reached device files")
         }, phoneCalls = object : PhoneCallPort {
             override suspend fun state() = JsonObject(emptyMap())
             override suspend fun dial(number: String, simId: String?, task: PhoneCallTask?) = JsonObject(emptyMap())
             override suspend fun answer(callId: String) = JsonObject(emptyMap())
             override suspend fun hangup(callId: String) = JsonObject(emptyMap())
             override suspend fun takeover() = JsonObject(emptyMap())
+        }, wechatOwner = com.wangzan101.mika.core.wechat.WechatOwnerPort {
+            com.wangzan101.mika.core.wechat.WechatOwnerResult(com.wangzan101.mika.core.wechat.WechatOwnerResult.Status.Unavailable)
         })
         for (name in names) {
             val r = d.executeRead(Part.ToolCall("c", name, "{}")).content

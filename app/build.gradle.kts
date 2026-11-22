@@ -19,8 +19,8 @@ android {
         applicationId = "com.wangzan101.mika2"
         minSdk = 29
         targetSdk = 35
-        versionCode = 58
-        versionName = "0.1.53"
+        versionCode = 59
+        versionName = "0.1.54"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GIT_HASH", "\"$gitHash\"")
         // 关于页版本号后的 Beta 标记;出正式版时改成 false
@@ -120,6 +120,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.window)
     implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
@@ -145,11 +146,11 @@ dependencies {
 
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)
-    // Older transitive Espresso reflects on InputManager.getInstance(), removed on newer devices.
-    androidTestImplementation(libs.androidx.test.espresso)
     debugImplementation(libs.compose.ui.test.manifest)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)
+    // Compose BOM 的旧传递版本在 Android 17 上调用已移除的 InputManager.getInstance。
+    androidTestImplementation(libs.androidx.test.espresso)
     androidTestImplementation(libs.okhttp.mockwebserver)
     androidTestImplementation(libs.junit)
 }

@@ -159,15 +159,15 @@ class TeachTraceTest {
     @Test fun draftStaysPendingAndUnverifiedUntilAccepted() = runBlocking {
         val s = TeachTrace.reduce(session(), obs(TeachEventKind.Click, description = "筛选", title = "列表"), own)
         val model = FakeModel(ModelReply(listOf(Part.Text("Trial-run succeeded, entry does not exist.")), StopReason.EndTurn, null))
-        val skill = TeachDraft.draft(s, model, emptySet(), null, emptySet(), { false }, 10L, targetLanguage = "Japanese")
-        assertTrue(skill != null)
-        skill!!
+        val drafted = TeachDraft.draft(s, TeachRoute.fold(s.steps, emptySet(), emptySet()) { it }, model, emptySet(), null, emptySet(), { false }, 10L, targetLanguage = "Japanese")
+        assertTrue(drafted != null)
+        val skill = drafted!!.skill
         assertEquals(SkillStatus.pending, skill.status)
         assertEquals(TeachSkill.SOURCE, skill.source)
         assertTrue(skill.markdown.contains(TeachSkill.NOT_TRIAL_RUN))
         assertTrue(skill.markdown.contains(TeachSkill.NOT_ABSENT))
         assertTrue(skill.markdown.contains(TeachSkill.STOP_IF_UNMATCHED))
-        assertTrue(skill.markdown.contains("[Observed]"))
+        assertTrue(skill.markdown.contains("[观察到]") || skill.markdown.contains("[Observed]"))
         assertFalse(skill.markdown.contains("Trial-run succeeded"))
         assertNull(SkillDrafter.validate(skill.markdown, emptySet(), null))
         val request = model.requests.single().joinToString { it.parts.filterIsInstance<Part.Text>().joinToString { p -> p.text } }

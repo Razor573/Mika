@@ -3,7 +3,9 @@ package com.wangzan101.mika.ui
 import org.junit.Rule
 import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.core.model.Capabilities
+import com.wangzan101.mika.core.model.GroupMember
 import com.wangzan101.mika.core.model.ListedModel
+import com.wangzan101.mika.core.model.ModelGroup
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.oauth.AntigravityAuth
 import com.wangzan101.mika.settings.Provider
@@ -28,8 +30,9 @@ class ModelsCopyTest {
     private val main = ProviderConfig("c1", ds.kind, ds.baseUrl, "deepseek-reasoner", caps, ds.name, ds.id)
     private val vl = ProviderConfig("c2", qw.kind, qw.baseUrl, "qwen-vl", caps, qw.name, qw.id)
 
-    private fun ui(roles: RoleChoices, providers: List<Provider> = listOf(ds, qw), configs: List<ProviderConfig> = listOf(main, vl)) =
-        ModelSetupUi(AddForm.of(ProviderPresets.all.first()), providers = providers, configs = configs, roles = roles)
+    private fun ui(roles: RoleChoices, providers: List<Provider> = listOf(ds, qw), configs: List<ProviderConfig> = listOf(main, vl),
+        groups: List<ModelGroup> = emptyList()) =
+        ModelSetupUi(AddForm.of(ProviderPresets.all.first()), providers = providers, configs = configs, roles = roles, groups = groups)
 
     @Test fun inUseModelsComeFirstAndPickedIgnoresSameAsMain() {
         val u = ui(RoleChoices(main = "c1", vision = RoleChoice.SameAsMain))
@@ -60,5 +63,13 @@ class ModelsCopyTest {
         assertEquals("Antigravity", ModelsCopy.kindLabel(ProviderConfig.Kind.Antigravity))
         assertTrue(ModelsCopy.signInRowLine(SignInKind.Antigravity).isNotBlank())
         assertEquals(null, ModelsCopy.accountManage(SignInKind.Antigravity))
+    }
+
+    @Test fun groupRoleLineShowsMemberCount() {
+        val g = ModelGroup("g", "主力组", members = listOf(GroupMember("c1"), GroupMember("c2")))
+        val u = ui(RoleChoices(mainGroup = "g"), groups = listOf(g))
+        val line = ModelsCopy.roleLine(u, ModelRole.Main)
+        assertEquals("主力组", line.title)
+        assertEquals("2 个模型", line.subtitle)
     }
 }
