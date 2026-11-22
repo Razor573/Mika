@@ -29,6 +29,10 @@ import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.ClientHeaders
 import com.wangzan101.mika.core.model.GeminiModel
+import com.wangzan101.mika.core.model.VertexModel
+import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.oauth.VertexServiceAccount
+import com.wangzan101.mika.core.oauth.VertexTokenProvider
 import com.wangzan101.mika.core.model.GeminiTtsModel
 import com.wangzan101.mika.core.model.OpenAiSpeechModel
 import com.wangzan101.mika.core.model.TtsCapabilities
@@ -122,7 +126,7 @@ data class ProviderConfig(
      * [Xai] 同样是账号登录(设备码),凭据是登录不是 API Key,调用 xAI 自己的 Responses 接口。
      */
     enum class Kind {
-        OpenAiCompat, Anthropic, Gemini, OpenAiResponses, ChatGpt, Xai;
+        OpenAiCompat, Anthropic, Gemini, Vertex, OpenAiResponses, ChatGpt, Xai;
 
         /**
          * 这个接口类型发请求走哪种协议。用它筛掉接口写明了不支持的模型,见 [com.wangzan101.mika.ui.ModelSetupViewModel]
@@ -133,7 +137,7 @@ data class ProviderConfig(
             get() = when (this) {
                 OpenAiCompat -> ModelProtocol.ChatCompletions
                 Anthropic -> ModelProtocol.Messages
-                Gemini -> ModelProtocol.GenerateContent
+                Gemini, Vertex -> ModelProtocol.GenerateContent
                 OpenAiResponses, ChatGpt, Xai -> ModelProtocol.Responses
             }
 
@@ -189,6 +193,10 @@ data class Provider(
     val serviceTiers: Map<String, OpenAiServiceTier> = emptyMap(),
     /** 用户标为 TTS 的模型名，独立于对话用途和服务商模型列表。 */
     val ttsModels: Set<String> = emptySet(),
+    /** Vertex AI GCP project ID (optional when embedded in Service Account JSON). */
+    val projectId: String = "",
+    /** Vertex AI location (blank defaults to `global`). */
+    val location: String = "",
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
 
@@ -1586,6 +1594,35 @@ class ProviderStore(
             ProviderConfig.Kind.Xai ->
                 ResponsesModel(baseUrl, accountTokensFor(cfg.providerId), cfg.model, cfg.capabilities, http, headers = setup.headers,
                     reasoningEffort = setup.reasoningEffort, accountLogin = XAI_ACCOUNT)
+            ProviderConfig.Kind.Vertex -> {
+                val p = provider(cfg.providerId)
+                val raw = apiKey.orEmpty().trim()
+                val token: BearerToken = if (raw.startsWith("{")) {
+                    VertexTokenProvider(http, loadServiceAccountJson = { providerKey(cfg.providerId)?.trim()?.takeIf { it.isNotEmpty() } ?: raw })
+                } else {
+                    BearerToken.fixed(raw)
+                }
+                val parsedProject = if (raw.startsWith("{")) {
+                    runCatching { VertexServiceAccount.parse(raw).projectId }.getOrDefault("")
+                } else ""
+                val project = p?.projectId?.trim().orEmpty().ifBlank { parsedProject }
+                val location = VertexEndpoints.normalizeLocation(p?.location.orEmpty())
+                val customBase = baseUrl.trim().trimEnd('/').takeIf {
+                    it.isNotEmpty() && !it.equals("https://aiplatform.googleapis.com", ignoreCase = true)
+                }
+                VertexModel(
+                    projectId = project,
+                    location = location,
+                    token = token,
+                    model = cfg.model,
+                    capabilities = cfg.capabilities,
+                    http = http,
+                    headers = setup.headers,
+                    maxOutputTokens = setup.maxOutputTokens,
+                    reasoningEffort = setup.reasoningEffort,
+                    baseUrl = customBase,
+                )
+            }
         }
     }
 
@@ -1758,6 +1795,8 @@ class ProviderStore(
         }.toSet(),
         // 旧版本存下的没有这一项:那时每一家都走过「测试并保存」,按测过算
         savedUntested = o["untested"]?.jsonPrimitive?.booleanOrNull ?: false,
+        projectId = o["projectId"]?.jsonPrimitive?.content.orEmpty(),
+        location = o["location"]?.jsonPrimitive?.content.orEmpty(),
         models = o["models"]?.jsonArray?.map { e ->
             val m = e.jsonObject
             ListedModel(
@@ -1883,6 +1922,8 @@ class ProviderStore(
                             for ((model, tier) in p.serviceTiers) put(model, tier.requestValue)
                         }
                         if (p.savedUntested) put("untested", true)
+                        if (p.projectId.isNotEmpty()) put("projectId", p.projectId)
+                        if (p.location.isNotEmpty()) put("location", p.location)
                         if (p.verifiedModels.isNotEmpty()) putJsonArray("verifiedModels") { p.verifiedModels.forEach { add(it) } }
                         if (p.contextSettings.isNotEmpty()) putJsonObject("contextSettings") {
                             for ((model, settings) in p.contextSettings) putJsonObject(model) {
@@ -2066,6 +2107,32 @@ class ProviderStore(
                     catalog.openAiCompat(baseUrl, apiKey, headers)
                 ProviderConfig.Kind.Anthropic -> catalog.anthropic(baseUrl, apiKey.orEmpty(), headers)
                 ProviderConfig.Kind.Gemini -> catalog.gemini(baseUrl, apiKey.orEmpty(), headers)
+                ProviderConfig.Kind.Vertex -> {
+                    val raw = apiKey.orEmpty().trim()
+                    val parsedSa = if (raw.startsWith("{")) runCatching { VertexServiceAccount.parse(raw) }.getOrNull() else null
+                    val token: BearerToken = if (parsedSa != null) {
+                        VertexTokenProvider(shortHttp, parsedSa)
+                    } else {
+                        BearerToken.fixed(raw)
+                    }
+                    val customBase = baseUrl.trim().trimEnd('/').takeIf {
+                        it.isNotEmpty() && !it.equals("https://aiplatform.googleapis.com", ignoreCase = true)
+                    }
+                    val res = catalog.vertex(
+                        token = token,
+                        projectId = parsedSa?.projectId?.takeIf { it.isNotBlank() },
+                        headers = headers,
+                        baseUrl = customBase,
+                    )
+                    when (res) {
+                        is ModelListResult.Ok -> {
+                            val seen = res.models.map { it.id }.toSet()
+                            val merged = res.models + ModelCatalog.CURATED_VERTEX_MODELS.filter { it.id !in seen }
+                            ModelListResult.Ok(merged)
+                        }
+                        is ModelListResult.Failed -> res
+                    }
+                }
             }
 
         /**
@@ -2073,7 +2140,7 @@ class ProviderStore(
          * 订阅登录(xAI)固定走这一家的接口,不跟模型列表里写的别的协议走,免得把订阅转去另一个接口。
          */
         internal fun adapterFor(cfg: ProviderConfig, endpoint: ModelEndpoint?): Pair<ProviderConfig.Kind, String> =
-            if (endpoint == null || cfg.kind == ProviderConfig.Kind.Xai) cfg.kind to cfg.baseUrl
+            if (endpoint == null || cfg.kind == ProviderConfig.Kind.Xai || cfg.kind == ProviderConfig.Kind.Vertex) cfg.kind to cfg.baseUrl
             else ProviderConfig.Kind.of(endpoint.protocol) to endpoint.adapterBaseUrl
 
         /** 产品里的那份(App 建):配置在 files/settings 下,Key 用 Android 密钥库加密,用量记到 [usage]。 */
