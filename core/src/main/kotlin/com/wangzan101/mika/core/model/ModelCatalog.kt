@@ -1,9 +1,12 @@
 package com.wangzan101.mika.core.model
 
+import com.wangzan101.mika.core.oauth.VertexEndpoints
+
 import com.wangzan101.mika.core.net.ProxyFailure
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -423,16 +426,237 @@ class ModelCatalog(private val http: OkHttpClient) {
     private fun JsonObject.bool(k: String): Boolean? = (this[k] as? JsonPrimitive)?.booleanOrNull
     private fun JsonObject.int(k: String): Int? = (this[k] as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }
 
-    private companion object {
+
+    /**
+     * Vertex AI: lists live Gemini publisher models from `v1beta1/publishers/google/models`
+     * (paginated, filtering non-chat models, falling back from `global` to `us-central1` if unsupported).
+     */
+    suspend fun vertex(
+        token: BearerToken,
+        location: String = VertexEndpoints.DEFAULT_LOCATION,
+        projectId: String? = null,
+        headers: Map<String, String> = emptyMap(),
+        baseUrl: String? = null,
+    ): ModelListResult = run {
+        val cleanLocation = try {
+            VertexEndpoints.normalizeLocation(location)
+        } catch (_: IllegalArgumentException) {
+            return@run badUrl()
+        }
+        val cleanProject = try {
+            projectId?.trim()?.takeIf { it.isNotEmpty() }?.let(VertexEndpoints::validateProjectId)
+        } catch (_: IllegalArgumentException) {
+            return@run badUrl()
+        }
+        val overrideBase = if (baseUrl != null) {
+            try {
+                VertexEndpoints.requireHttpsOrLoopbackUrl(baseUrl, "Vertex baseUrl").toString().trimEnd('/')
+            } catch (_: IllegalArgumentException) {
+                return@run badUrl()
+            }
+        } else {
+            null
+        }
+
+        val initialBearer = try {
+            token.get(false)?.takeIf { it.isNotBlank() } ?: return@run ModelListResult.Failed(ListFailure.Auth)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: ModelError) {
+            return@run failureFor(e)
+        }
+        val auth = VertexAuthState(initialBearer, fresh = false)
+
+        val byId = linkedMapOf<String, ListedModel>()
+        val seenTokens = hashSetOf<String>()
+        var effectiveLocation = cleanLocation
+        var pageToken: String? = null
+        var page = 0
+        while (page < MAX_PAGES) {
+            val url = vertexModelsUrl(overrideBase, effectiveLocation, pageToken)
+            val result = fetchVertexPage(url, token, auth, cleanProject, headers)
+            val err = result.exceptionOrNull()
+            if (err != null) {
+                val failed = err.asFailure()
+                if (page == 0 &&
+                    overrideBase == null &&
+                    effectiveLocation == VertexEndpoints.DEFAULT_LOCATION &&
+                    failed.reason == ListFailure.NotSupported
+                ) {
+                    effectiveLocation = VERTEX_FALLBACK_LOCATION
+                    continue
+                }
+                return@run failed
+            }
+            page++
+            val root = result.getOrThrow()
+            val data = (root["publisherModels"] ?: root["models"]) as? JsonArray ?: JsonArray(emptyList())
+            data.mapNotNull(::vertexModel).forEach { model ->
+                val existing = byId[model.id]
+                byId[model.id] = if (existing == null) {
+                    model
+                } else {
+                    existing.copy(
+                        displayName = model.displayName.ifBlank { existing.displayName },
+                        contextTokens = model.contextTokens ?: existing.contextTokens,
+                        reasoning = model.reasoning ?: existing.reasoning,
+                    )
+                }
+            }
+            val next = root.str("nextPageToken")?.takeIf { it.isNotEmpty() }
+            if (next == null || !seenTokens.add(next)) return@run ModelListResult.Ok(byId.values.toList())
+            pageToken = next
+        }
+        ModelListResult.Ok(byId.values.toList())
+    }
+
+    private fun vertexModel(el: JsonElement): ListedModel? {
+        val rawId = when (el) {
+            is JsonPrimitive -> el.takeIf { it.isString }?.contentOrNull
+            is JsonObject -> {
+                val methods = (el["supportedGenerationMethods"] as? JsonArray)
+                    ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                if (methods != null && "generateContent" !in methods) return null
+                el.str("name") ?: el.str("model") ?: el.str("id")
+            }
+            else -> null
+        } ?: return null
+        val id = VertexEndpoints.cleanModelId(rawId)
+        if (id.isEmpty()) return null
+        val obj = el as? JsonObject
+        val displayName = obj?.str("displayName").orEmpty()
+        val lower = id.lowercase()
+        if ("gemini" !in lower && "gemini" !in displayName.lowercase()) return null
+        if (isExcludedGeminiModel(id, displayName)) return null
+        return ListedModel(
+            id = id,
+            displayName = displayName,
+            contextTokens = obj?.int("inputTokenLimit"),
+            reasoning = obj?.bool("thinking"),
+        )
+    }
+
+    private class VertexAuthState(var bearer: String, var fresh: Boolean)
+
+    private fun vertexModelsUrl(overrideBase: String?, location: String, pageToken: String?): String =
+        if (overrideBase == null) {
+            VertexEndpoints.publisherModelsUrl(location, pageSize = 100, pageToken = pageToken)
+        } else {
+            "$overrideBase/v1beta1/publishers/google/models".toHttpUrlOrNull()!!.newBuilder()
+                .addQueryParameter("pageSize", "100")
+                .apply { if (!pageToken.isNullOrBlank()) addQueryParameter("pageToken", pageToken) }
+                .build()
+                .toString()
+        }
+
+    private suspend fun fetchVertexPage(
+        url: String,
+        token: BearerToken,
+        auth: VertexAuthState,
+        projectId: String?,
+        headers: Map<String, String>,
+    ): Result<JsonObject> {
+        while (true) {
+            val req = buildRequest {
+                Request.Builder()
+                    .url(url)
+                    .get()
+                    .withHeaders(headers)
+                    .removeHeader("x-goog-api-key")
+                    .headerOrReject("Authorization", "Bearer ${auth.bearer}")
+                    .apply { if (projectId != null) headerOrReject("x-goog-user-project", projectId) }
+                    .build()
+            } ?: return Result.failure(Failure(illegalKey()))
+            val raw = try {
+                HttpSupport.execute(http, req)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                return Result.failure(Failure(ModelListResult.Failed(ListFailure.of(e))))
+            }
+            if (raw.status == 401 && token.refreshable && !auth.fresh) {
+                auth.fresh = true
+                auth.bearer = try {
+                    token.get(true)?.takeIf { it.isNotBlank() }
+                        ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.Auth)))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ModelError) {
+                    return Result.failure(Failure(failureFor(e)))
+                }
+                continue
+            }
+            if (raw.status !in 200..299) return Result.failure(Failure(failureFor(raw.status, raw.body)))
+            val root = try { json.parseToJsonElement(raw.body).jsonObject } catch (_: Exception) { null }
+                ?: return Result.failure(Failure(ModelListResult.Failed(ListFailure.BadResponse)))
+            return Result.success(root)
+        }
+    }
+
+    private fun failureFor(e: ModelError): ModelListResult.Failed = when (e) {
+        is ModelError.Auth, is ModelError.SignInExpired -> ModelListResult.Failed(ListFailure.Auth)
+        is ModelError.IllegalHeader -> ModelListResult.Failed(ListFailure.IllegalKey)
+        is ModelError.Network -> ModelListResult.Failed(ListFailure.Network)
+        is ModelError.BadResponse -> ModelListResult.Failed(ListFailure.BadResponse)
+        is ModelError.QuotaExceeded -> ModelListResult.Failed(ListFailure.Quota)
+        is ModelError.RateLimited -> ModelListResult.Failed(ListFailure.RateLimited)
+        is ModelError.Server -> ModelListResult.Failed(ListFailure.Server, "HTTP ${e.status}")
+        else -> ModelListResult.Failed(ListFailure.BadResponse)
+    }
+
+    companion object {
         /** 翻页上限:防止服务端一直给下一页。 */
-        const val MAX_PAGES = 10
+        private const val MAX_PAGES = 25
+        private const val VERTEX_FALLBACK_LOCATION = "us-central1"
         /** Anthropic 的 `capabilities.effort` 按字母排;界面按由浅到深排,不认得的排最后。 */
-        val EFFORT_ORDER = listOf("low", "medium", "high", "xhigh", "max")
+        private val EFFORT_ORDER = listOf("low", "medium", "high", "xhigh", "max")
         /** 列表里 `type` 一项的写法:是对话模型的,和不是的(向量、重排、画图、语音、审核)。 */
-        val CHAT_TYPES = setOf("chat", "llm", "language", "text", "vlm", "code")
-        val NON_CHAT_TYPES = setOf(
+        private val CHAT_TYPES = setOf("chat", "llm", "language", "text", "vlm", "code")
+        private val NON_CHAT_TYPES = setOf(
             "embedding", "embeddings", "rerank", "reranker", "image", "images", "video", "audio", "tts", "stt", "asr",
             "speech", "transcription", "moderation",
+        )
+        private val TOKEN_SPLIT_REGEX = Regex("[^a-z0-9]+")
+        private val EXCLUDED_GEMINI_PHRASES = listOf(
+            "deep-research",
+            "text-to-speech",
+            "native-audio",
+            "nano-banana",
+            "virtual-try-on",
+            "image-generation",
+            "music-generation",
+            "speech-to-text",
+        )
+        private val EXCLUDED_GEMINI_TOKENS = setOf(
+            "tts", "image", "images", "imagen", "music", "lyria", "robotics", "veo", "video",
+            "embedding", "embeddings", "embed", "aqa", "audio", "live", "realtime",
+            "transcribe", "transcription", "speech", "chirp", "whisper", "stt", "asr",
+            "moderation", "rerank", "reranker", "gecko", "bison", "unicorn", "medlm",
+            "upscale", "inpaint", "outpaint",
+        )
+        private val EXCLUDED_GEMINI_PREFIXES = listOf("imagen", "lyria", "veo", "chirp", "embed", "robotics")
+
+        internal fun isExcludedGeminiModel(id: String, displayName: String = ""): Boolean {
+            val fields = listOf(id, displayName)
+                .map { it.lowercase().replace('_', '-') }
+                .filter { it.isNotEmpty() }
+            for (field in fields) {
+                val tokens = field.split(TOKEN_SPLIT_REGEX).filter { it.isNotEmpty() }
+                val normalized = tokens.joinToString("-")
+                if (EXCLUDED_GEMINI_PHRASES.any { it in normalized }) return true
+                if (tokens.any { token ->
+                        token in EXCLUDED_GEMINI_TOKENS || EXCLUDED_GEMINI_PREFIXES.any { token.startsWith(it) }
+                    }
+                ) return true
+            }
+            return false
+        }
+
+        /** Curated Vertex AI Gemini models available as defaults / fallback alongside live listing and custom IDs. */
+        val CURATED_VERTEX_MODELS = listOf(
+            ListedModel(id = "gemini-4-hydrogen", displayName = "Gemini 4 Hydrogen", contextTokens = 1_000_000, vision = true, reasoning = true),
+            ListedModel(id = "gemini-3.8-flash", displayName = "Gemini 3.8 Flash", contextTokens = 1_000_000, vision = true, reasoning = true),
+            ListedModel(id = "gemini-3.5-flash-lite", displayName = "Gemini 3.5 Flash-Lite", contextTokens = 1_000_000, vision = true, reasoning = true),
         )
     }
 }
