@@ -1376,7 +1376,7 @@ object ModelSetupCopy {
     /** 手填模型名时举的例子,按接口类型(各家模型名的样子不同)。 */
     fun modelExample(kind: ProviderConfig.Kind): String = tr(
         when (kind) {
-            ProviderConfig.Kind.Gemini -> R.string.model_example_gemini
+            ProviderConfig.Kind.Gemini, ProviderConfig.Kind.Vertex -> R.string.model_example_gemini
             ProviderConfig.Kind.Anthropic -> R.string.model_example_anthropic
             ProviderConfig.Kind.OpenAiResponses, ProviderConfig.Kind.ChatGpt -> R.string.model_example_openai
             ProviderConfig.Kind.Xai -> R.string.model_example_grok
