@@ -33,7 +33,7 @@ data class ReasoningOptions(val levels: List<String>, val fromProvider: Boolean)
                     ProviderPresets.forBaseUrl(config.baseUrl)?.reasoningLevels
                         ?.takeIf { it.isNotEmpty() }?.let { ReasoningOptions(it, fromProvider = false) }
                         ?: ReasoningOptions(manualLevels, fromProvider = false)
-                ProviderConfig.Kind.Anthropic, ProviderConfig.Kind.Gemini -> null
+                ProviderConfig.Kind.Anthropic, ProviderConfig.Kind.Gemini, ProviderConfig.Kind.Vertex -> null
             }
         }
 

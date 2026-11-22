@@ -44,6 +44,7 @@ internal data class AllowanceRoute(
                 "OpenCode Go" -> AllowanceRoute(dashboard = "https://opencode.ai/console")
                 "Anthropic" -> AllowanceRoute(dashboard = "https://platform.claude.com/cost")
                 "Gemini" -> AllowanceRoute(dashboard = "https://aistudio.google.com/usage")
+                "Vertex AI" -> AllowanceRoute(dashboard = "https://console.cloud.google.com/billing")
                 "OpenAI" -> AllowanceRoute(dashboard = "https://platform.openai.com/settings/organization/billing/overview")
                 "xAI" -> AllowanceRoute(dashboard = "https://console.x.ai/")
                 "Mistral" -> AllowanceRoute(dashboard = "https://admin.mistral.ai/organization/usage")

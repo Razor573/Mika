@@ -21,6 +21,7 @@ object ProviderKeySites {
         "openrouter.ai" to "https://openrouter.ai/settings/keys",
         "api.anthropic.com" to "https://console.anthropic.com/settings/keys",
         "generativelanguage.googleapis.com" to "https://aistudio.google.com/app/apikey",
+        "aiplatform.googleapis.com" to "https://console.cloud.google.com/iam-admin/serviceaccounts",
         "api.openai.com" to "https://platform.openai.com/api-keys",
         "api.x.ai" to "https://console.x.ai/",
         "api.mistral.ai" to "https://console.mistral.ai/api-keys",
