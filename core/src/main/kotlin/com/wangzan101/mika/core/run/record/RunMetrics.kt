@@ -63,7 +63,7 @@ data class RunMetrics(
     /** 输入加输出(缓存命中含在输入里)。 */
     val tokens: Long get() = inputTokens + outputTokens
 
-    /** 办成了:报了成功(含没能核实的),交出回答后也没判成只办了一部分或办不到。 */
+    /** 办成了:报了成功(含没能核查的),交出回答后也没判成只办了一部分或办不到。 */
     val succeeded: Boolean get() = outcome in SUCCESS && judged !in NOT_DONE
 
     val lightRejected: Int get() = lightRejectedCalls

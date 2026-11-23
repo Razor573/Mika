@@ -65,9 +65,9 @@ class ResponsesModel(
     /** null 使用服务端默认;服务端拒绝所选档位时照常报错,不悄悄换档重试。 */
     private val reasoningEffort: String? = null,
     private val accountLogin: String? = null,
+    private val serviceTier: OpenAiServiceTier? = null,
     private val maxOutputTokens: Int? = null,
     private val forceToolCall: Boolean = false,
-    private val serviceTier: OpenAiServiceTier? = null,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trim().trimEnd('/') + "/responses"
@@ -96,7 +96,7 @@ class ResponsesModel(
     ): ModelReply {
         val force = forceToolCall || options.forceToolCall
         var effectiveForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (effectiveForce) LightPrompt.ensure(system) else system
         var effectiveMaxOut = (options.maxOutputTokens ?: maxOutputTokens)?.takeIf { !chatGptPlan }
         var includeReasoning = true
         var fresh = false

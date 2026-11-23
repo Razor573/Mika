@@ -33,7 +33,7 @@
     <string name="metrics_steps">Adımlar</string>
     <string name="metrics_observe_act">Okumalar / eylemler</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
-    <string name="metrics_light_rejected">Hafif model reddedildi</string>
+    <string name="metrics_light_rejected">Hafif reddedildi</string>
     <string name="metrics_counted">Sayıldı</string>
     <plurals name="metrics_n_runs">
         <item quantity="other">%1$d çalıştırma</item>

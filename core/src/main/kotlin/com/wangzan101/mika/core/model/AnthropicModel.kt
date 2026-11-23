@@ -78,7 +78,7 @@ class AnthropicModel(
     ): ModelReply {
         val force = forceToolCall || options.forceToolCall
         val effectiveForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (effectiveForce) LightPrompt.ensure(system) else system
         val effectiveMaxTokens = options.maxOutputTokens ?: maxTokens
         var response = dropStaleThinking(messages) {
             HttpSupport.execute(
@@ -112,7 +112,7 @@ class AnthropicModel(
     ): ModelReply {
         val force = forceToolCall || options.forceToolCall
         val effectiveForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (effectiveForce) LightPrompt.ensure(system) else system
         val effectiveMaxTokens = options.maxOutputTokens ?: maxTokens
         var stream = AnthropicStream(endpoint, onText, ::parseUsage)
         // 被拒的那次没有事件(不是 2xx 时 HttpSupport.stream 不调 accept),重发接着用这个 stream

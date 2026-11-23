@@ -50,24 +50,18 @@ internal object LightCallValidator {
         if (reply == null) {
             return LightValidation.Rejected("light_error", "model_error", null)
         }
-        val actionCalls = reply.parts.filterIsInstance<Part.ToolCall>().filter { it.name != PROGRESS_CALL }
-        val call = actionCalls.firstOrNull()
+        val call = reply.parts.firstActionCall()
             ?: return LightValidation.Rejected(
                 reason = "no_tool",
                 validatorReason = if (retried) "no_tool_after_retry" else "no_tool",
                 tool = null,
             )
 
-        actionCalls.firstOrNull { ac ->
-            val d = tools.declared(ac.name)
-            val v = d?.verb ?: tools.verb(ac.name)
-            ModelRouter.mainOnly(ac.name, v)
-        }?.let { unsafe ->
-            return LightValidation.Rejected("unsafe_tool", "main_only_tool:${unsafe.name}", unsafe.name)
-        }
-
         val declared = tools.declared(call.name)
         val verb = declared?.verb ?: tools.verb(call.name)
+        if (ModelRouter.mainOnly(call.name, verb)) {
+            return LightValidation.Rejected("unsafe_tool", "main_only_tool:${call.name}", call.name)
+        }
 
         val offeredNames = specs.map { it.name }.toSet()
         if ((declared == null && call.name !in offeredNames) || (specs.isNotEmpty() && call.name !in offeredNames)) {

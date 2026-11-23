@@ -236,7 +236,7 @@ sealed interface RunEvent {
     @Serializable @SerialName("answer_check")
     data class AnswerCheck(override val atMs: Long, val step: Int, val claims: Int, val unmatched: List<String>, val outward: Boolean = false) : RunEvent
 
-    /** 交出的回答里退回一次后仍没对上、标成未确认的几处。 */
+    /** 交出的回答里退回一次后还没对上、标成未确认的几处。 */
     @Serializable @SerialName("unconfirmed")
     data class Unconfirmed(override val atMs: Long, val step: Int, val items: List<String>) : RunEvent
 

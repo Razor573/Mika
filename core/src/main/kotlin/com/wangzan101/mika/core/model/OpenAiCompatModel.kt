@@ -41,11 +41,11 @@ class OpenAiCompatModel(
     private val headers: Map<String, String> = emptyMap(),
     /** 用户选的思考强度(`reasoning_effort`);null 不发。 */
     private val reasoningEffort: String? = null,
-    private val maxOutputTokens: Int? = null,
-    private val forceToolCall: Boolean = false,
     private val keySupplier: (() -> String?)? = null,
     /** 密钥被上游拒绝(429/401/403)时带上 HTTP 状态码回调;接线处按状态决定冷却(429)还是标耗尽(401/403)。 */
     private val onKeyRejected: ((key: String, retryAfterMs: Long?, status: Int) -> Unit)? = null,
+    private val maxOutputTokens: Int? = null,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
@@ -72,12 +72,12 @@ class OpenAiCompatModel(
     ): ModelReply {
         val force = forceToolCall || options.forceToolCall
         var sendForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (sendForce) LightPrompt.ensure(system) else system
         var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val response = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
             var raw = HttpSupport.execute(
                 http,
-                request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                request(effectiveSystem, messages, tools, stream = false, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
             )
             if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(raw.status, raw.body)) {
                 if (raw.body.contains("max_tokens", ignoreCase = true) && !raw.body.contains("tool_choice", ignoreCase = true)) {
@@ -90,7 +90,7 @@ class OpenAiCompatModel(
                 }
                 raw = HttpSupport.execute(
                     http,
-                    request(effectiveSystem, messages, tools, stream = false, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                    request(effectiveSystem, messages, tools, stream = false, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
                 )
             }
             raw
@@ -117,7 +117,7 @@ class OpenAiCompatModel(
     ): ModelReply {
         val force = forceToolCall || options.forceToolCall
         var sendForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (sendForce) LightPrompt.ensure(system) else system
         var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
         var includeUsage = true
         var stream = OpenAiStream(onText, ::parseUsage, ::thinking)
@@ -125,7 +125,7 @@ class OpenAiCompatModel(
             stream = OpenAiStream(onText, ::parseUsage, ::thinking)
             var raw = HttpSupport.stream(
                 http,
-                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
                 stream::accept,
             )
             if (raw.status == 400 && raw.body.contains("stream_options")) {
@@ -134,7 +134,7 @@ class OpenAiCompatModel(
                 stream = OpenAiStream(onText, ::parseUsage, ::thinking)
                 raw = HttpSupport.stream(
                     http,
-                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
                     stream::accept,
                 )
             }
@@ -150,7 +150,7 @@ class OpenAiCompatModel(
                 stream = OpenAiStream(onText, ::parseUsage, ::thinking)
                 raw = HttpSupport.stream(
                     http,
-                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, forceToolChoice = sendForce, maxTokens = sendMaxOut, key = key),
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
                     stream::accept,
                 )
             }
@@ -182,9 +182,9 @@ class OpenAiCompatModel(
         tools: List<ToolSpec>,
         stream: Boolean,
         includeUsage: Boolean = true,
+        key: String? = resolveKey(),
         forceToolChoice: Boolean = false,
         maxTokens: Int? = null,
-        key: String? = resolveKey(),
     ): Request {
         val payload = buildJsonObject {
             put("model", model)

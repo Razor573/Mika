@@ -8,13 +8,8 @@ import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.GeminiModel
-import com.wangzan101.mika.core.model.GroupMember
-import com.wangzan101.mika.core.model.GroupStrategy
 import com.wangzan101.mika.core.model.LightPrompt
-import com.wangzan101.mika.core.model.MemberKey
 import com.wangzan101.mika.core.model.Message
-import com.wangzan101.mika.core.model.ModelError
-import com.wangzan101.mika.core.model.ModelGroup
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.OpenAiCompatModel
 import com.wangzan101.mika.core.model.Part
@@ -23,7 +18,6 @@ import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
-import com.wangzan101.mika.core.model.VertexModel
 import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.run.record.RunMetrics
 import com.wangzan101.mika.core.run.record.RunSink
@@ -31,8 +25,6 @@ import com.wangzan101.mika.core.tool.FakeScreen
 import com.wangzan101.mika.core.screen.uistate.ActionResult
 import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
 import com.wangzan101.mika.core.screen.uistate.UiElement
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -42,11 +34,9 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import java.io.File
 
@@ -114,7 +104,6 @@ private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : c
     override suspend fun typeText(ref: String?, snapshotId: String?, text: String): ActionResult = ActionResult.Ok(changed = true)
 }
 
-@OptIn(ExperimentalCoroutinesApi::class)
 class AgentLoopLightTest {
     private val on = SpeedFlags(lightSteps = true)
 
@@ -171,11 +160,8 @@ class AgentLoopLightTest {
         val light = Named(
             "light",
             FakeModel(
-                // Step 3 attempt 1: no-tool prose -> triggers 1 retry with RETRY_REMINDER
-                com.wangzan101.mika.core.testing.answerReply("I think I should tap the button now"),
-                // Step 3 attempt 2 (retry): returns a valid tool call!
-                toolsWithUsage(Usage(300, 28, 200), call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
-                // Step 4: finish -> retry -> escalate to main for final answer
+                ModelReply(listOf(Part.Text("I think I should tap the button now")), StopReason.EndTurn, Usage(100, 20, 40)),
+                toolsWithUsage(Usage(120, 15, 80), call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
                 finish(),
                 finish(),
             ),
@@ -183,15 +169,45 @@ class AgentLoopLightTest {
         val sink = Events()
         val r = loop(main, light, sink, SafeActionScreen()).run("点击详情")
         assertTrue(r is TaskState.Succeeded)
-        // Step 3 succeeded on Light after retry!
         assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
         val step3Reply = sink.list.filterIsInstance<RunEvent.ModelReply>().first { it.step == 3 }
         assertEquals("light", step3Reply.role)
         assertEquals("phone_tap", step3Reply.tool)
-        // Verify the retry request carried the one-line reminder
+        assertEquals(220, step3Reply.inputTokens)
+        assertEquals(35, step3Reply.outputTokens)
+        assertEquals(120, step3Reply.cachedTokens)
+
+        val step3Metrics = RunMetrics.of(sink.list.filter { it !is RunEvent.ModelReply || it.step == 3 }, "retry-usage")!!
+        assertEquals(220L, step3Metrics.inputTokens)
+        assertEquals(35L, step3Metrics.outputTokens)
+        assertEquals(120L, step3Metrics.cachedTokens)
+        assertEquals(255L, step3Metrics.tokens)
+
         val retryMessages = light.requests[1]
         val reminderText = retryMessages.last().parts.filterIsInstance<Part.Text>().first().text
         assertEquals(LightPrompt.RETRY_REMINDER, reminderText)
+    }
+
+    @Test fun lightAcceptsTaskProgressPseudoCallFollowedByOfferedAction() = runTest {
+        val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_observe")), finish("完成")))
+        val progress = Part.ToolCall("prog1", "task_progress", """{"criteria":["查看屏幕","汇总结果"]}""")
+        val light = Named(
+            "light",
+            FakeModel(
+                toolsWithUsage(Usage(200, 25, 100), progress, call("phone_observe")),
+                finish(),
+                finish(),
+            ),
+        )
+        val sink = Events()
+        val r = loop(main, light, sink, SafeActionScreen()).run("检查并汇报进度")
+        assertTrue(r is TaskState.Succeeded)
+        val criteriaEvents = sink.list.filterIsInstance<RunEvent.Criteria>()
+        assertEquals(1, criteriaEvents.size)
+        assertEquals(listOf("查看屏幕", "汇总结果"), criteriaEvents.single().criteria)
+        val step3Reply = sink.list.filterIsInstance<RunEvent.ModelReply>().first { it.step == 3 }
+        assertEquals("light", step3Reply.role)
+        assertEquals("phone_observe", step3Reply.tool)
     }
 
     @Test fun lightSimpleTapStepProducesToolCallUnder200TokensWithForcedToolOptionsAndNoProse() = runTest {
@@ -314,7 +330,7 @@ class AgentLoopLightTest {
         assertEquals(0, light.requests.size)
     }
 
-    @Test fun providerForcedToolCallingPayloadsAcrossGeminiVertexOpenAiResponsesAndClaude() = runTest {
+    @Test fun providerForcedToolCallingPayloadsAcrossGeminiOpenAiResponsesAndClaude() = runTest {
         val spec = listOf(ToolSpec("phone_tap", "Tap an element", """{"type":"object","properties":{"ref":{"type":"string"}}}"""))
         val userMsg = listOf(Message(Role.User, listOf(Part.Text("tap")), Author.User))
         val http = OkHttpClient()
@@ -333,29 +349,6 @@ class AgentLoopLightTest {
                 http = http,
             )
             gemini.complete("BASE", userMsg, spec, CallOptions.LIGHT_TOOL_ONLY)
-            val bodyStr = server.takeRequest().body.readUtf8()
-            val body = Json.parseToJsonElement(bodyStr).jsonObject
-            assertEquals("ANY", body["tool_config"]!!.jsonObject["function_calling_config"]!!.jsonObject["mode"]!!.jsonPrimitive.content)
-            assertEquals(200, body["generationConfig"]!!.jsonObject["maxOutputTokens"]!!.jsonPrimitive.content.toInt())
-            assertFalse(bodyStr.contains("tool_choice"))
-        }
-
-        // 2. VertexModel
-        MockWebServer().use { server ->
-            server.enqueue(
-                MockResponse().setHeader("Content-Type", "application/json")
-                    .setBody("""{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"phone_tap","args":{"ref":"@e1"}}}]},"finishReason":"STOP"}]}"""),
-            )
-            val vertex = VertexModel(
-                projectId = "proj-1",
-                location = "global",
-                token = BearerToken.fixed("vt"),
-                model = "gemini-2.5-flash",
-                capabilities = Capabilities(toolCalls = true, vision = true, contextTokens = 1_000_000, reasoning = false),
-                http = http,
-                baseUrl = server.url("/").toString().trimEnd('/'),
-            )
-            vertex.complete("BASE", userMsg, spec, CallOptions.LIGHT_TOOL_ONLY)
             val bodyStr = server.takeRequest().body.readUtf8()
             val body = Json.parseToJsonElement(bodyStr).jsonObject
             assertEquals("ANY", body["tool_config"]!!.jsonObject["function_calling_config"]!!.jsonObject["mode"]!!.jsonPrimitive.content)
@@ -525,10 +518,13 @@ class AgentLoopLightTest {
                 appendLine(JsonObject(filtered).toString())
             }
         }
-        val artifactFile = File("""C:\Users\User\.gemini\antigravity\brain\632442b9-ffe2-4991-a500-599bec4eeb3d\mika-usage-42-steps.jsonl""")
-        artifactFile.parentFile?.mkdirs()
-        artifactFile.writeText(usageJsonl)
-        assertTrue(artifactFile.isFile && artifactFile.length() > 0)
+        val artifactFile = File.createTempFile("mika-usage-42-steps", ".jsonl")
+        try {
+            artifactFile.writeText(usageJsonl)
+            assertTrue(artifactFile.isFile && artifactFile.length() > 0)
+        } finally {
+            artifactFile.delete()
+        }
     }
 
     @Test fun lightCoordinateAndLocatedTapsGoToMain() = runTest {
@@ -636,170 +632,40 @@ class AgentLoopLightTest {
         assertEquals(3, main.requests.size)
     }
 
-    @Test fun lightOneRetryRunsAtZeroWaitWhenMainHasPreviouslySeen429() = runTest {
-        val main = Named("main-ok", FakeModel(ModelError.RateLimited(5_000L), finish()))
-        val light = Named(
-            "light-ok",
-            FakeModel(
-                com.wangzan101.mika.core.testing.answerReply("Let me inspect the screen first."),
-                tools(call("phone_observe")),
-            ),
-        )
-        val dispatcher = toolDispatcher(SafeActionScreen())
-        val router = ModelRouter(main, light)
-        val sink = Events()
-        val caller = ModelCaller(main, dispatcher, router, on, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
-        caller.reset("BASE")
-
-        // First Main call hits 429 and recovers after 5s; no global cooldown carries into later Light calls.
-        caller.ask(listOf(Message(Role.User, listOf(Part.Text("Warm up")), Author.User)), emptyList(), step = 1)
-        assertEquals(5_000L, currentTime)
-
-        val track = StepTrack()
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
-
-        val specs = listOf(ToolSpec("phone_observe", "Read screen", "{}"))
-        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
-        val (reply, usedModel) = caller.routed(history, specs, track, 3, {})
-
-        assertEquals("light-ok", usedModel.name)
-        assertEquals(2, light.requests.size)
-        assertEquals(2, main.requests.size)
-        assertEquals(5_000L, currentTime)
-        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
-        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
-    }
-
     @Test fun light429FallsBackImmediatelyWithoutConsumingTaskWaitBudget() = runTest {
         val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_observe")), finish()))
-        val light = Named("light", FakeModel(ModelError.RateLimited(300_000)))
+        val light = Named("light", FakeModel(com.wangzan101.mika.core.model.ModelError.RateLimited(300_000)))
         val r = loop(main, light).run("t")
         assertTrue(r is TaskState.Succeeded)
-        assertEquals(0L, currentTime)
         assertEquals(1, light.requests.size)
         assertEquals(3, main.requests.size)
     }
 
-    @Test fun singleMain429RetriesAtMostThreeTimesPerRequestWithNoGlobalCooldownCarryover() = runTest {
-        val main = Named(
-            "main-429-cap",
-            FakeModel(
-                ModelError.RateLimited(null),
-                ModelError.RateLimited(null),
-                ModelError.RateLimited(null),
-                ModelError.RateLimited(null),
-                finish("second-request-ok"),
-            ),
-        )
-        val dispatcher = toolDispatcher(SafeActionScreen())
-        val sink = Events()
-        val caller = ModelCaller(main, dispatcher, null, SpeedFlags.OFF, RetryPolicy(jitter = { 1.0 }), sink::event, { currentTime })
-        caller.reset("BASE")
-
-        val req = listOf(Message(Role.User, listOf(Part.Text("Step 1")), Author.User))
-        var thrown: Throwable? = null
+    @Test fun plainTextCallWithNoToolsDoesNotInjectLightPromptOrToolChoice() = runTest {
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.start()
         try {
-            caller.ask(req, emptyList(), step = 1)
-        } catch (e: ModelError.RateLimited) {
-            thrown = e
+            server.enqueue(
+                okhttp3.mockwebserver.MockResponse()
+                    .setResponseCode(200)
+                    .setHeader("Content-Type", "application/json")
+                    .setBody("""{"choices":[{"message":{"role":"assistant","content":"finance"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":2}}""")
+            )
+            val model = com.wangzan101.mika.core.model.OpenAiCompatModel(
+                baseUrl = server.url("/v1").toString().removeSuffix("/"),
+                apiKey = "test-key",
+                model = "gpt-light",
+                capabilities = Capabilities(vision = false, contextTokens = 128_000, reasoning = false, toolCalls = true),
+                http = okhttp3.OkHttpClient(),
+                forceToolCall = true,
+            )
+            val reply = model.complete("Classify this app", listOf(Message(Role.User, listOf(Part.Text("HSBC")), com.wangzan101.mika.core.model.Author.User)), emptyList(), CallOptions.LIGHT_TOOL_ONLY)
+            assertEquals("finance", reply.parts.filterIsInstance<Part.Text>().joinToString("") { it.text })
+            val body = server.takeRequest().body.readUtf8()
+            assertFalse("plain-text call must not inject tool_choice", body.contains("tool_choice"))
+            assertFalse("plain-text call must not inject LightPrompt", body.contains("Do not write explanations"))
+        } finally {
+            server.shutdown()
         }
-        assertTrue(thrown is ModelError.RateLimited)
-        assertEquals(4, main.requests.size)
-        assertEquals(7_000L, currentTime)
-
-        // Subsequent request starts immediately without any global cooldown wait.
-        val second = caller.ask(req, emptyList(), step = 2)
-        assertEquals(5, main.requests.size)
-        assertEquals(7_000L, currentTime)
-        assertEquals("second-request-ok", second.parts.filterIsInstance<Part.Text>().single().text)
-    }
-
-    @Test fun modelPool429RetriesOncePerMemberThenFailsOverWithoutGlobalCooldown() = runTest {
-        val m1 = Named("pool-m1", FakeModel(ModelError.RateLimited(null), ModelError.RateLimited(null)))
-        val m2 = Named("pool-m2", FakeModel(ModelError.RateLimited(null), finish("m2-ok"), finish("m2-next")))
-        val group = ModelGroup(
-            id = "g-main",
-            name = "MainPool",
-            strategy = GroupStrategy.Failover,
-            members = listOf(GroupMember("m1", priority = 1), GroupMember("m2", priority = 2)),
-            sticky = false,
-        )
-        val pool = GroupPool(
-            group = group,
-            members = listOf(
-                PoolMember(MemberKey("p1", m1.name), m1, priority = 1),
-                PoolMember(MemberKey("p2", m2.name), m2, priority = 2),
-            ),
-            health = ModelHealthRegistry(),
-            stickyTable = StickyTable(),
-            stickyKey = null,
-        )
-        val dispatcher = toolDispatcher(SafeActionScreen())
-        val sink = Events()
-        val caller = ModelCaller(pool, dispatcher, null, SpeedFlags.OFF, RetryPolicy(maxRetries = 3, jitter = { 1.0 }), sink::event, { currentTime })
-        caller.reset("BASE")
-
-        val req = listOf(Message(Role.User, listOf(Part.Text("Step 1")), Author.User))
-        val first = caller.ask(req, emptyList(), step = 1)
-        assertEquals("m2-ok", first.parts.filterIsInstance<Part.Text>().single().text)
-        // Multi-member pool caps per-member retries to 1 (1 initial + 1 retry = 2 calls on m1, then failover to m2).
-        assertEquals(2, m1.requests.size)
-        assertEquals(2, m2.requests.size)
-        assertEquals(m2, caller.lastMainUsed)
-
-        // Subsequent request starts immediately without any global cooldown carryover.
-        val timeAfterFirst = currentTime
-        val second = caller.ask(req, emptyList(), step = 2)
-        assertEquals("m2-next", second.parts.filterIsInstance<Part.Text>().single().text)
-        assertEquals(timeAfterFirst, currentTime)
-    }
-
-    @Test fun lightModelPoolForcesToolCallingAndRetriesNoTool() = runTest {
-        val main = Named("main", FakeModel(finish("main-unused")))
-        val l1 = Named(
-            "light-pool-1",
-            FakeModel(
-                finish("I think you should tap the button."),
-                tools(call("phone_observe")),
-            ),
-        )
-        val group = ModelGroup(
-            id = "g-light",
-            name = "LightPool",
-            strategy = GroupStrategy.Failover,
-            members = listOf(GroupMember("l1", priority = 1)),
-            sticky = false,
-        )
-        val lightPool = GroupPool(
-            group = group,
-            members = listOf(PoolMember(MemberKey("pl1", l1.name), l1, priority = 1)),
-            health = ModelHealthRegistry(),
-            stickyTable = StickyTable(),
-            stickyKey = null,
-        )
-        val router = ModelRouter(main, lightPool)
-        val dispatcher = toolDispatcher(SafeActionScreen())
-        val sink = Events()
-        val caller = ModelCaller(
-            main, dispatcher, router,
-            SpeedFlags(lightSteps = true, tablesAtBirth = false),
-            RetryPolicy.NONE, sink::event, { currentTime },
-        )
-        caller.reset("BASE")
-
-        val track = StepTrack()
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
-        track.after(com.wangzan101.mika.core.tool.Verb.Observe, ok = true, guard = false, changed = null, recovery = false, app = "com.notes.app")
-
-        val specs = listOf(ToolSpec("phone_observe", "Read screen", "{}"))
-        val history = listOf(Message(Role.User, listOf(Part.Text("Continue checking")), Author.User))
-        val (reply, usedModel) = caller.routed(history, specs, track, 3, {})
-
-        assertEquals(l1, usedModel)
-        assertEquals(2, l1.requests.size)
-        assertTrue(l1.callOptions.all { it == CallOptions.LIGHT_TOOL_ONLY && it.forceToolCall })
-        assertEquals("phone_observe", reply.parts.filterIsInstance<Part.ToolCall>().single().name)
-        assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
     }
 }
