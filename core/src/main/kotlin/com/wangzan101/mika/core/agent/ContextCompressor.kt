@@ -44,10 +44,12 @@ class ContextCompressor(
     private val structured: Boolean = false,
     private val diffScreens: Boolean = false,
     private val triggerOverride: Int? = null,
+    /** 按轮数触发:活着的工具往返超过 [keepRecent] + [foldEvery] 时把最早的折进摘要(null=不按轮数,只按大小,即现状)。 */
+    private val foldEvery: Int? = null,
     private val compactEverySteps: Int = COMPACT_EVERY_STEPS,
     private val keepFullObservations: Int = KEEP_FULL_OBSERVATIONS,
-    /** 按轮数触发:活着的工具往返超过 [keepRecent] + [foldEvery] 时把最早的折进摘要(null=不按轮数,改走周期/大小压缩)。 */
-    private val foldEvery: Int? = null,
+    /** 可选的输入 token 上限(null = 不加额外硬帽,只按模型窗口与 15 步定期压缩工作)。 */
+    private val maxInputTokens: Int? = null,
 ) {
     /** 「真实 / 粗估」比值:每次用量回来就平滑更新([TokenEstimate.calibrated]);只决定什么时候压缩、压到哪一级,不改发过的内容。 */
     private var observed: Double? = null
@@ -92,7 +94,7 @@ class ContextCompressor(
         fixedOverhead: Int = 0,
         maxImages: Int = Int.MAX_VALUE,
     ): Compressed {
-        val limits = ContextLimits.of(contextTokens, triggerOverride)
+        val limits = ContextLimits.of(contextTokens, triggerOverride, maxInputTokens)
         val last = views[contextTokens]
         val view = valid(last, history)
         val sent = sent(view, history)
@@ -101,8 +103,8 @@ class ContextCompressor(
         val periodicCompact = foldEvery == null && compactEverySteps > 0 && stepsSinceCompact >= compactEverySteps
         val rawSize = UsageMeter.estimate(TokenEstimate.of(sent) + fixedOverhead, scale)
         val size = currentTokens ?: rawSize
-        val effectiveCap = minOf(limits.usable, MAX_INPUT_TOKENS_CAP)
-        val overCap = size > effectiveCap || rawSize > effectiveCap || (TokenEstimate.of(sent) + fixedOverhead) > MAX_INPUT_TOKENS_CAP
+        val effectiveCap = maxInputTokens?.let { minOf(limits.usable, it) } ?: limits.usable
+        val overCap = size > effectiveCap || rawSize > effectiveCap || (maxInputTokens != null && (TokenEstimate.of(sent) + fixedOverhead) > maxInputTokens)
         // 回差:压缩之后至少再长一个 margin 才再压,压不到触发点以下的历史也不会每步都压;但不越过可用窗口,越过了每步都得压
         val trigger = view?.let {
             maxOf(limits.trigger, UsageMeter.estimate(it.estimate + fixedOverhead, scale) + limits.margin).coerceAtMost(effectiveCap)
@@ -123,7 +125,7 @@ class ContextCompressor(
      */
     fun overflow(history: List<Message>, contextTokens: Int, fixedOverhead: Int = 0): Boolean {
         val current = sent(valid(views[contextTokens], history), history)
-        val next = compact(history, ContextLimits.of(contextTokens, triggerOverride), fixedOverhead, aggressive = true, periodic = false)
+        val next = compact(history, ContextLimits.of(contextTokens, triggerOverride, maxInputTokens), fixedOverhead, aggressive = true, periodic = false)
         if (next.estimate >= TokenEstimate.of(current)) return false
         views[contextTokens] = next
         return true
@@ -145,7 +147,7 @@ class ContextCompressor(
      */
     private fun compact(history: List<Message>, limits: ContextLimits, fixedOverhead: Int, aggressive: Boolean, periodic: Boolean): View {
         val overhead = UsageMeter.estimate(fixedOverhead, scale)
-        val effectiveCap = minOf(limits.usable, MAX_INPUT_TOKENS_CAP)
+        val effectiveCap = maxInputTokens?.let { minOf(limits.usable, it) } ?: limits.usable
         val effectiveTarget = minOf(limits.target, (effectiveCap - limits.margin).coerceAtLeast(0))
         val target = (effectiveTarget - overhead).coerceAtLeast(0)
         val window = effectiveCap - overhead
@@ -187,11 +189,11 @@ class ContextCompressor(
         var chosen = pruneObs(Compressed(history, 0))
         for (c in ladder) {
             chosen = c
-            if (tokens(c.messages) <= target && (TokenEstimate.of(c.messages) + fixedOverhead) <= MAX_INPUT_TOKENS_CAP) break
+            if (tokens(c.messages) <= target && (maxInputTokens == null || (TokenEstimate.of(c.messages) + fixedOverhead) <= maxInputTokens)) break
         }
         chosen = chosen.let {
             val capped = HistoryPruner.enforceCap(it.messages, tools) { ms ->
-                tokens(ms) <= window && (TokenEstimate.of(ms) + fixedOverhead) <= MAX_INPUT_TOKENS_CAP
+                tokens(ms) <= window && (maxInputTokens == null || (TokenEstimate.of(ms) + fixedOverhead) <= maxInputTokens)
             }
             if (capped === it.messages) it else Compressed(capped, it.foldedSteps)
         }
