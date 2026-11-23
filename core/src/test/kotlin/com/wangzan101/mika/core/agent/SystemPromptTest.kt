@@ -239,11 +239,10 @@ class SystemPromptAssemblyTest {
                 val first = SystemPrompt.read(section).lineSequence().first()
                 assertEquals("$name: $section", offered.any { it in tools }, first in m.system!!)
             }
-            // 各组都收着:能力的段落都不给,只有入口那一段
+            // 系统提示词与全量工具定义开局一次性冻结，与是否预先展开无关
             val (d2, flags2) = make()
             val collapsed = run(d2, flags2, open = false).system!!
-            for (section in SECTION_TOOLS.keys + "handover") assertFalse("$name collapsed: $section", SystemPrompt.read(section).lineSequence().first() in collapsed)
-            assertTrue(name, SystemPrompt.read("groups").lineSequence().first() in collapsed)
+            assertEquals("$name frozen prompt", m.system!!, collapsed)
         }
     }
 

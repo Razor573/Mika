@@ -26,7 +26,6 @@ import okhttp3.Request
  * - thought 部分解析为 Thinking;选了思考强度时用 `generationConfig.thinkingConfig.thinkingLevel` 控制深度。
  */
 /** Google 给的占位签名:调用不是 Gemini 自己产生的(带不出原签名)时用它跳过签名校验。 */
-internal const val SKIP_SIGNATURE = "skip_thought_signature_validator"
 
 class GeminiModel(
     baseUrl: String = "https://generativelanguage.googleapis.com",
@@ -177,7 +176,9 @@ class GeminiModel(
             val role = if (m.role == Role.Assistant) "model" else "user"
             val parts = if (role == "model") modelParts(m) else userParts(m, nameById)
             if (parts.isEmpty()) continue
-            if (merged.lastOrNull()?.first == role) merged.last().second += parts else merged += role to parts.toMutableList()
+            val isToolResp = parts.any { "functionResponse" in it }
+            val prevIsToolResp = merged.lastOrNull()?.second?.any { "functionResponse" in it } == true
+            if (merged.lastOrNull()?.first == role && isToolResp == prevIsToolResp) merged.last().second += parts else merged += role to parts.toMutableList()
         }
         return buildJsonArray {
             merged.forEach { (role, parts) ->
@@ -223,7 +224,7 @@ class GeminiModel(
         when (p) {
             is Part.Text -> if (p.text.isEmpty()) null else buildJsonObject { put("text", p.text) }
             is Part.ToolCall -> buildJsonObject {
-                (p.opaque ?: SKIP_SIGNATURE.takeIf { first })?.let { put("thoughtSignature", it) }
+                (p.opaque ?: if (first) SKIP_SIGNATURE else null)?.let { put("thoughtSignature", it) }
                 putJsonObject("functionCall") {
                     put("name", p.name)
                     put("args", try { json.parseToJsonElement(p.argsJson).jsonObject } catch (e: Exception) { JsonObject(emptyMap()) })

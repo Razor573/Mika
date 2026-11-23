@@ -14,14 +14,14 @@ data class SpeedFlags(
     val adaptiveVision: Boolean = false,
     val tablesAtBirth: Boolean = false,
     /** 统一输入 token 上限(100k):与 15 步定期压缩解耦,默认关闭。 */
-    val inputTokenCap: Boolean = true,
+    val disableInputTokenCap: Boolean = false,
 ) {
     private fun on(): Map<String, Boolean> = mapOf(
         "inlineScreen" to inlineScreen, "batchSteps" to batchSteps,
         "replay" to replay, "deepLinks" to deepLinks, "lightSteps" to lightSteps, "parallelTasks" to parallelTasks,
         "structuredCompaction" to structuredCompaction,
         "adaptiveVision" to adaptiveVision, "tablesAtBirth" to tablesAtBirth,
-        "inputTokenCap" to inputTokenCap,
+        "disableInputTokenCap" to disableInputTokenCap,
     )
 
     /** 打开的开关名按字母序用逗号连接;全关为 "none"。[parse] 可读回。 */
@@ -29,7 +29,7 @@ data class SpeedFlags(
 
     companion object {
         private const val NONE = "none"
-        val OFF = SpeedFlags(inputTokenCap = false)
+        val OFF = SpeedFlags()
         private val KEYS = OFF.on().keys
         /** 已转正或撤掉的开关:存着的设置、评测参数里还可能有,读到就略过。 */
         private val RETIRED = setOf("cacheFriendlyPrune")
@@ -51,7 +51,7 @@ data class SpeedFlags(
                 }
             }
             fun f(k: String) = set[k] ?: false
-            return SpeedFlags(f("inlineScreen"), f("batchSteps"), f("replay"), f("deepLinks"), f("lightSteps"), f("parallelTasks"), f("structuredCompaction"), f("adaptiveVision"), f("tablesAtBirth"), set["inputTokenCap"] ?: true)
+            return SpeedFlags(f("inlineScreen"), f("batchSteps"), f("replay"), f("deepLinks"), f("lightSteps"), f("parallelTasks"), f("structuredCompaction"), f("adaptiveVision"), f("tablesAtBirth"), f("disableInputTokenCap"))
         }
     }
 }

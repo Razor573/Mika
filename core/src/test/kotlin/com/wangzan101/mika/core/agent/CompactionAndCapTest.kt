@@ -134,7 +134,7 @@ class CompactionAndCapTest {
         assertTrue(UsageMeter.estimate(TokenEstimate.of(compressed.messages) + 5_000, compressor.scale) <= ContextLimits.MAX_INPUT_TOKENS)
 
         val fake = FakeModel(answerReply("ok"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
 
         val hugePayload180k = listOf(
@@ -157,7 +157,7 @@ class CompactionAndCapTest {
                 return answerReply("ok")
             }
         }
-        val streamCaller = ModelCaller(streaming, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
+        val streamCaller = ModelCaller(streaming, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
         streamCaller.reset("SYSTEM")
         val hugeUser180k = listOf(Message(Role.User, listOf(Part.Text("u".repeat(720_000))), Author.User))
         assertTrue(TokenEstimate.of(hugeUser180k) > 175_000)
@@ -183,9 +183,9 @@ class CompactionAndCapTest {
     }
 
     @Test fun periodicCompactionWorksIndependentlyWhenInputCapIsOff() = runTest {
-        // Default SpeedFlags.OFF leaves the 100k cap off, while 15-step compaction still runs on its own.
+        // disableInputTokenCap = true turns the 100k cap off while 15-step compaction still runs on its own.
         val fake = FakeModel(answerReply("ok"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(disableInputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
         val bigUser120k = listOf(Message(Role.User, listOf(Part.Text("u".repeat(480_000))), Author.User))
         assertTrue(TokenEstimate.of(bigUser120k) > ContextLimits.MAX_INPUT_TOKENS)
@@ -229,7 +229,7 @@ class CompactionAndCapTest {
         // Original prompt is tiny, but promptTransform expands it to ~80k tokens.
         val expanded = "p".repeat(320_000)
         val caller = ModelCaller(
-            fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 },
+            fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 },
         )
         caller.promptTransform = { expanded }
         caller.reset("TINY")
@@ -245,7 +245,7 @@ class CompactionAndCapTest {
 
     @Test fun inputCapFailsClearlyWhenUserImagesCannotFit() = runTest {
         val fake = FakeModel(answerReply("should-not-be-called"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
         // 80 user images (~1500 tokens each -> ~120k tokens) cannot fit under 100k even after pruning.
         val manyUserImages = listOf(

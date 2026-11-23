@@ -71,6 +71,11 @@ class ContextCompressor(
     }
 
     /** 新任务:压缩状态清空(校准比值留着,同一个模型)。 */
+    /** 把外层(例如 100k 硬帽裁剪)改写后的视图记回缓存,避免下一步前缀失效导致每步重复压缩。 */
+    fun adopt(history: List<Message>, contextTokens: Int, messages: List<Message>, foldedSteps: Int, aggressive: Boolean) {
+        views[contextTokens] = View(history.toList(), messages.toList(), foldedSteps, aggressive)
+    }
+
     fun forget() = views.clear()
 
     private fun tokens(ms: List<Message>) = TokenEstimate.of(ms) * scale

@@ -225,12 +225,8 @@ class AgentLoopTest {
     @Test fun inlineScreenPromptOnlyWhenFlagOn() = runTest {
         val off = FakeModel(reply(call("phone_observe")), finish())
         AgentLoop(off, toolDispatcher(FakeScreen()), SystemPrompt.identity()).run("t")
-        assertEquals(phoneOpenedPrompt(SystemPrompt.identity()), off.system)
+        assertTrue(off.system!!.startsWith(SystemPrompt.identity()))
         assertTrue("You do not need to observe after every" !in off.system!!)
-        // 手机一组还收着时没有屏,也就没有动作自带屏幕的说明
-        val collapsed = FakeModel(finish())
-        AgentLoop(collapsed, toolDispatcher(FakeScreen(), inlineScreen = true), SystemPrompt.identity(), flags = SpeedFlags(inlineScreen = true)).run("t")
-        assertTrue("You do not need to observe after every" !in collapsed.system!!)
         val on = FakeModel(reply(call("phone_observe")), finish())
         AgentLoop(on, toolDispatcher(FakeScreen(), inlineScreen = true), SystemPrompt.identity(),
             flags = SpeedFlags(inlineScreen = true)).run("t")
@@ -271,8 +267,8 @@ class AgentLoopTest {
         val r = AgentLoop(m, toolDispatcher(FakeScreen().apply { result = ActionResult.Ok(changed = true) }), "BASE", maxSteps = 2, flags = SpeedFlags(batchSteps = true)).run("t")
         // 整批对步数上限只算一步
         assertTrue(r is TaskState.Succeeded)
-        // 一次多步跟着有屏幕的组走:手机一组收着时不给,批里的手机动作展开它之后才有
-        assertTrue("do_steps" !in m.offeredTools.first())
+        // 工具列表在开局冻结，do_steps 从第一步起就稳定提供
+        assertTrue("do_steps" in m.offeredTools.first())
         assertTrue("do_steps" in m.offeredTools[1])
         val result = m.requests[1].withoutRuntime().last().results().single().json()
         assertEquals("true", result.s("ok"))
@@ -311,7 +307,8 @@ class AgentLoopTest {
         val r = l.run("帮我查")
         com.wangzan101.mika.core.testing.assertAnswered("找到了", r)
         assertEquals(r, l.state.value)
-        assertEquals(phoneOpenedPrompt("BASE"), m.system)
+        assertTrue(m.system!!.startsWith("BASE"))
+        assertTrue(m.system!!.contains(phoneOpenedPrompt("BASE").removePrefix("BASE").trim()))
         val second = m.requests[1].withoutRuntime()
         assertEquals(Role.User, second[0].role)
         assertEquals("帮我查", (second[0].parts.single() as Part.Text).text)

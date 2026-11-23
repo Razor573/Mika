@@ -61,8 +61,8 @@ class ModelRouterTest {
         val r = ModelRouter(main, light)
         assertSame(main, r.pick(clean(5).copy(lastWasRecovery = true)))
         assertSame(main, r.pick(clean(5).copy(sameAppAsLast = false)))
-        // 不看图的轻量模型收不了截图
-        assertSame(main, r.pick(clean(5).copy(hasImages = true)))
+        // 带截图的步骤同样可以走轻量模型(不看图时由 ModelCaller.viewFor 剥离图片、按 UI 树文本执行)
+        assertSame(light, r.pick(clean(5).copy(hasImages = true)))
         val seeing = NamedModel("seeing", vision = true)
         assertSame(seeing, ModelRouter(main, seeing).pick(clean(5).copy(hasImages = true)))
     }
@@ -81,11 +81,13 @@ class ModelRouterTest {
         assertSame(light, r.pick(clean(8)))
     }
 
-    @Test fun disabledRouterAlwaysMain() {
+    @Test fun disabledRouterCoolsDownForTwoStepsThenResumes() {
         val r = ModelRouter(main, light)
         r.disable()
+        assertTrue(r.active)
         assertSame(main, r.pick(clean(5)))
-        org.junit.Assert.assertFalse(r.active)
+        assertSame(main, r.pick(clean(6)))
+        assertSame(light, r.pick(clean(7)))
     }
 
     @Test fun markRecoveryMakesNextStepRecovery() {

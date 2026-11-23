@@ -407,12 +407,12 @@ class AgentLoop(
             return everything.map { it.name }
         }
 
-        // 每次问模型之前:展开了新的组时,工具和系统提示词跟着换;没展开就一字不变
+        // 开局一次性冻结全部工具定义与系统提示词，任务中途绝不改写前缀以保护前缀缓存
         fun refresh() {
-            val offer = tools.offeredNow(extra).filter(::keep)
-            if (offer == current) return
-            current = offer
-            caller.systemPrompt = SystemPrompt.assemble(basePrompt, tools.promptSections(current))
+            if (current.isEmpty()) {
+                current = tools.offeredNow(extra, all = true).filter(::keep)
+                caller.systemPrompt = SystemPrompt.assemble(basePrompt, tools.promptSections(current, all = true))
+            }
             (tools.expanded - openGroups).forEach { emit(RunEvent.State(now(), "tools_opened", it)) }
             openGroups = tools.expanded
         }

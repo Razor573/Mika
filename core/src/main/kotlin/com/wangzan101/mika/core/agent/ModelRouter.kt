@@ -53,41 +53,56 @@ class ModelRouter(
     /** 轻量模型能不能接手机步;不能时 lightSteps 不生效。组里只要有一个支持工具的成员就行,具体到每一步再按 need 过滤。 */
     val active: Boolean get() = !disabled && currentPool?.members?.any { it.model.capabilities.toolCalls } == true
 
+    data class RouteDecision(val model: ChatModel, val usedLight: Boolean, val reason: String)
+
     /**
-     * 轻量模型出了重试也没用的错(Key、额度、模型名、请求不对):
-     * 若有备援轻量模型，切换到下一个备援；否则余下都用主模型。
+     * 轻量模型出错:有备援轻量模型就切换到下一个;没有备援时不再永久禁用,
+     * 而是冷却 [TROUBLE_STEPS] 步后重新尝试轻量模型。
      */
-    fun disable() {
+    fun noteLightError() {
         if (!switchToNextLight()) {
-            disabled = true
+            noteTrouble()
         }
     }
 
-    /** 尝试切到下一个轻量备援模型，成功返回 true，无更多备援返回 false */
+    /** 兼容旧调用:单次错误不永久杀死轻量模型,改为切换备援或冷却 [TROUBLE_STEPS] 步。 */
+    fun disable() {
+        noteLightError()
+    }
+
+    /** 尝试切到下一个轻量备援模型，成功返回 true，无更多备援返回 false（不永久禁用当前轻量模型）。 */
     fun switchToNextLight(): Boolean {
         if (lightIndex + 1 < lightChain.size) {
             lightIndex++
             return true
         }
-        disabled = true
         return false
     }
 
-    fun pick(ctx: StepContext): ChatModel {
+    fun pick(ctx: StepContext): ChatModel = pickWithReason(ctx).model
+
+    fun pickWithReason(ctx: StepContext): RouteDecision {
         if (!ctx.lastOk || ctx.lastHadGuard || ctx.lastChanged == false) noteTrouble()
+        val l = currentLight?.takeIf { active }
+        fun skipped(why: String): RouteDecision {
+            val detail = "reason=$why step=${ctx.step} hasImages=${ctx.hasImages} vision=${l?.capabilities?.vision ?: false} sameApp=${ctx.sameAppAsLast} lastChanged=${ctx.lastChanged}"
+            return RouteDecision(main, usedLight = false, reason = detail)
+        }
         if (forcedMain > 0) {
             forcedMain--
-            return main
+            return skipped("forced_main")
         }
-        if (ctx.needsMainUpfront || ctx.finalSummary ||
-            (ctx.lastVerb != null && mainOnly("", ctx.lastVerb)) ||
-            (ctx.requestedTool != null && mainOnly(ctx.requestedTool, null))
-        ) {
-            return main
-        }
-        val l = currentLight?.takeIf { active } ?: return main
-        val simple = ctx.step > 1 && !ctx.lastWasRecovery && ctx.sameAppAsLast && (!ctx.hasImages || l.capabilities.vision)
-        return if (simple) l else main
+        if (ctx.needsMainUpfront) return skipped("upfront_main")
+        if (ctx.finalSummary) return skipped("final_summary")
+        if (ctx.lastVerb != null && mainOnly("", ctx.lastVerb)) return skipped("main_only_last_verb:${ctx.lastVerb}")
+        if (ctx.requestedTool != null && mainOnly(ctx.requestedTool, null)) return skipped("main_only_tool:${ctx.requestedTool}")
+        if (l == null) return skipped("no_light_active")
+        if (ctx.step <= 1) return skipped("step_1")
+        if (ctx.lastWasRecovery) return skipped("recovery")
+        if (!ctx.sameAppAsLast) return skipped("app_changed")
+        // Image steps are allowed on Light: vision-capable Light sees the screenshot,
+        // and non-vision Light receives the UI tree text with images stripped by ModelCaller.viewFor().
+        return RouteDecision(l, usedLight = true, reason = "light")
     }
 
     /** 出了状况(含轻量模型调用失败、回复被改派给主模型):之后 [TROUBLE_STEPS] 步用主模型。 */

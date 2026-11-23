@@ -198,8 +198,8 @@ class PrefixStabilityTest {
     // 读屏、大结果、画面都只追加:30 步里一次也不改写
     @Test fun textOnly() {
         val r = check(run(Setup()).single(), "text")
-        // 第 1 步读屏之后的那次请求展开手机,第 3 步跑命令之后的展开沙箱
-        assertEquals(listOf(1, 3), r.opened)
+        // 系统提示词与工具定义在任务开局冻结，整个任务期间区 0 一次也不变
+        assertEquals(emptyList<Int>(), r.opened)
         assertTrue("${r.share}", r.share > 0.95)
     }
 

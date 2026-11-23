@@ -144,7 +144,7 @@ class ChildRunsTest {
 
     @Test fun defaultBudgetsStayAsBefore() {
         val (spec, content) = spawnWith("""{"goal":"查一条"}""")
-        assertEquals(15, spec.stepBudget)
+        assertEquals(10, spec.stepBudget)
         assertTrue(spec.readOnly)
         assertFalse(spec.parallelChild)
         assertEquals(setOf("web", "sandbox"), spec.capabilities)
@@ -154,10 +154,10 @@ class ChildRunsTest {
 
     @Test fun modelChosenBudgetsAreClampedToTheCaps() {
         val (spec, content) = spawnWith("""{"goal":"查三家","maxSteps":30,"maxResultChars":6000}""")
-        assertEquals(30, spec.stepBudget)
+        assertEquals(20, spec.stepBudget)
         assertEquals(6000, resultLength(content))
         val (high, highContent) = spawnWith("""{"goal":"查三家","maxSteps":500,"maxResultChars":100000}""")
-        assertEquals(40, high.stepBudget)
+        assertEquals(20, high.stepBudget)
         assertEquals(8000, resultLength(highContent))
         val (low, lowContent) = spawnWith("""{"goal":"查三家","maxSteps":0,"maxResultChars":10}""")
         assertEquals(1, low.stepBudget)

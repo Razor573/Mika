@@ -295,7 +295,7 @@ class PrefixStabilityAdaptersTest {
             val l = if (vision) "$label vision" else label
             val bodies = run(api, vision = vision, steps = DEFAULT_STEPS)
             val r = check(api, bodies, l)
-            assertEquals(l, listOf(1, 3), r.opened)
+            assertEquals(l, emptyList<Int>(), r.opened)
             assertTrue("$l ${r.share}", r.share > 0.95)
             replaysAll(api, bodies, l, DEFAULT_STEPS)
         }

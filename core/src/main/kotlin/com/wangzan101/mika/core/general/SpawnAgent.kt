@@ -36,14 +36,16 @@ import kotlinx.serialization.json.put
 
 internal object SpawnAgent : AgentTool {
     /** 子任务默认的步数、步数上限。 */
-    const val DEFAULT_STEPS = 15
-    const val MAX_STEPS = 40
+    const val DEFAULT_STEPS = 10
+    const val MAX_STEPS = 20
+    /** 子任务目标摘要上限(字符):只传精简摘要,绝不把父任务整段历史塞给子代理。 */
+    const val MAX_GOAL_CHARS = 1_500
     /** 子任务结果默认留多少字、最多留多少字、最少留多少字。 */
     const val DEFAULT_RESULT_CHARS = 4_000
     const val MAX_RESULT_CHARS = 8_000
     const val MIN_RESULT_CHARS = 500
     /** 一次最多并排派几个。再多分几次调用,免得一轮的 token 预算被一次吃光。 */
-    const val MAX_BATCH = 20
+    const val MAX_BATCH = 6
 
     override val verb = Verb.SpawnAgent
     override val risk = Risk.Write
@@ -66,8 +68,8 @@ internal object SpawnAgent : AgentTool {
         // 只校验是整数;超出范围的拉回范围内,不当错误(子任务照样能派)
         val steps = (a.int("maxSteps", Int.MIN_VALUE, Int.MAX_VALUE) ?: DEFAULT_STEPS).coerceIn(1, MAX_STEPS)
         val limit = (a.int("maxResultChars", Int.MIN_VALUE, Int.MAX_VALUE) ?: DEFAULT_RESULT_CHARS).coerceIn(MIN_RESULT_CHARS, MAX_RESULT_CHARS)
-        val goals = a.strList("tasks", min = 1, max = MAX_BATCH, itemMax = 4000)
-            ?: listOfNotNull(a.str("goal", max = 4000)).takeIf { it.isNotEmpty() }
+        val goals = a.strList("tasks", min = 1, max = MAX_BATCH, itemMax = MAX_GOAL_CHARS)
+            ?: listOfNotNull(a.str("goal", max = MAX_GOAL_CHARS)).takeIf { it.isNotEmpty() }
             ?: return failure("给一个 goal,或用 tasks 一次派几个")
         if (goals.size == 1) return runOne(goals[0], parent, host, format, steps, limit)
         // 多个:同时开跑,全等完成再回;任何一个失败都不影响别的,各自结果单独报

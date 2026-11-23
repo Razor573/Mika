@@ -51,14 +51,24 @@ internal class ModelCaller(
     /** 与主模型链平行的服务商 ID，用来判断每日预算是否适用于备援。 */
     private val chainProviderIds: List<String?> = emptyList(),
 ) {
-    /** 每个模型一份压缩状态:各自的上下文、各自发出的那份历史,轻量模型那次压缩不连累主模型的请求前缀。 */
-    private val inputTokenCap: Int? = if (flags.inputTokenCap) ContextLimits.MAX_INPUT_TOKENS else null
-    private val compressors = java.util.IdentityHashMap<ChatModel, ContextCompressor>()
-    private fun compressorFor(m: ChatModel) =
-        compressors.getOrPut(m) { ContextCompressor(tools.index, structured = flags.structuredCompaction,
-            diffScreens = tools.inlineScreen, triggerOverride = m.capabilities.compactionTriggerTokens,
-            maxInputTokens = inputTokenCap) }
-    private val compactions = java.util.IdentityHashMap<ChatModel, CompactionState>()
+    /** 按角色(main / light)各持一份压缩器、压缩状态与粘性池成员，避免 ModelPool/GroupPool 换对象身份时反复新建压缩器。 */
+    private val inputTokenCap: Int? = if (flags.disableInputTokenCap) null else ContextLimits.MAX_INPUT_TOKENS
+    private val compressors = HashMap<String, ContextCompressor>()
+    private fun roleKey(m: ChatModel): String = if (router?.isLight(m) == true) ROLE_LIGHT else ROLE_MAIN
+    private fun compressorFor(m: ChatModel): ContextCompressor {
+        val key = roleKey(m)
+        return compressors.getOrPut(key) {
+            ContextCompressor(
+                tools.index,
+                structured = flags.structuredCompaction,
+                diffScreens = tools.inlineScreen,
+                triggerOverride = m.capabilities.compactionTriggerTokens,
+                maxInputTokens = inputTokenCap,
+            )
+        }
+    }
+    private val compactions = HashMap<String, CompactionState>()
+    private val stickyMembers = HashMap<String, ChatModel>()
     /** 本任务里已为重试等过的时间(对着 [RetryPolicy.taskWaitBudgetMs])。 */
     private var taskRetryWaitMs = 0L
 
@@ -87,16 +97,17 @@ internal class ModelCaller(
     /** 每条已进历史的回复是哪个模型给的(按消息身份);换模型时按它去掉别家模型的私有数据。没记到的(任务开始前就在历史里的)视同主模型给的。 */
     private val producers = java.util.IdentityHashMap<Message, ChatModel>()
 
-    /** 带真实用量的回复(按消息身份)和给出它的模型,是量请求大小的锚点([UsageMeter]);压缩改写前缀后清空。 */
-    private val anchors = java.util.IdentityHashMap<Message, Pair<ChatModel, UsageMeter.Anchor>>()
-    /** 每个模型最近一次请求的固定开销估算;回复进历史时和用量一起记进锚点。 */
-    private val lastOverhead = java.util.IdentityHashMap<ChatModel, Int>()
+    /** 带真实用量的回复(按消息身份)和角色,是量请求大小的锚点([UsageMeter]);压缩改写前缀后清空。 */
+    private val anchors = java.util.IdentityHashMap<Message, Pair<String, UsageMeter.Anchor>>()
+    /** 每个角色最近一次请求的固定开销估算;回复进历史时和用量一起记进锚点。 */
+    private val lastOverhead = HashMap<String, Int>()
     /** 轻量重试在同一步发了两次请求时,暂存最后那次单次请求的 usage 给 [noteReply] 作锚点,避免把两次请求的 inputTokens 加和当作单次上下文大小。 */
-    private val lastSingleUsage = java.util.IdentityHashMap<ChatModel, Usage>()
+    private val lastSingleUsage = HashMap<String, Usage>()
 
     fun reset(prompt: String) {
         systemPrompt = prompt
         compactions.clear()
+        stickyMembers.clear()
         taskRetryWaitMs = 0
         chainIndex = 0
         headError = null
@@ -112,14 +123,17 @@ internal class ModelCaller(
     /** 回复进了历史:记下是哪个模型给的;有真实 usage 的记成上下文大小的锚点。 */
     fun noteReply(m: Message, used: ChatModel, usage: Usage?) {
         if (m.role == Role.Assistant) producers[m] = used
-        val overhead = lastOverhead[used]
-        val anchorUsage = lastSingleUsage.remove(used) ?: usage
-        if (anchorUsage != null && overhead != null) anchors[m] = used to UsageMeter.Anchor(anchorUsage, overhead)
+        val key = roleKey(used)
+        val overhead = lastOverhead[key]
+        val anchorUsage = lastSingleUsage.remove(key) ?: usage
+        if (anchorUsage != null && overhead != null) anchors[m] = key to UsageMeter.Anchor(anchorUsage, overhead)
     }
 
-    /** 发给 [using] 的整份请求有多大:最近一条它给的、带真实用量的回复作锚点,没有就全量估算(见 [UsageMeter])。 */
-    private fun requestTokens(messages: List<Message>, using: ChatModel, overhead: Int, scale: Double): Int =
-        UsageMeter.of(messages, overhead, scale) { m -> anchors[m]?.takeIf { it.first === using }?.second }
+    /** 发给 [using] 所在角色的整份请求有多大:最近一条该角色带真实用量的回复作锚点,没有就全量估算(见 [UsageMeter])。 */
+    private fun requestTokens(messages: List<Message>, using: ChatModel, overhead: Int, scale: Double): Int {
+        val key = roleKey(using)
+        return UsageMeter.of(messages, overhead, scale) { m -> anchors[m]?.takeIf { it.first == key }?.second }
+    }
 
     /** 本任务里分工是否在起作用:开关打开、轻量模型能接手机步、没因不可恢复的错误停用。 */
     private val routing: Boolean get() = flags.lightSteps && router?.active == true
@@ -147,26 +161,29 @@ internal class ModelCaller(
     ): Pair<ModelReply, ChatModel> {
         val r = router?.takeIf { routing } ?: return askRouted(history, specs, step, onText = onText)
         val upfrontMain = r.shouldRouteToMainUpfront(history, specs, tools::verb)
-        val picked = r.pick(track.context(step, history.any { m -> m.parts.any { it is Part.Image } }).copy(needsMainUpfront = upfrontMain))
-        if (!r.isLight(picked) || upfrontMain) return askRouted(history, specs, step, onText = onText)
-        if (specs.none { !ModelRouter.mainOnly(it.name, tools.verb(it.name)) }) return askRouted(history, specs, step, onText = onText)
+        val hasImages = history.any { m -> m.parts.any { it is Part.Image } }
+        val stepCtx = track.context(step, hasImages).copy(needsMainUpfront = upfrontMain)
+        val decision = r.pickWithReason(stepCtx)
+        val picked = decision.model
+        if (!decision.usedLight || !r.isLight(picked) || upfrontMain) {
+            emit(RunEvent.State(now(), "light_skipped", decision.reason))
+            return askRouted(history, specs, step, onText = onText)
+        }
+        if (specs.none { !ModelRouter.mainOnly(it.name, tools.verb(it.name)) }) {
+            emit(RunEvent.State(now(), "light_skipped", "reason=no_safe_tool step=$step hasImages=$hasImages vision=${picked.capabilities.vision} sameApp=${stepCtx.sameAppAsLast} lastChanged=${stepCtx.lastChanged}"))
+            return askRouted(history, specs, step, onText = onText)
+        }
 
-        // 轻量模型的上下文可能更小:它报超长、它那次折叠多少,都不连累主模型(压缩状态按模型分开记)
         val asked = now()
+        var lastError: Exception? = null
         suspend fun callLightOnce(messages: List<Message>): Pair<ModelReply, ChatModel>? = try {
             complete(messages, specs, picked.asPool(), RetryPolicy.NONE, step, onText, CallOptions.LIGHT_TOOL_ONLY)
         } catch (e: CancellationException) {
             throw e
         } catch (e: ModelError.TaskBudgetExceeded) {
-            // 整个运行共用一份预算；轻量失败后不能再改问主模型。
             throw e
         } catch (e: Exception) {
-            // Key、额度、模型名、请求本身不对,重试也没用:本任务余下的步都用主模型
-            if (e is ModelError.Auth || e is ModelError.IllegalHeader || e is ModelError.QuotaExceeded || e is ModelError.DailyBudgetExceeded || e is ModelError.ModelNotFound ||
-                e is ModelError.ModelNotAvailable || e is ModelError.ToolsUnsupported ||
-                e is ModelError.ChatGptLimitReached || e is ModelError.ChatGptNotEligible || e is ModelError.SignInExpired || e is ModelError.AccountPlanNotAllowed ||
-                e is ModelError.GroupUnavailable || e is ModelError.GroupExhausted ||
-                (e is ModelError.Server && e.status in 400..499)) r.disable()
+            lastError = e
             null
         }
         val firstAttempt = callLightOnce(history)
@@ -174,7 +191,17 @@ internal class ModelCaller(
         val firstLight = firstAttempt?.first
         var retried = false
         var validation = LightCallValidator.validate(firstLight, specs, tools, autonomous, retried = false)
-        if (firstLight != null && firstLight.parts.firstActionCall() == null) {
+        if (firstAttempt == null) {
+            retried = true
+            emit(RunEvent.State(now(), "light_retry", "model_error"))
+            onText?.invoke("")
+            val secondAttempt = callLightOnce(history)
+            finalAttempt = secondAttempt
+            validation = LightCallValidator.validate(secondAttempt?.first, specs, tools, autonomous, retried = true)
+            if (secondAttempt == null && lastError != null) {
+                r.noteLightError()
+            }
+        } else if (firstLight != null && firstLight.parts.firstActionCall() == null) {
             retried = true
             emit(RunEvent.State(now(), "light_retry", "no_tool"))
             onText?.invoke("")
@@ -192,7 +219,7 @@ internal class ModelCaller(
         when (val v = validation) {
             is LightValidation.Accepted -> {
                 if (retried && firstLight?.usage != null && v.reply.usage != null) {
-                    lastSingleUsage[usedLight] = v.reply.usage
+                    lastSingleUsage[roleKey(usedLight)] = v.reply.usage
                 }
                 val acceptedReply = if (retried) v.reply.copy(usage = combineUsage(firstLight?.usage, v.reply.usage)) else v.reply
                 return acceptedReply to usedLight
@@ -243,7 +270,212 @@ internal class ModelCaller(
         a != null -> a
         else -> b
     }
-                    val prompt = if (options.forceToolCall) LightPrompt.ensure(rawPrompt) else rawPrompt
+
+    private fun combineUsage(first: Usage?, second: Usage?): Usage? = when {
+        first == null -> second
+        second == null -> first
+        else -> Usage(
+            inputTokens = first.inputTokens + second.inputTokens,
+            outputTokens = first.outputTokens + second.outputTokens,
+            cachedInputTokens = first.cachedInputTokens + second.cachedInputTokens,
+            cacheReported = first.cacheReported || second.cacheReported,
+        )
+    }
+
+    /**
+     * 问 [using](默认主模型):发出的是给它看的那份历史([viewFor])压缩后的副本。
+     * 问主模型时走主模型链:[complete] 放弃(重试耗尽或不可重试)且 [Failover] 说换,就换链上下一个再问;
+     * 链用完、或 [Failover] 说不换,原样抛出,失败说法和没有备援时一样。问别的模型照旧单发。
+     */
+    suspend fun ask(history: List<Message>, specs: List<ToolSpec>, step: Int, using: ChatModel = model, onText: ((String) -> Unit)? = null): ModelReply =
+        askRouted(history, specs, step, using, onText).first
+
+    /** 同 [ask],返回实际回答的模型(组里可能是任一个成员)。问主模型时同样走主模型链。 */
+    suspend fun askRouted(
+        history: List<Message>, specs: List<ToolSpec>, step: Int, using: ChatModel = model, onText: ((String) -> Unit)? = null,
+    ): Pair<ModelReply, ChatModel> {
+        if (using !== model) return complete(viewFor(history, using), specs, using.asPool(), retry, step, onText)
+        // 整条链都失败时的说法(MK-1 第 2 批):以主模型最初的错误为主、附每个备援错在哪(见 [terminalError]);
+        // 只试过一个模型就原样交出,和没有备援时一致。每步先把错误记进 [trialLog]:切过去之后,
+        // 后面的步直接由备援起问,主模型的错不在手边,靠这份记录才拼得回整条链的说法。
+        while (true) {
+            val current = chain[chainIndex]
+            try {
+                val result = complete(viewFor(history, current), specs, current.asPool(), retry, step, onText)
+                lastMainUsed = result.second
+                return result
+            } catch (e: ModelError) {
+                if (trialLog.none { it.first == chainIndex }) trialLog += chainIndex to e
+                if (chainIndex == 0 && headError == null) headError = e
+                val next = Failover.nextIndex(e, chainIndex, chainProviderIds, chain.size) ?: throw terminalError(e)
+                onText?.invoke("")
+                emit(RunEvent.State(now(), "model_switch", "${current.name} -> ${chain[next].name} ${RetryPolicy.label(e)}"))
+                chainIndex = next
+            }
+        }
+    }
+
+    /** 链上不再换了,决定交出哪个错误:预算错误原样;只试过一个模型原样;试过整条链包成 [ModelError.ChainFailed]。 */
+    private fun terminalError(e: ModelError): ModelError {
+        // 当前错误就是预算错误时以它为准;否则链上较早的预算错误优先于包装(审 T-1112-74a8f2 D1):预算错误不包 ChainFailed,原样交出
+        if (e is ModelError.TaskBudgetExceeded || e is ModelError.DailyBudgetExceeded) return e
+        trialLog.map { it.second }.firstOrNull {
+            it is ModelError.TaskBudgetExceeded || it is ModelError.DailyBudgetExceeded
+        }?.let { return it }
+        return if (trialLog.size < 2) e
+        else ModelError.ChainFailed(headError ?: e, trialLog.map { (index, err) -> chain[index].name to err })
+    }
+
+    /**
+     * 发给 [to] 的历史:不是 [to] 给出的回复去掉思考内容和调用上的私有数据(这些只能原样回给产生它的那个模型)。
+     * 没记到来源的回复视同主模型给的:发给主模型(或含主模型的组)时留着,发给轻量模型或备援时都剥。只看字段在不在,不分服务商。
+     */
+    private fun viewFor(history: List<Message>, to: ChatModel): List<Message> {
+        val stripImages = router?.isLight(to) == true && !to.capabilities.vision && history.any { m -> m.parts.any { it is Part.Image } }
+        if (!stripImages && producers.isEmpty() && to === model) return history
+        return history.map { m ->
+            val from = producers[m]
+            val foreign = m.role == Role.Assistant && (from?.let { !belongsTo(to, it) } ?: !belongsTo(to, model))
+            val needsForeignStrip = foreign && m.parts.any { it is Part.Thinking || (it is Part.ToolCall && it.opaque != null) }
+            val needsImageStrip = stripImages && m.parts.any { it is Part.Image }
+            if (!needsForeignStrip && !needsImageStrip) m
+            else m.copy(parts = m.parts.mapNotNull { p ->
+                when {
+                    needsForeignStrip && p is Part.Thinking -> null
+                    needsForeignStrip && p is Part.ToolCall && p.opaque != null -> p.copy(opaque = null)
+                    needsImageStrip && p is Part.Image -> Part.Text("[screenshot omitted; use UI tree]")
+                    else -> p
+                }
+            })
+        }
+    }
+
+    /** [from] 是不是 [to] 这个池里的成员;单模型按对象相同。 */
+    private fun belongsTo(to: ChatModel, from: ChatModel): Boolean =
+        (to as? ModelPool)?.owns(from) ?: (to === from)
+
+    /** 一次调用里第一次真正发出请求的时刻;换成员后也保留,等待时长从它起算。 */
+    private class AttemptClock { var firstAttemptAt: Long? = null }
+
+    /**
+     * 一次调用:按策略排好成员,逐个尝试;成功返回回复和实际用的模型。
+     * 组里有多个候选时,同一成员最多只重试一次,把机会留给下一个;单模型保持原来的重试次数。
+     */
+    private suspend fun complete(
+        history: List<Message>, specs: List<ToolSpec>, pool: ModelPool, policy: RetryPolicy, step: Int,
+        onText: ((String) -> Unit)? = null, options: CallOptions = CallOptions.DEFAULT,
+    ): Pair<ModelReply, ChatModel> {
+        lastRetryWaitMs = 0
+        // 单模型池不看选择条件:不必为它整份估算历史(长对话下这一步很贵)
+        val planned = if (pool is SingleMemberPool) pool.members else pool.ordered(needOf(history, specs))
+        if (planned.isEmpty()) throw ModelError.GroupUnavailable(pool.groupName ?: "", "没有可用成员")
+        val stickyKey = roleKey(planned.first().model)
+        val pinned = stickyMembers[stickyKey]
+        val candidates = if (pinned != null && planned.any { it.model === pinned }) {
+            listOf(planned.first { it.model === pinned }) + planned.filterNot { it.model === pinned }
+        } else planned
+        val clock = AttemptClock()
+        var last: Throwable? = null
+        for ((index, member) in candidates.withIndex()) {
+            val using = member.model
+            val memberBegan = now()
+            try {
+                val reply = attemptMember(
+                    viewFor(history, using), specs, using, policy, step, onText, clock,
+                    maxRetries = if (candidates.size > 1) minOf(policy.maxRetries, 1) else policy.maxRetries,
+                    options = options,
+                )
+                stickyMembers[roleKey(using)] = using
+                pool.noteResult(member, now() - memberBegan, null)
+                return reply to using
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: ModelError) {
+                last = e
+                pool.noteResult(member, now() - memberBegan, e)
+                if (!FailoverPolicy.canFailover(e) || index == candidates.lastIndex) throw e
+                onText?.invoke("")
+                val next = candidates.getOrNull(index + 1)
+                emit(RunEvent.State(
+                    now(), "model_route",
+                    "${pool.groupName ?: "group"} ${member.label} -> ${next?.label ?: "-"} ${RetryPolicy.label(e)}",
+                ))
+            } catch (e: Exception) {
+                last = e
+                pool.noteResult(member, now() - memberBegan, e)
+                if (index == candidates.lastIndex) throw e
+                onText?.invoke("")
+            }
+        }
+        throw last ?: ModelError.GroupUnavailable(pool.groupName ?: "")
+    }
+
+    /** 对 [using] 的一次完整尝试:压缩、发请求、同成员重试、超长再压。 */
+    private suspend fun attemptMember(
+        history: List<Message>, specs: List<ToolSpec>, using: ChatModel, policy: RetryPolicy, step: Int,
+        onText: ((String) -> Unit)?, clock: AttemptClock, maxRetries: Int, options: CallOptions = CallOptions.DEFAULT,
+    ): ModelReply {
+        var retries = 0
+        val effectivePrompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
+        val overhead = TokenEstimate.of(effectivePrompt) + specs.sumOf { TokenEstimate.of(it.name + it.description + it.parametersJsonSchema) }
+        val contextTokens = using.capabilities.contextTokens
+        val role = roleKey(using)
+        val compressor = compressorFor(using)
+        var compaction = compactions[role] ?: CompactionState()
+        var overflowRetried = false
+        var overflowRewrote = false
+        val limits = ContextLimits.of(contextTokens, using.capabilities.compactionTriggerTokens, inputTokenCap)
+        val cap = inputTokenCap?.let { minOf(limits.usable, it) } ?: limits.usable
+        while (true) {
+            val current = ContextRecovery.ensure(history, compressor.current(history, contextTokens))
+            val currentTokens = requestTokens(current, using, overhead, compressor.scale)
+            var raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
+            if (raw.rewritten) anchors.clear()
+            var restored = ContextRecovery.ensure(history, raw.messages)
+            var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            fun estimatedTotal(ms: List<Message>): Int {
+                val est = TokenEstimate.of(ms)
+                return maxOf(
+                    requestTokens(ms, using, overhead, compressor.scale),
+                    UsageMeter.estimate(est + overhead, compressor.scale),
+                    est + overhead,
+                )
+            }
+            fun exceedsCap(ms: List<Message>): Boolean =
+                inputTokenCap != null && estimatedTotal(ms) > inputTokenCap
+            if (inputTokenCap != null && exceedsCap(sent.messages)) {
+                if (!compaction.aggressive || !raw.rewritten) {
+                    compaction = compaction.copy(aggressive = true)
+                    raw = compressor.compress(history, contextTokens, currentTokens = Int.MAX_VALUE, aggressive = true, fixedOverhead = overhead, maxImages = using.capabilities.maxImages)
+                    if (raw.rewritten) anchors.clear()
+                    restored = ContextRecovery.ensure(history, raw.messages)
+                    sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+                }
+                if (exceedsCap(sent.messages)) {
+                    val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(it) }
+                    if (capped !== sent.messages) {
+                        anchors.clear()
+                        sent = sent.copy(messages = capped, estimate = TokenEstimate.of(capped), rewritten = true)
+                        compressor.adopt(history, contextTokens, capped, sent.foldedSteps, aggressive = true)
+                    }
+                }
+                if (exceedsCap(sent.messages)) {
+                    throw ModelError.ContextTooLong()
+                }
+            }
+            val (next, report) = CompactionPolicy.sent(compaction, sent.foldedSteps)
+            if (report) emit(RunEvent.Compressed(now(), sent.foldedSteps))
+            compaction = next
+            compactions[role] = compaction
+            try {
+                // 差异的 base 被裁掉或折叠时,下一次写操作要发全量
+                if (tools.inlineScreen) tools.setVisibleObservations(visibleReads(sent.messages))
+                // 从第一次发出请求起算:失败的请求、退避和换成员都算重试等待,第一次发出之前的准备不算
+                val sentAt = now()
+                lastRetryWaitMs = clock.firstAttemptAt?.let { sentAt - it } ?: 0L
+                if (clock.firstAttemptAt == null) clock.firstAttemptAt = sentAt
+                suspend fun invokeModel(): ModelReply {
+                    val prompt = if (options.forceToolCall) LightPrompt.ensure(effectivePrompt) else effectivePrompt
                     return if (onText == null) {
                         if (options == CallOptions.DEFAULT) using.complete(prompt, sent.messages, specs)
                         else using.complete(prompt, sent.messages, specs, options)
@@ -273,7 +505,7 @@ internal class ModelCaller(
                     trace.modelCall(step, using, tools::verb, change, sent.messages) { send() }
                 }
                 return reply.also { r ->
-                    lastOverhead[using] = overhead
+                    lastOverhead[role] = overhead
                     r.usage?.let { compressor.calibrate(sent.estimate + overhead, it.inputTokens) }
                 }
             } catch (e: ModelError.ContextTooLong) {
@@ -282,17 +514,14 @@ internal class ModelCaller(
                     compressor.overflow(history, contextTokens, overhead)
                 }
                 compaction = after
-                compactions[using] = compaction
+                compactions[role] = compaction
                 overflowRetried = true
                 if (again) { anchors.clear(); overflowRewrote = true }
                 if (!again) throw e
             } catch (e: ModelError) {
                 onText?.invoke("")
+                if (e is ModelError.RateLimited && chainIndex < chain.lastIndex && (e.retryAfterMs ?: 0L) > RATE_LIMIT_FAILOVER_WAIT_BUDGET_MS) throw e
                 val wait = policy.delayFor(e, retries, taskRetryWaitMs, maxRetries) ?: throw e
-                val hasFallback = chainIndex + 1 < chain.size && chain[chainIndex] === using
-                if (e is ModelError.RateLimited && hasFallback &&
-                    (retries >= RATE_LIMIT_FAILOVER_RETRIES || wait > RATE_LIMIT_FAILOVER_WAIT_BUDGET_MS)
-                ) throw e
                 retries += 1
                 taskRetryWaitMs += wait
                 emit(RunEvent.State(now(), "model_retry", "${roleOf(using)} ${RetryPolicy.label(e)} #$retries ${wait}ms"))

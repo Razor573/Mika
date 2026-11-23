@@ -167,7 +167,7 @@ class ToolGroupsTest {
         AgentLoop(m2, all(), SystemPrompt.identity()).run("再看一下", listOf(Turn("打开看看", "好了", "succeeded", groups = loop.usedGroups.toList())))
         val first = m2.requests.first()
         assertTrue("phone_tap" in first.tools.map { it.name })
-        assertFalse("web_tap" in first.tools.map { it.name })
+        assertTrue("web_tap" in first.tools.map { it.name })
         assertTrue(SystemPrompt.read("phone").lineSequence().first() in first.system)
     }
 

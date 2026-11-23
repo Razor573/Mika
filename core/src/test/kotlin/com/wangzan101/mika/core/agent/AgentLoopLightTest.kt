@@ -560,8 +560,9 @@ class AgentLoopLightTest {
             val sink = Events()
             val r = loop(main, light, sink, SendScreen()).run("t")
             assertTrue("$error: $r", r is TaskState.Succeeded)
-            assertEquals(1, light.requests.size)
-            assertEquals(1, sink.list.filterIsInstance<RunEvent.ModelReply>().count { it.role == "light_rejected" })
+            // 轻量模型出错重试一次后进入 2 步冷却，而非整场永久停用
+            assertEquals(4, light.requests.size)
+            assertEquals(2, sink.list.filterIsInstance<RunEvent.ModelReply>().count { it.role == "light_rejected" })
         }
     }
 
@@ -600,16 +601,17 @@ class AgentLoopLightTest {
         assertTrue(sink.list.filterIsInstance<RunEvent.ToolResult>().none { it.tool == "phone_tap" })
     }
 
-    @Test fun screenshotsNeverGoToTextOnlyLight() = runTest {
-        val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_observe")), tools(call("phone_observe")), finish()))
-        val light = Named("light", FakeModel())
-        // 主模型看图:observe 附截图,轻量模型不看图就不接
+    @Test fun screenshotsAreStrippedForTextOnlyLightInsteadOfBlockingIt() = runTest {
+        val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_observe")), finish()))
+        val light = Named("light", FakeModel(tools(call("phone_observe")), finish()))
+        // 主模型看图:observe 附截图,不看图的轻量模型剥离图片后按 UI 树文本继续接管常规步骤
         val seeing = object : ChatModel by main {
             override val capabilities = main.capabilities.copy(vision = true)
         }
         AgentLoop(seeing, toolDispatcher(FakeScreen(), visionEnabled = true), "BASE", flags = on,
             router = ModelRouter(seeing, light)).run("t")
-        assertEquals(0, light.requests.size)
+        assertTrue(light.requests.isNotEmpty())
+        assertTrue(light.requests.all { req -> req.none { m -> m.parts.any { it is Part.Image } } })
     }
 
     @Test fun lightErrorFallsBackToMain() = runTest {
@@ -617,8 +619,8 @@ class AgentLoopLightTest {
         val light = Named("light", FakeModel(com.wangzan101.mika.core.model.ModelError.Network()))
         val r = loop(main, light).run("t")
         assertTrue(r is TaskState.Succeeded)
-        // 轻量模型出错不重试,这一步直接改问主模型
-        assertEquals(1, light.requests.size)
+        // 轻量模型出错重试一次,仍失败再由主模型接
+        assertEquals(2, light.requests.size)
         assertEquals(3, main.requests.size)
     }
 
@@ -627,8 +629,8 @@ class AgentLoopLightTest {
         val light = Named("light", FakeModel(com.wangzan101.mika.core.model.ModelError.Server(503)))
         val r = loop(main, light).run("t")
         assertTrue(r is TaskState.Succeeded)
-        // 503 没有重发给轻量模型,这一步由主模型接
-        assertEquals(1, light.requests.size)
+        // 503 重试轻量模型一次,仍失败再由主模型接
+        assertEquals(2, light.requests.size)
         assertEquals(3, main.requests.size)
     }
 
@@ -637,7 +639,7 @@ class AgentLoopLightTest {
         val light = Named("light", FakeModel(com.wangzan101.mika.core.model.ModelError.RateLimited(300_000)))
         val r = loop(main, light).run("t")
         assertTrue(r is TaskState.Succeeded)
-        assertEquals(1, light.requests.size)
+        assertEquals(2, light.requests.size)
         assertEquals(3, main.requests.size)
     }
 

@@ -270,8 +270,7 @@ class RuntimeStateHistoryTest {
         AgentLoop(model, toolDispatcher(FakeScreen()), "BASE", maxSteps = 10, clock = { 0L }, zone = ZoneId.of("UTC")).run("t")
         assertEquals(3, systems.size)
         // 第一次读屏展开了手机一组:系统提示词只在那之后变一次,之后逐字相同
-        assertEquals(2, systems.distinct().size)
-        assertEquals(systems[1], systems[2])
+        assertEquals(1, systems.distinct().size)
         assertEquals("Current place: no screen or page read yet", m.requests[0].runtimeStates().single().lines()[0])
     }
 }

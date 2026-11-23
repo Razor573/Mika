@@ -104,7 +104,11 @@ internal suspend fun TaskRun.assembleTools(a: RunAssembly, m: RunModels, ph: Run
                 sandboxBudgetMs = sandboxBudgetMs,
                 adaptiveVision = speed.adaptiveVision)
             childTools.manualControl = manualControl
-            AgentLoop(model, childTools, basePrompt, maxSteps = childSpec.stepBudget ?: AgentLoop.UNLIMITED_STEPS,
+            AgentLoop(model, childTools, basePrompt,
+                maxSteps = (childSpec.stepBudget ?: com.wangzan101.mika.core.general.SpawnAgent.DEFAULT_STEPS)
+                    .coerceAtMost(com.wangzan101.mika.core.general.SpawnAgent.MAX_STEPS),
+                // 子任务同样走轻量路由处理常规步,避免把主模型烧在子代理常规操作上
+                light = m.routedLight, lightFallbacks = m.lightFallbacks,
                 // 子任务跟着询问 / 自主;询问时它也过关卡,子任务里花钱的一步一律不做
                 confirmations = runApproval.gate(), approvals = runApproval, autonomous = runApproval.startedAutonomous,
                 promptTransform = { promptHook.transform(it) },
