@@ -5,7 +5,7 @@
     <string name="banking_sub" translatable="false">Pause Mika so your bank app opens</string>
     <string name="banking_explain" translatable="false">Banking apps block Mika while its accessibility service or wireless debugging is on. Banking mode turns both off and stops the phone helper. Nothing is uninstalled, nothing is deleted, and the wireless-debugging pairing stays saved.</string>
     <string name="banking_paused_title" translatable="false">Mika paused</string>
-    <string name="banking_paused_body" translatable="false">Accessibility off, helper disconnected. HSBC should now open.</string>
+    <string name="banking_paused_body" translatable="false">Accessibility off, helper disconnected. Your bank app should now open.</string>
     <string name="banking_active" translatable="false">Active</string>
     <string name="banking_active_title" translatable="false">Mika active</string>
     <string name="banking_active_body" translatable="false">Accessibility and the helper are running. Turn on Banking mode before opening your bank app.</string>
@@ -31,5 +31,4 @@
     <string name="banking_reconnect" translatable="false">Reconnect helper now</string>
     <string name="banking_paused_row_sub" translatable="false">Paused - your bank app should open</string>
     <string name="banking_active_row_sub" translatable="false">Active - Mika is running</string>
-    <string name="banking_shizuku_note" translatable="false">Shizuku is active without Wireless debugging; pause and resume use Shizuku directly.</string>
 </resources>

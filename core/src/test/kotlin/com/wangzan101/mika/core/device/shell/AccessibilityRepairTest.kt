@@ -30,6 +30,7 @@ class AccessibilityRepairTest {
         var direct: Boolean = false,
         unlocked: Boolean = true,
         var allowed: Boolean = true,
+        var paused: Boolean = false,
     ) {
         val userUnlocked = MutableStateFlow(unlocked)
         val active = MutableStateFlow(allowed)
@@ -50,6 +51,7 @@ class AccessibilityRepairTest {
             direct = { direct },
             now = { scope.currentTime },
             allowed = { allowed },
+            paused = { paused },
         )
 
         fun start(s: TestScope) {
@@ -281,6 +283,28 @@ class AccessibilityRepairTest {
     @Test
     fun bankingModePausedNeverRepairs() = runTest {
         val rig = Rig(helperStatus = BuiltinShellStatus.Paused, direct = true).also { it.start(this) }
+        advanceTimeBy(AccessibilityRepair.GRACE_MS + 20_000)
+        runCurrent()
+        assertTrue(rig.restarts.isEmpty())
+        assertEquals(A11yObservation(enabled = true, connected = false), rig.service.value)
+    }
+
+    @Test
+    fun pausedStatusBlocksRepairEvenWithDirectWritePermission() = runTest {
+        val rig = Rig(helperStatus = BuiltinShellStatus.Paused, direct = true).also { it.start(this) }
+        advanceTimeBy(AccessibilityRepair.GRACE_MS + 20_000)
+        runCurrent()
+        assertTrue(rig.restarts.isEmpty())
+        assertEquals(A11yObservation(enabled = true, connected = false), rig.service.value)
+    }
+
+    @Test
+    fun pausedCallbackBlocksRepairEvenWhenHelperStatusIsNotPaused() = runTest {
+        val rig = Rig(
+            helperStatus = BuiltinShellStatus.Failed(BuiltinShellFailure.ShizukuNotRunning),
+            direct = true,
+            paused = true,
+        ).also { it.start(this) }
         advanceTimeBy(AccessibilityRepair.GRACE_MS + 20_000)
         runCurrent()
         assertTrue(rig.restarts.isEmpty())

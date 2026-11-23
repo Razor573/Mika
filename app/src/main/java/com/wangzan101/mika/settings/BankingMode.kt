@@ -3,7 +3,6 @@ package com.wangzan101.mika.settings
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.a11y.MikaAccessibilityService
@@ -13,7 +12,6 @@ import com.wangzan101.mika.cap.phone.setup.DeveloperSettings
 import com.wangzan101.mika.core.device.shell.BuiltinShellControl
 import com.wangzan101.mika.core.device.shell.BuiltinShellStatus
 import com.wangzan101.mika.core.device.shell.PermissionCommands
-import com.wangzan101.mika.core.device.shell.ShellTransport
 import com.wangzan101.mika.task.TaskService
 
 /**
@@ -78,8 +76,6 @@ class BankingMode private constructor(
             helper = shell.status.value,
             helperPaired = shell.paired,
             taskRunning = (app as? MikaApp)?.taskState?.busy?.value ?: false,
-            shizukuReady = shell.shizukuStart,
-            transport = shell.transport,
         )
     }
 
@@ -95,23 +91,20 @@ class BankingMode private constructor(
             TaskService.cancel(app)
             tasksStopped = true
         }
-        // 先停助手:看门狗从这一刻起不再重起它;配对钥匙和端口缓存不动。
+        // 先停助手和配对监听:看门狗从这一刻起不再重起它;配对钥匙和端口缓存不动。
         shell.pause()
-        // 无障碍:安卓 13 起服务能自己关掉自己;更早的系统或服务本来就没在跑时,
+        runCatching { PhoneServices.of(app).pairing.end() }
+        // 无障碍:服务在跑时能自己关掉自己;如果服务在列表里却没在跑,
         // 只能由用户去系统设置里关,界面要说清楚。
         var a11yOff = before.accessibility == AccessibilityState.Off
         var a11yNeedsManual = false
         if (!a11yOff) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val instance = ScreenAccessibility.instance.value
-                if (instance != null) {
-                    runCatching { instance.disableSelf() }
-                    a11yOff = true
-                } else {
-                    // 服务在列表里却没在跑:关掉再打开才能彻底停,App 替它关不掉。
-                    a11yNeedsManual = true
-                }
+            val instance = ScreenAccessibility.instance.value
+            if (instance != null) {
+                runCatching { instance.disableSelf() }
+                a11yOff = true
             } else {
+                // 服务在列表里却没在跑:关掉再打开才能彻底停,App 替它关不掉。
                 a11yNeedsManual = true
             }
         }
@@ -147,9 +140,7 @@ class BankingMode private constructor(
     fun resume(): ResumeResult {
         setPaused(false)
         val before = snapshot()
-        if (!before.shizukuReady && before.transport != ShellTransport.Shizuku &&
-            before.helperPaired && !before.wirelessDebugging && canWriteSecureSettings()
-        ) {
+        if (!before.wirelessDebugging && canWriteSecureSettings()) {
             DeveloperSettings.turnOnWirelessDebugging(app.contentResolver)
         }
         shell.resume()
@@ -173,8 +164,6 @@ data class BankingState(
     val helper: BuiltinShellStatus,
     val helperPaired: Boolean,
     val taskRunning: Boolean,
-    val shizukuReady: Boolean = false,
-    val transport: ShellTransport = ShellTransport.WirelessDebugging,
 )
 
 /** 暂停一次做完之后,哪些关掉了、哪些还要用户亲手做。 */
@@ -210,9 +199,6 @@ enum class ResumeStep {
 /** 纯函数:按恢复后的真实状态,算出还有哪些步骤要用户亲手做。 */
 fun planResumeSteps(state: BankingState): List<ResumeStep> = buildList {
     if (state.accessibility != AccessibilityState.On) add(ResumeStep.OpenAccessibilitySettings)
-    val usingShizuku = state.shizukuReady || state.transport == ShellTransport.Shizuku
-    if (!usingShizuku) {
-        if (!state.wirelessDebugging) add(ResumeStep.OpenWirelessDebuggingPage)
-        if (!state.helperPaired) add(ResumeStep.RePairHelper)
-    }
+    if (!state.wirelessDebugging) add(ResumeStep.OpenWirelessDebuggingPage)
+    if (!state.helperPaired) add(ResumeStep.RePairHelper)
 }

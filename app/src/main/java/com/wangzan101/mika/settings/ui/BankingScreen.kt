@@ -18,11 +18,9 @@ import com.wangzan101.mika.R
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.core.device.shell.BuiltinShellStatus
-import com.wangzan101.mika.core.device.shell.ShellTransport
 import com.wangzan101.mika.settings.BankingMode
 import com.wangzan101.mika.settings.ResumeStep
 import com.wangzan101.mika.settings.planResumeSteps
-import com.wangzan101.mika.ui.components.FooterNote
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.GroupLabel
 import com.wangzan101.mika.ui.components.ListRow
@@ -38,13 +36,13 @@ import com.wangzan101.mika.ui.theme.MikaType
 /**
  * Banking mode: pause Mika so a bank app opens, then resume it.
  *
- * The user verified on his phone that HSBC opens only when BOTH the accessibility
- * service and wireless debugging are off. Pause turns both off and stops the phone
- * helper; the wireless-debugging pairing stays saved, so resume reconnects with it
- * and needs no new pairing code. Android does not let an app turn its own
- * accessibility service back on, so resume lists that step for the user to tap in
- * system settings. State is read fresh from the system every time the helper or
- * the accessibility service changes, never assumed.
+ * Some banking apps refuse to open while either the accessibility service or
+ * wireless debugging is on. Pause turns both off and stops the phone helper;
+ * the wireless-debugging pairing stays saved, so resume reconnects with it and
+ * needs no new pairing code. Android does not let an app turn its own
+ * accessibility service back on, so resume lists that step for the user to tap
+ * in system settings. State is read fresh from the system every time the helper
+ * or the accessibility service changes, never assumed.
  */
 @Composable
 fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
@@ -53,11 +51,10 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
     val phone = remember { PhoneServices.of(context) }
     // 助手状态或无障碍实例一变就重读系统状态:界面永远是实测,不是上次记的。
     val shellStatus by phone.shellControl.status.collectAsState()
-    val shizukuState by phone.shellManager.shizuku.state.collectAsState()
     val a11yInstance by ScreenAccessibility.instance.collectAsState()
     var state by remember { mutableStateOf(mode.snapshot()) }
     var notice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(shellStatus, a11yInstance, shizukuState) { state = mode.snapshot() }
+    LaunchedEffect(shellStatus, a11yInstance) { state = mode.snapshot() }
 
     val helperText = when (state.helper) {
         BuiltinShellStatus.Running -> stringResource(R.string.banking_helper_running)
@@ -100,9 +97,6 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
             ListRow(
                 MikaIcons.Phone, stringResource(R.string.banking_helper_label), null,
             ) { RowValue(helperText, helperTone) }
-        }
-        if ((state.shizukuReady || state.transport == ShellTransport.Shizuku) && !state.wirelessDebugging) {
-            FooterNote(stringResource(R.string.banking_shizuku_note))
         }
         Spacer(Modifier.height(12.dp))
 
@@ -176,7 +170,7 @@ fun BankingScreen(onBack: () -> Unit, onFix: (Fix) -> Unit) {
         }
 
         // 助手已配对、却还没连上(例如刚恢复、正在等 Wi-Fi):手动再连一次。
-        if (!state.paused && (state.helperPaired || state.shizukuReady || state.transport == ShellTransport.Shizuku) &&
+        if (!state.paused && state.helperPaired &&
             state.helper != BuiltinShellStatus.Running && state.helper != BuiltinShellStatus.Connecting
         ) {
             Spacer(Modifier.height(12.dp))

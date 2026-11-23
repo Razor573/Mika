@@ -1,24 +1,23 @@
-# Banking mode (v49, 0.1.44)
+# Banking mode (Pause Mika)
 
 Pause Mika so a bank app opens, then resume it. No uninstall, no Play
 listing, no re-signing, no data loss.
 
-## What the user verified on his phone (14 Nov 2026)
+## Why
 
-HSBC UK opens only when BOTH of these are off:
+Some banking apps refuse to open while either of these is active:
 
 - the accessibility service (MikaAccessibilityService)
 - wireless debugging (the shell helper's transport)
 
-Either one on, HSBC blocks Mika 2 as a sideloaded app. Banking mode turns
-both off and stops the helper. Resume turns them back on.
+Banking mode turns both off and stops the helper. Resume turns them back on.
 
 ## Where the switch lives
 
 - **Settings > Banking mode** — the full screen, and a row on the Settings
   home page (right under "Phone operations") showing Paused / Active.
 - **Home screen banner** — while paused, the status banner says
-  "Mika paused — Accessibility off, helper disconnected. HSBC should now
+  "Mika paused — Accessibility off, helper disconnected. Your bank app should now
   open." Tapping it opens Settings.
 - The Settings status list still shows "Accessibility off" as a separate
   problem while paused; that entry opens Accessibility settings, which is
@@ -35,10 +34,10 @@ both off and stops the helper. Resume turns them back on.
    accessibility auto-repair does not re-enable the service while paused
    (`AccessibilityRepair` refuses when the helper is Paused), and no
    pairing-code notification is shown.
-4. Turns the accessibility service off with `AccessibilityService.disableSelf()`
-   (Android 13+). On older Android, or if the service is listed but not
-   running, the screen tells the user to turn it off in Accessibility
-   settings instead of claiming it worked.
+4. Turns the accessibility service off with `AccessibilityService.disableSelf()`.
+   If the service is listed in system settings but not currently running,
+   the screen tells the user to turn it off in Accessibility settings instead
+   of claiming it worked.
 5. Turns wireless debugging off by writing the system setting (only when
    Mika holds the write-secure-settings permission). If the write is not
    allowed, the screen tells the user to turn it off in Developer options.

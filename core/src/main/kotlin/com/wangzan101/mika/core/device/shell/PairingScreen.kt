@@ -34,7 +34,14 @@ object PairingScreen {
      * 该不该拿读到的码去配对:有码、有端口(屏上读到,或已找到配对窗口)、这个码没试过,
      * 而且助手正等着配对(不在配对中、没有已经好了)。码不对时同一个码不会再试,等配对窗口换新码。
      */
-    fun attempt(reading: PairingScreenReading, portFound: Boolean, status: BuiltinShellStatus, tried: Set<String>): PairingAttempt? {
+    fun attempt(
+        reading: PairingScreenReading,
+        portFound: Boolean,
+        status: BuiltinShellStatus,
+        tried: Set<String>,
+        paused: Boolean = false,
+    ): PairingAttempt? {
+        if (paused) return null
         val code = reading.code ?: return null
         if (code in tried) return null
         if (reading.port == null && !portFound) return null

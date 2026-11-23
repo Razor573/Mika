@@ -31,6 +31,7 @@ import com.wangzan101.mika.core.device.shell.RecoveryPolicy
 import com.wangzan101.mika.core.device.shell.RestoreOutcome
 import com.wangzan101.mika.core.device.shell.ShellCommandRunner
 import com.wangzan101.mika.core.device.shell.ShellTransport
+import com.wangzan101.mika.settings.BankingMode
 import com.wangzan101.mika.settings.FeatureFlags
 import com.wangzan101.mika.settings.RecoverySettings
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +78,7 @@ class BuiltinShellRecovery(
         consent = { settings.consent.value },
         direct = ::canWriteSecure,
         allowed = { !FeatureFlags.get(app).quitRequested() },
+        paused = { BankingMode.isPaused(app) || control.paused },
     )
 
     private fun canWriteSecure() =
