@@ -36,8 +36,8 @@ class ContextCompressorTest {
     private fun taps(n: Int) = (1..n).flatMap { round("phone_tap", """{"target":"按钮$it"}""") }
 
     @Test fun modelOverrideReachesTheCallerAndMovesTheFirstCompaction() = runTest {
-        val history = head + (1..40).flatMap { round("phone_tap", result = """{"pad":"${"x".repeat(1_360)}"}""") }
-        assertTrue(uncalibrated(history) in 16_001..18_000)
+        val history = head + (1..12).flatMap { round("phone_tap", result = """{"pad":"${"x".repeat(4_800)}"}""") }
+        assertTrue("${uncalibrated(history)}", uncalibrated(history) in 16_001..18_000)
         suspend fun sent(trigger: Int?): List<Message> {
             val transport = FakeModel(answerReply("ok"), contextTokens = 32_000)
             val model = object : ChatModel by transport {
@@ -72,7 +72,7 @@ class ContextCompressorTest {
     private fun toolRounds(ms: List<Message>) = ms.count { m -> m.role == Role.Assistant && m.parts.any { it is Part.ToolCall } }
 
     @Test fun underBudgetUntouched() {
-        val h = head + taps(20)
+        val h = head + taps(14)
         val c = ContextCompressor(TOOLS).compress(h, contextTokens = 128_000)
         // 没越过触发点:原样发,一条不裁
         assertEquals(h, c.messages)
@@ -105,7 +105,7 @@ class ContextCompressorTest {
     /** 默认不按轮数触发(只按大小),40 轮在 1M 窗口里原样发。 */
     @Test fun withoutFoldEveryRoundCountDoesNotTrigger() {
         val h = head + taps(40)
-        val c = ContextCompressor(TOOLS).compress(h, contextTokens = 1_000_000)
+        val c = ContextCompressor(TOOLS, compactEverySteps = 0).compress(h, contextTokens = 1_000_000)
         assertEquals(h, c.messages)
         assertEquals(0, c.foldedSteps)
     }
@@ -114,7 +114,8 @@ class ContextCompressorTest {
     private fun justOver(h: List<Message>) = windowFor(uncalibrated(h)) - 1
 
     @Test fun foldsOldestKeepsRecent12() {
-        val h = head + taps(40)
+        val obs = { tag: String -> round("phone_observe", "{}", """{"ok":true,"snapshotId":"$tag","elements":[{"ref":"@e1"}],"pad":"$pad"}""") }
+        val h = head + taps(28) + obs("o1") + taps(9) + obs("o2") + obs("o3")
         val c = ContextCompressor(TOOLS).compress(h, contextTokens = justOver(h))
         assertEquals(28, c.foldedSteps)
         assertEquals(12, toolRounds(c.messages))
@@ -251,7 +252,7 @@ class ContextCompressorTest {
         val confirmRound = round("request_confirmation", """{"action":"send"}""", """{"ok":true,"approved":true}""")
         val takeoverRound = round("hand_to_user", """{"reason":"login","message":"请登录"}""", """{"outcome":"complete","ok":true}""")
         val h = head + taps(2) + knowledge + inputRound + taps(2) + takeoverRound + inputAsResult + confirmRound + taps(20)
-        val c = ContextCompressor(TOOLS).compress(h, contextTokens = 1000)
+        val c = ContextCompressor(TOOLS).compress(h, contextTokens = 4_000)
         for (m in head + knowledge + inputRound + takeoverRound + inputAsResult + confirmRound) assertTrue("$m", m in c.messages)
         assertTrue(c.foldedSteps > 0)
         val summaries = c.messages.mapNotNull { m -> m.plainText().takeIf { it.startsWith(ContextCompressor.HEADER) } }
@@ -318,7 +319,7 @@ class ContextCompressorTest {
             listOf(Message(Role.Assistant, listOf(Part.Text("我想想")), Author.Mika), Message(Role.User, listOf(Part.Text("nudge")), Author.Mika)) +
             round("phone_observe", "{}", """{"ok":true,"elements":[]}""") +
             taps(12)
-        val s = ContextCompressor(TOOLS).compress(h, contextTokens = 100).let { summary(it.messages)!! }
+        val s = ContextCompressor(TOOLS).compress(h, contextTokens = 2_000).let { summary(it.messages)!! }
         assertEquals(
             listOf(
                 ContextCompressor.HEADER,
@@ -356,7 +357,7 @@ class ContextCompressorTest {
             val r = listOf(Message(Role.Assistant, listOf(Part.ToolCall(id, "phone_tap", "{}")), Author.Mika)) +
                 listOfNotNull(result?.let { Message(Role.Tool, listOf(it.copy(callId = id)), Author.Mika) })
             val h = head + r + taps(12)
-            return summary(ContextCompressor(TOOLS).compress(h, contextTokens = 100).messages)!!.lines()[2].substringAfter(" → ")
+            return summary(ContextCompressor(TOOLS).compress(h, contextTokens = 2_000).messages)!!.lines()[2].substringAfter(" → ")
         }
         assertEquals("no result", one(null))
         assertEquals("failed", one(Part.ToolResult("", """{"message":"boom"}""", isError = true)))
@@ -367,7 +368,7 @@ class ContextCompressorTest {
     }
 
     @Test fun fixedOverheadCountsAgainstBudget() {
-        val h = head + taps(20)
+        val h = head + taps(14)
         val context = windowFor(uncalibrated(h))
         assertEquals(0, ContextCompressor(TOOLS).compress(h, context).foldedSteps)
         assertTrue(ContextCompressor(TOOLS).compress(h, context, fixedOverhead = 100).foldedSteps > 0)
@@ -377,13 +378,13 @@ class ContextCompressorTest {
         val full = round("phone_observe", "{}", """{"ok":true,"snapshotId":"s1","elements":[{"ref":"@e1"}],"pad":"$pad"}""")
         val diffs = (2..3).flatMap { round("phone_back", "{}", """{"ok":true,"screen":{"snapshotId":"s$it","full":false,"added":[]},"pad":"$pad"}""") }
         val h = head + taps(3) + full + diffs + taps(20)
-        val out = ContextCompressor(TOOLS,diffScreens = true).compress(h, contextTokens = 1000).messages
+        val out = ContextCompressor(TOOLS,diffScreens = true).compress(h, contextTokens = 2_000).messages
         val kept = out.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
         assertTrue(kept.any { "\"s1\"" in it })
         // 之前的普通往返照常折叠
         assertTrue(summary(out)!!.contains("tap(按钮1)"))
         // 狠压缩时不保留
-        val hard = ContextCompressor(TOOLS,diffScreens = true).compress(h, contextTokens = 1000, aggressive = true).messages
+        val hard = ContextCompressor(TOOLS,diffScreens = true).compress(h, contextTokens = 2_000, aggressive = true).messages
         assertTrue(hard.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().none { "\"s1\"" in it.content })
     }
 

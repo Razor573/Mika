@@ -59,4 +59,16 @@ class ContextLimitsTest {
         assertEquals(490_000, low.target)
         assertEquals(0, ContextLimits.of(0).trigger)
     }
+
+    @Test fun optionalInputCapLimitsUsableAndFloorWithoutChangingDefaultModelLimits() {
+        val uncapped = ContextLimits.of(1_000_000)
+        assertEquals(980_000, uncapped.usable)
+        assertEquals(500_000, uncapped.minTrigger)
+
+        val capped = ContextLimits.of(1_000_000, maxInputTokens = ContextLimits.MAX_INPUT_TOKENS)
+        assertEquals(ContextLimits.MAX_INPUT_TOKENS, capped.usable)
+        assertEquals(50_000, capped.minTrigger)
+        assertEquals(87_000, capped.trigger)
+        assertEquals(50_000, capped.target)
+    }
 }

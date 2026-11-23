@@ -15,6 +15,8 @@ class ContextLimits private constructor(
     val minTrigger: Int,
 ) {
     companion object {
+        /** 可选的统一输入 token 上限(需显式传入 [maxInputTokens] 或打开 [SpeedFlags.inputTokenCap] 才生效)。 */
+        const val MAX_INPUT_TOKENS = 100_000
         /** 给模型输出预留的 token 上限。 */
         const val MAX_OUTPUT_RESERVE = 20_000
         /** 触发点离可用窗口留的余量上限。 */
@@ -27,11 +29,14 @@ class ContextLimits private constructor(
         /**
          * [window]:模型上下文长度。[triggerOverride]:按模型单独给的触发点(整份请求的 token);限在下限和 [usable] 之间。
          */
-        fun of(window: Int, triggerOverride: Int? = null): ContextLimits {
+        fun of(window: Int, triggerOverride: Int? = null, maxInputTokens: Int? = null): ContextLimits {
             val w = window.coerceAtLeast(0)
-            val usable = w - minOf(MAX_OUTPUT_RESERVE, w / 4)
+            val cap = maxInputTokens?.coerceAtLeast(0)
+            val rawUsable = w - minOf(MAX_OUTPUT_RESERVE, w / 4)
+            val usable = cap?.let { minOf(rawUsable, it) } ?: rawUsable
             val margin = minOf(MARGIN_TOKENS, usable / 4)
-            val floor = minOf((w * MIN_TRIGGER_SHARE).toInt(), usable)
+            val effectiveWindow = cap?.let { minOf(w, it) } ?: w
+            val floor = minOf((effectiveWindow * MIN_TRIGGER_SHARE).toInt(), usable)
             val trigger = (triggerOverride ?: (usable - margin)).coerceIn(floor, usable)
             val target = minOf((usable * AFTER_COMPACTION).toInt(), trigger - margin).coerceAtLeast(0)
             return ContextLimits(w, usable, trigger, margin, target, floor)
