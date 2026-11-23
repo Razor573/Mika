@@ -42,6 +42,7 @@
     <string name="metrics_steps">Шаги</string>
     <string name="metrics_observe_act">Чтения / действия</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">Лёгкая модель отклонена</string>
     <string name="metrics_counted">Учтено</string>
     <plurals name="metrics_n_runs">
         <item quantity="one">%1$d запуск</item>
@@ -60,7 +61,7 @@
         <item quantity="one">Скопирована сводка по %1$d запуску</item>
         <item quantity="few">Скопированы сводки по %1$d запускам</item>
         <item quantity="many">Скопированы сводки по %1$d запускам</item>
-        <item quantity="other">Скопированы сводки по %1$d запуска</item>
+        <item quantity="other">Скопированы сводки по %1$d запускам</item>
     </plurals>
     <string name="metrics_export_failed">Не удалось экспортировать; данных может быть слишком много. Выберите диапазон поменьше.</string>
     <string name="metrics_where_time">Куда ушло время</string>
@@ -71,7 +72,7 @@
         <item quantity="one">Сводка по этому %1$d запуску</item>
         <item quantity="few">Сводка по этим %1$d запускам</item>
         <item quantity="many">Сводка по этим %1$d запускам</item>
-        <item quantity="other">Сводка по этим %1$d запуска</item>
+        <item quantity="other">Сводка по этим %1$d запускам</item>
     </plurals>
     <string name="metrics_summary_sub">По одной записи на запуск, для вашего собственного анализа</string>
     <plurals name="chat_steps_n">

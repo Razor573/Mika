@@ -55,14 +55,20 @@ data class RunMetrics(
     val failKind: String? = null,
     val judged: String? = null,
     val deepSeekCost: DeepSeekCost? = null,
+    val lightRejectedCalls: Int = 0,
+    val lightRetriedCalls: Int = 0,
 ) {
     val otherMs: Long get() = (totalMs - modelMs - observeMs - actMs).coerceAtLeast(0)
 
     /** 输入加输出(缓存命中含在输入里)。 */
     val tokens: Long get() = inputTokens + outputTokens
 
-    /** 办成了:报了成功(含没能核实的),交出回答后也没判成只办了一部分或办不到。 */
+    /** 办成了:报了成功(含没能核查的),交出回答后也没判成只办了一部分或办不到。 */
     val succeeded: Boolean get() = outcome in SUCCESS && judged !in NOT_DONE
+
+    val lightRejected: Int get() = lightRejectedCalls
+
+    val lightRejectionRate: Double get() = if (lightCalls <= 0) 0.0 else lightRejectedCalls.toDouble() / lightCalls
 
     /**
      * 按事件顺序累计;[build] 随时可调。运行记录的写线程用它边写边算,不必在收尾时重读整份记录。
@@ -78,6 +84,8 @@ data class RunMetrics(
         private var firstFeedback: Long? = null
         private var calls = 0
         private var light = 0
+        private var lightRejected = 0
+        private var lightRetried = 0
         private var noUsage = 0
         private var input = 0L
         private var output = 0L
@@ -98,6 +106,7 @@ data class RunMetrics(
                 is RunEvent.ModelReply -> {
                     calls++
                     if (e.role == ROLE_LIGHT || !e.acted) light++
+                    if (!e.acted) lightRejected++
                     if (e.inputTokens == null && e.outputTokens == null) noUsage++
                     input += e.inputTokens ?: 0
                     output += e.outputTokens ?: 0
@@ -117,6 +126,7 @@ data class RunMetrics(
                 is RunEvent.TaskEnded -> if (ended == null) ended = e
                 is RunEvent.ModelCalls -> all = e
                 is RunEvent.OutcomeJudged -> judged = e.outcome
+                is RunEvent.State -> if (e.name == "light_retry") lightRetried++
                 else -> Unit
             }
         }
@@ -177,6 +187,8 @@ data class RunMetrics(
                 failKind = end?.kind,
                 judged = judged,
                 deepSeekCost = all?.deepSeekCost,
+                lightRejectedCalls = lightRejected,
+                lightRetriedCalls = lightRetried,
             )
         }
     }
@@ -213,8 +225,13 @@ data class RunStats(
     val observeMs: Long,
     val actMs: Long,
     val otherMs: Long,
+    val lightCalls: Int = 0,
+    val lightRejectedCalls: Int = 0,
+    val lightRetriedCalls: Int = 0,
 ) {
     val successRate: Double get() = if (runs == 0) 0.0 else succeeded.toDouble() / runs
+    val lightRejected: Int get() = lightRejectedCalls
+    val lightRejectionRate: Double get() = if (lightCalls <= 0) 0.0 else lightRejectedCalls.toDouble() / lightCalls
 
     companion object {
         fun of(runs: List<RunMetrics>): RunStats = RunStats(
@@ -229,6 +246,9 @@ data class RunStats(
             observeMs = runs.sumOf { it.observeMs },
             actMs = runs.sumOf { it.actMs },
             otherMs = runs.sumOf { it.otherMs },
+            lightCalls = runs.sumOf { it.lightCalls },
+            lightRejectedCalls = runs.sumOf { it.lightRejectedCalls },
+            lightRetriedCalls = runs.sumOf { it.lightRetriedCalls },
         )
 
         /** 中位数;偶数个取中间两个的平均(向下取整)。空表为 null。 */

@@ -33,6 +33,7 @@
     <string name="metrics_steps">ステップ</string>
     <string name="metrics_observe_act">読み取り / 操作</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">軽量モデル却下</string>
     <string name="metrics_counted">集計対象</string>
     <plurals name="metrics_n_runs">
         <item quantity="other">%1$d 回の実行</item>

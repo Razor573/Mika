@@ -1,5 +1,6 @@
 package com.wangzan101.mika.core.model.usage
 
+import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelReply
@@ -73,6 +74,13 @@ private open class MeteredModel(
     override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
         counted(system, messages, tools) { inner.complete(system, messages, tools) }
 
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply = counted(system, messages, tools) { inner.complete(system, messages, tools, options) }
+
     protected suspend fun counted(system: String, messages: List<Message>, tools: List<ToolSpec>, call: suspend () -> ModelReply): ModelReply {
         // 在一次运行里调用的,也记到这次运行名下(见 RunUsageTally)
         val context = currentCoroutineContext()
@@ -116,4 +124,12 @@ private class MeteredStreamingModel(
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
     ): ModelReply = counted(system, messages, tools) { inner.completeStreaming(system, messages, tools, onText) }
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
+    ): ModelReply = counted(system, messages, tools) { inner.completeStreaming(system, messages, tools, options, onText) }
 }

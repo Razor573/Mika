@@ -43,6 +43,7 @@ class GeminiModel(
     private val keySupplier: (() -> String?)? = null,
     /** 密钥被上游拒绝(429/401/403)时带上 HTTP 状态码回调;接线处按状态决定冷却(429)还是标耗尽(401/403)。 */
     private val onKeyRejected: ((key: String, retryAfterMs: Long?, status: Int) -> Unit)? = null,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:generateContent"
@@ -51,9 +52,17 @@ class GeminiModel(
 
     private fun resolveKey(): String = keySupplier?.invoke()?.takeIf { it.isNotBlank() } ?: apiKey
 
-    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
+        complete(system, messages, tools, CallOptions.DEFAULT)
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply {
         val (status, retryAfter, text) = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
-            HttpSupport.execute(http, request(system, messages, tools, stream = false, key = key.orEmpty()))
+            HttpSupport.execute(http, request(system, messages, tools, stream = false, key = key.orEmpty(), options = options))
         }
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         return parse(text)
@@ -61,11 +70,19 @@ class GeminiModel(
 
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
         var stream = GeminiStream(onText, ::parse, ::parseUsage)
         val (status, retryAfter, text) = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
             stream = GeminiStream(onText, ::parse, ::parseUsage)
-            HttpSupport.stream(http, request(system, messages, tools, stream = true, key = key.orEmpty()), stream::accept)
+            HttpSupport.stream(http, request(system, messages, tools, stream = true, key = key.orEmpty(), options = options), stream::accept)
         }
         if (status !in 200..299) throw mapError(status, retryAfter, text)
         if (text.isNotEmpty()) return parse(text).also { reply ->
@@ -74,8 +91,19 @@ class GeminiModel(
         return stream.finish()
     }
 
-    private suspend fun request(system: String, messages: List<Message>, tools: List<ToolSpec>, stream: Boolean, key: String = resolveKey()): Request {
-        val systemText = (listOf(system) + messages.filter { it.role == Role.System }
+    private suspend fun request(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        stream: Boolean,
+        key: String = resolveKey(),
+        options: CallOptions = CallOptions.DEFAULT,
+    ): Request {
+        val force = forceToolCall || options.forceToolCall
+        val effectiveForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (effectiveForce) LightPrompt.ensure(system) else system
+        val effectiveMaxOut = options.maxOutputTokens ?: maxOutputTokens
+        val systemText = (listOf(effectiveSystem) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
             .filter { it.isNotBlank() }.joinToString("\n\n")
         val payload = buildJsonObject {
@@ -87,9 +115,14 @@ class GeminiModel(
                     put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it)) } })
                 })
             })
+            if (effectiveForce) putJsonObject("tool_config") {
+                putJsonObject("function_calling_config") {
+                    put("mode", "ANY")
+                }
+            }
             put("contents", buildContents(messages))
-            if (maxOutputTokens != null || reasoningEffort != null) putJsonObject("generationConfig") {
-                maxOutputTokens?.let { put("maxOutputTokens", it) }
+            if (effectiveMaxOut != null || reasoningEffort != null) putJsonObject("generationConfig") {
+                effectiveMaxOut?.let { put("maxOutputTokens", it) }
                 reasoningEffort?.let { effort ->
                     putJsonObject("thinkingConfig") {
                         if (effort == "none") {

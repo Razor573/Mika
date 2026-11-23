@@ -33,6 +33,7 @@
     <string name="metrics_steps">단계</string>
     <string name="metrics_observe_act">읽기 / 동작</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">경량 모델 거부됨</string>
     <string name="metrics_counted">집계 대상</string>
     <plurals name="metrics_n_runs">
         <item quantity="other">%1$d회 실행</item>

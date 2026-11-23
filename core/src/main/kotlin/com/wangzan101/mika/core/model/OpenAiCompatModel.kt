@@ -44,6 +44,8 @@ class OpenAiCompatModel(
     private val keySupplier: (() -> String?)? = null,
     /** 密钥被上游拒绝(429/401/403)时带上 HTTP 状态码回调;接线处按状态决定冷却(429)还是标耗尽(401/403)。 */
     private val onKeyRejected: ((key: String, retryAfterMs: Long?, status: Int) -> Unit)? = null,
+    private val maxOutputTokens: Int? = null,
+    private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
@@ -59,9 +61,39 @@ class OpenAiCompatModel(
         const val STREAM_DONE = "[DONE]"
     }
 
-    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
+    override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
+        complete(system, messages, tools, CallOptions.DEFAULT)
+
+    override suspend fun complete(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+    ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        var sendForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (sendForce) LightPrompt.ensure(system) else system
+        var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val response = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
-            HttpSupport.execute(http, request(system, messages, tools, stream = false, key = key))
+            var raw = HttpSupport.execute(
+                http,
+                request(effectiveSystem, messages, tools, stream = false, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+            )
+            if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(raw.status, raw.body)) {
+                if (raw.body.contains("max_tokens", ignoreCase = true) && !raw.body.contains("tool_choice", ignoreCase = true)) {
+                    sendMaxOut = null
+                } else if (raw.body.contains("tool_choice", ignoreCase = true) && !raw.body.contains("max_tokens", ignoreCase = true)) {
+                    sendForce = false
+                } else {
+                    sendForce = false
+                    sendMaxOut = null
+                }
+                raw = HttpSupport.execute(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = false, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                )
+            }
+            raw
         }
         val (status, retryAfter, text) = response
         if (status !in 200..299) throw mapError(status, retryAfter, text)
@@ -74,22 +106,60 @@ class OpenAiCompatModel(
 
     override suspend fun completeStreaming(
         system: String, messages: List<Message>, tools: List<ToolSpec>, onText: (String) -> Unit,
+    ): ModelReply = completeStreaming(system, messages, tools, CallOptions.DEFAULT, onText)
+
+    override suspend fun completeStreaming(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        options: CallOptions,
+        onText: (String) -> Unit,
     ): ModelReply {
+        val force = forceToolCall || options.forceToolCall
+        var sendForce = force && tools.isNotEmpty()
+        val effectiveSystem = if (sendForce) LightPrompt.ensure(system) else system
+        var sendMaxOut = options.maxOutputTokens ?: maxOutputTokens
+        var includeUsage = true
         var stream = OpenAiStream(onText, ::parseUsage, ::thinking)
         val response = requestWithKeyRotation(::resolveKey, onKeyRejected) { key ->
             stream = OpenAiStream(onText, ::parseUsage, ::thinking)
-            var raw = HttpSupport.stream(http, request(system, messages, tools, stream = true, key = key), stream::accept)
+            var raw = HttpSupport.stream(
+                http,
+                request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                stream::accept,
+            )
             if (raw.status == 400 && raw.body.contains("stream_options")) {
                 // 一些兼容端点能流式生成，却没有用量选项。
+                includeUsage = false
                 stream = OpenAiStream(onText, ::parseUsage, ::thinking)
-                raw = HttpSupport.stream(http, request(system, messages, tools, stream = true, includeUsage = false, key = key), stream::accept)
+                raw = HttpSupport.stream(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                    stream::accept,
+                )
+            }
+            if ((sendForce || sendMaxOut != null) && rejectsForcedOptions(raw.status, raw.body)) {
+                if (raw.body.contains("max_tokens", ignoreCase = true) && !raw.body.contains("tool_choice", ignoreCase = true)) {
+                    sendMaxOut = null
+                } else if (raw.body.contains("tool_choice", ignoreCase = true) && !raw.body.contains("max_tokens", ignoreCase = true)) {
+                    sendForce = false
+                } else {
+                    sendForce = false
+                    sendMaxOut = null
+                }
+                stream = OpenAiStream(onText, ::parseUsage, ::thinking)
+                raw = HttpSupport.stream(
+                    http,
+                    request(effectiveSystem, messages, tools, stream = true, includeUsage = includeUsage, key = key, forceToolChoice = sendForce, maxTokens = sendMaxOut),
+                    stream::accept,
+                )
             }
             raw
         }
         val (status, retryAfter, text) = response
         if (status !in 200..299) {
             // 不支持流式传输的兼容端点仍可按原接口完成任务。
-            if (status == 400 && text.contains("stream", ignoreCase = true)) return complete(system, messages, tools).also {
+            if (status == 400 && text.contains("stream", ignoreCase = true)) return complete(system, messages, tools, options).also {
                 it.parts.filterIsInstance<Part.Text>().joinToString("") { part -> part.text }.takeIf(String::isNotEmpty)?.let(onText)
             }
             throw mapError(status, retryAfter, text)
@@ -100,7 +170,22 @@ class OpenAiCompatModel(
         return stream.finish()
     }
 
-    private suspend fun request(system: String, messages: List<Message>, tools: List<ToolSpec>, stream: Boolean, includeUsage: Boolean = true, key: String? = resolveKey()): Request {
+    private fun rejectsForcedOptions(status: Int, body: String): Boolean =
+        (status == 400 || status == 422) &&
+            (body.contains("tool_choice", ignoreCase = true) ||
+                body.contains("max_tokens", ignoreCase = true) ||
+                body.contains("unsupported", ignoreCase = true))
+
+    private suspend fun request(
+        system: String,
+        messages: List<Message>,
+        tools: List<ToolSpec>,
+        stream: Boolean,
+        includeUsage: Boolean = true,
+        key: String? = resolveKey(),
+        forceToolChoice: Boolean = false,
+        maxTokens: Int? = null,
+    ): Request {
         val payload = buildJsonObject {
             put("model", model)
             reasoningEffort?.let { put("reasoning_effort", it) }
@@ -109,7 +194,11 @@ class OpenAiCompatModel(
             val wire = listOf(buildJsonObject { put("role", "system"); put("content", system) }) +
                 messages.flatMap { serialize(it, replayReasoning) }
             put("messages", JsonArray(if (capabilities.promptCaching == PromptCaching.Explicit) withCacheMarks(wire) else wire))
-            if (tools.isNotEmpty()) putJsonArray("tools") { tools.forEach { add(toolJson(it)) } }
+            if (tools.isNotEmpty()) {
+                putJsonArray("tools") { tools.forEach { add(toolJson(it)) } }
+                if (forceToolChoice) put("tool_choice", "required")
+            }
+            if (maxTokens != null) put("max_tokens", maxTokens)
             if (stream) {
                 put("stream", true)
                 if (includeUsage) putJsonObject("stream_options") { put("include_usage", true) }

@@ -1,6 +1,10 @@
 package com.wangzan101.mika.core.agent
 
 import com.wangzan101.mika.core.model.ChatModel
+import com.wangzan101.mika.core.model.Message
+import com.wangzan101.mika.core.model.Part
+import com.wangzan101.mika.core.model.Role
+import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.tool.Verb
 
 /** 决定下一步用哪个模型时看的上一步情况。 */
@@ -15,6 +19,11 @@ data class StepContext(
     val sameAppAsLast: Boolean,
     /** 要发出的上下文里有截图;不看图的轻量模型不能接。 */
     val hasImages: Boolean = false,
+    /** 这一步需要散文回答、收尾总结或特权工具,应在调用前直接路由给主模型。 */
+    val needsMainUpfront: Boolean = false,
+    val lastVerb: Verb? = null,
+    val requestedTool: String? = null,
+    val finalSummary: Boolean = false,
 )
 
 /**
@@ -70,6 +79,12 @@ class ModelRouter(
             forcedMain--
             return main
         }
+        if (ctx.needsMainUpfront || ctx.finalSummary ||
+            (ctx.lastVerb != null && mainOnly("", ctx.lastVerb)) ||
+            (ctx.requestedTool != null && mainOnly(ctx.requestedTool, null))
+        ) {
+            return main
+        }
         val l = currentLight?.takeIf { active } ?: return main
         val simple = ctx.step > 1 && !ctx.lastWasRecovery && ctx.sameAppAsLast && (!ctx.hasImages || l.capabilities.vision)
         return if (simple) l else main
@@ -91,15 +106,85 @@ class ModelRouter(
         return pool?.groupName
     }
 
+    fun shouldRouteToMainUpfront(
+        history: List<Message>,
+        specs: List<ToolSpec>,
+        verbOf: (String) -> Verb?,
+        finalSummary: Boolean = false,
+    ): Boolean = Companion.shouldRouteToMainUpfront(history, specs, verbOf, finalSummary)
+
     companion object {
         const val TROUBLE_STEPS = 2
         /** 轻量模型给出这些调用(还有 do_steps)时不执行,这一步改问主模型:放弃、确认、接管、追问、沙箱命令都由主模型决定。 */
-        private val MAIN_ONLY_VERBS = setOf(Verb.EndNotDone, Verb.RequestConfirmation, Verb.HandToUser, Verb.AskUser, Verb.HandleObstacle,
-            Verb.PhoneRun, Verb.Collect, Verb.PhoneFind, Verb.PhoneDialog, Verb.PhoneGesture, Verb.PhoneCommand) +
+        private val MAIN_ONLY_VERBS = setOf(
+            Verb.EndNotDone, Verb.RequestConfirmation, Verb.HandToUser, Verb.AskUser, Verb.HandleObstacle,
+            Verb.PhoneRun, Verb.Collect, Verb.PhoneFind, Verb.PhoneDialog, Verb.PhoneGesture, Verb.PhoneCommand,
+            Verb.RootCommand,
+        ) +
             // 沙箱里跑的是模型写的命令:只让主模型写
             setOf(Verb.RunCommand, Verb.RunBundledScript, Verb.ReadFile, Verb.WriteFile, Verb.SearchFiles, Verb.ShareFile, Verb.ViewImage, Verb.ListFolderFiles)
+
+        private val MAIN_ONLY_NAMES = setOf(
+            DO_STEPS_TOOL,
+            "phone_system_command",
+            "system_command",
+            "run_command",
+            "ask_user",
+            "end_not_done",
+            "request_confirmation",
+            "hand_to_user",
+            "root_command",
+        )
+
+        private val UPFRONT_MAIN_MARKERS = listOf(
+            AgentLoop.STEER_MARKER,
+            "[TASK_COMPLETE]",
+            "The step limit has been reached",
+            "The user is discussing or reviewing",
+            "The result of the last action has not been read yet",
+            "final summary",
+            "final_summary",
+            "phone_system_command",
+            "system_command",
+            "run_command",
+            "ask_user",
+        )
+
         /** 只能由主模型给出的调用([name] 是工具名,[verb] 是它做的动作)。 */
-        fun mainOnly(name: String, verb: Verb?): Boolean = name == DO_STEPS_TOOL || verb in MAIN_ONLY_VERBS
+        fun mainOnly(name: String, verb: Verb?): Boolean = name in MAIN_ONLY_NAMES || verb in MAIN_ONLY_VERBS
+
+        /**
+         * 判断当前步是否应在调用前直接路由到主模型(不再先尝试轻量模型):
+         * - 收尾总结步、无工具可调、或提供的工具全部是主模型专属工具;
+         * - 上一轮助手消息调用了主模型专属工具(如 ask_user / phone_system_command / run_command / request_confirmation / hand_to_user)或未调工具;
+         * - 上一轮助手消息之后的新消息里包含插话、收尾/讨论/核对提示或点名要主模型专属工具。
+         */
+        fun shouldRouteToMainUpfront(
+            history: List<Message>,
+            specs: List<ToolSpec>,
+            verbOf: (String) -> Verb?,
+            finalSummary: Boolean = false,
+        ): Boolean {
+            if (finalSummary || specs.isEmpty() || specs.none { !mainOnly(it.name, verbOf(it.name)) }) {
+                return true
+            }
+            val lastAssistantIdx = history.indexOfLast { it.role == Role.Assistant }
+            if (lastAssistantIdx >= 0) {
+                val lastCalls = history[lastAssistantIdx].parts.filterIsInstance<Part.ToolCall>()
+                if (lastCalls.isEmpty() || lastCalls.any { mainOnly(it.name, verbOf(it.name)) }) {
+                    return true
+                }
+            }
+            val tailMessages = if (lastAssistantIdx >= 0) history.subList(lastAssistantIdx + 1, history.size) else history
+            for (msg in tailMessages) {
+                for (part in msg.parts) {
+                    if (part is Part.Text && UPFRONT_MAIN_MARKERS.any { marker -> part.text.contains(marker, ignoreCase = true) }) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
 
         /** 这些动作之后的一步算恢复(等过用户)。 */
         internal val RECOVERY_VERBS = setOf(Verb.HandToUser, Verb.AskUser, Verb.RequestConfirmation)
@@ -117,19 +202,36 @@ internal class StepTrack {
     private var app: String? = null
     private var appBefore: String? = null
     private var switched = false
+    private var lastVerb: Verb? = null
+    private var needsMainUpfront = false
 
     fun context(step: Int, hasImages: Boolean) =
-        StepContext(step, ok, guard, changed, recovery, !switched && app != null && app == appBefore, hasImages)
+        StepContext(
+            step = step,
+            lastOk = ok,
+            lastHadGuard = guard,
+            lastChanged = changed,
+            lastWasRecovery = recovery,
+            sameAppAsLast = !switched && app != null && app == appBefore,
+            hasImages = hasImages,
+            needsMainUpfront = needsMainUpfront,
+            lastVerb = lastVerb,
+        )
 
     /** [app] 为 null 表示这一步的结果没报前台 App,沿用之前的。 */
     /** 刚从回放交还、批量停止这类状况里恢复:下一步按恢复步算。在 [after] 之后调用。 */
     fun markRecovery() { recovery = true }
+
+    /** 标记下一步必须直接路由到主模型。 */
+    fun markMainUpfront() { needsMainUpfront = true }
 
     fun after(verb: Verb?, ok: Boolean, guard: Boolean, changed: Boolean?, recovery: Boolean, app: String?) {
         this.ok = ok
         this.guard = guard
         this.changed = changed
         this.recovery = recovery || verb in ModelRouter.RECOVERY_VERBS
+        this.lastVerb = verb
+        this.needsMainUpfront = verb != null && ModelRouter.mainOnly("", verb)
         appBefore = this.app
         if (app != null) this.app = app
         switched = verb in ModelRouter.APP_SWITCH_VERBS

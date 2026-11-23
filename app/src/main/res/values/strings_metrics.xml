@@ -36,6 +36,7 @@
     <string name="metrics_steps">Steps</string>
     <string name="metrics_observe_act">Reads / actions</string>
     <string name="metrics_observe_act_value">%1$d / %2$d</string>
+    <string name="metrics_light_rejected">Light rejected</string>
     <string name="metrics_counted">Counted</string>
     <plurals name="metrics_n_runs">
         <item quantity="one">%1$d run</item>

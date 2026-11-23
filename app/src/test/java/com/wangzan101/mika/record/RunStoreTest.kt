@@ -60,6 +60,32 @@ class RunStoreTest {
         assertEquals(log, events.readText())
     }
 
+    @Test fun usageLogExportsLightRejectionTelemetryAndRedactsPrivateFields() {
+        val id = "20250102-030405-rej123"
+        val dir = tmp.root.resolve("files/runs/$id").also { it.mkdirs() }
+        val events = dir.resolve("events.jsonl")
+        events.writeText(
+            """
+            {"type":"task_started","atMs":1,"goal":"private goal","model":"main"}
+            {"type":"model_reply","atMs":10,"step":3,"model":"gemini-flash","role":"light_rejected","text":"private text","tool":"phone_tap","argsJson":"{\"private\":\"arg\"}","inputTokens":150,"outputTokens":42,"cachedTokens":120,"reason":"validator_rejected","decisionScore":2,"validatorReason":"irreversible_element","lightTool":"phone_tap","lightOutputTokens":42,"lightRetried":true}
+            """.trimIndent(),
+        )
+
+        val exported = store().usageLog(id)
+        val rows = exported.lineSequence().filter { it.isNotEmpty() }.map { Json.parseToJsonElement(it).jsonObject }.toList()
+        val reply = rows.single { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals("light_rejected", reply.getValue("role").jsonPrimitive.content)
+        assertEquals("validator_rejected", reply.getValue("reason").jsonPrimitive.content)
+        assertEquals(2, reply.getValue("decisionScore").jsonPrimitive.content.toInt())
+        assertEquals("irreversible_element", reply.getValue("validatorReason").jsonPrimitive.content)
+        assertEquals("phone_tap", reply.getValue("lightTool").jsonPrimitive.content)
+        assertEquals(42, reply.getValue("lightOutputTokens").jsonPrimitive.content.toInt())
+        assertEquals("true", reply.getValue("lightRetried").jsonPrimitive.content)
+        assertFalse(reply.containsKey("text"))
+        assertFalse(reply.containsKey("argsJson"))
+        assertFalse(exported.contains("private"))
+    }
+
     @Test fun usageLogMarksADamagedLineAndPreservesMissingCounters() {
         val s = store()
         val id = s.open("g").also { it.close() }.runId
