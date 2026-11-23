@@ -64,6 +64,7 @@ import com.wangzan101.mika.ui.components.PageScaffold
 import com.wangzan101.mika.ui.components.PillTone
 import com.wangzan101.mika.ui.components.RowChevron
 import com.wangzan101.mika.ui.components.RowValue
+import com.wangzan101.mika.ui.components.ValueTone
 import com.wangzan101.mika.ui.components.StateCard
 import com.wangzan101.mika.ui.components.StatusPill
 import com.wangzan101.mika.ui.components.TileTone
@@ -99,7 +100,7 @@ import com.wangzan101.mika.workflow.ui.WorkflowsScreen
 private const val SHIZUKU_SETUP_GUIDE_URL = "https://shizuku.rikka.app/guide/setup/"
 
 /** 设置里能进入的子页面;[Home] 是设置首页,[Advanced] 集中放置连接、维护和工程能力。 */
-private enum class SettingsPage { Home, Advanced, AppAccess, SmsLogin, PhoneOps, Calls, Wechat, DuringWork, AppPace, Capsule, Language, Notifications, Recommendations, Checklists, Workflows, Sandbox, Plugins, EnvVars, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, DeviceDirectories, RunStats, Proactive, Backup }
+private enum class SettingsPage { Home, Advanced, AppAccess, SmsLogin, PhoneOps, Calls, Wechat, DuringWork, AppPace, Capsule, Language, Notifications, Recommendations, Checklists, Workflows, Sandbox, Plugins, EnvVars, Recovery, SelfCheck, ComputerAccess, McpServers, Root, Developer, DeviceDirectories, RunStats, Proactive, Backup, Banking }
 
 /**
  * 设置页:总状态卡 + 常用 / 我的数据 / 其他。高级与其他只增加一层,各子页返回来时的页面。
@@ -273,6 +274,8 @@ fun SettingsScreen(
             onOpenAutoArchive = { editingAutoArchive = true },
             onOpenMemory = onOpenMemory,
             onOpenBackup = { page = SettingsPage.Backup },
+            onOpenBanking = { page = SettingsPage.Banking },
+            bankingPaused = com.wangzan101.mika.settings.BankingMode.isPaused(context),
             onOpenRecommendations = { page = SettingsPage.Recommendations },
             onOpenPersonas = onOpenPersonas,
             onOpenAdvanced = { page = SettingsPage.Advanced },
@@ -376,6 +379,7 @@ fun SettingsScreen(
         SettingsPage.RunStats -> RunStatsScreen(remember { RunStore(context).metrics }, onBack = back)
         SettingsPage.Proactive -> com.wangzan101.mika.proactive.ProactiveScreen(onBack = back)
         SettingsPage.Backup -> BackupScreen(onBack = toHome)
+        SettingsPage.Banking -> BankingScreen(onBack = toHome, onFix = ::fix)
     }
 
     if (editingProxy) NetProxyDialog(
@@ -487,6 +491,9 @@ fun SettingsContent(
     onOpenLanguage: () -> Unit = {},
     onOpenMemory: (() -> Unit)? = null,
     onOpenBackup: (() -> Unit)? = null,
+    /** 银行模式(暂停 Mika 让银行 App 打开)的入口;暂停着时首页这一行写「已暂停」。 */
+    onOpenBanking: (() -> Unit)? = null,
+    bankingPaused: Boolean = false,
     onOpenRecommendations: () -> Unit = {},
     onOpenPersonas: (() -> Unit)? = null,
     onOpenAdvanced: () -> Unit = {},
@@ -520,6 +527,19 @@ fun SettingsContent(
             ListRow(MikaIcons.Phone, stringResource(R.string.settings_phone_ops), first = true, onClick = onOpenPhoneOps) {
                 PhoneOpsPill(status)
                 RowChevron()
+            }
+            onOpenBanking?.let {
+                ListRow(
+                    MikaIcons.Shield, stringResource(R.string.banking_title),
+                    stringResource(if (bankingPaused) R.string.banking_paused_row_sub else R.string.banking_active_row_sub),
+                    onClick = it,
+                ) {
+                    RowValue(
+                        stringResource(if (bankingPaused) R.string.banking_helper_paused else R.string.banking_active),
+                        if (bankingPaused) ValueTone.Plain else ValueTone.Ok,
+                    )
+                    RowChevron()
+                }
             }
             ListRow(MikaIcons.Clock, stringResource(R.string.drawer_plans), onClick = onOpenPlans) { RowChevron() }
             ListRow(MikaIcons.Globe, stringResource(R.string.drawer_browser), onClick = onOpenBrowser) { RowChevron() }

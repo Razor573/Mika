@@ -28,6 +28,8 @@ enum class Fix {
     // 内置助手
     OpenPhoneSetup, RepairPhoneHelper, RetryPhoneHelper, UnpairPhoneHelper, OpenPhoneOps,
     OpenAboutPhone, OpenDeveloperOptions, OpenUsbDebugging, OpenWirelessDebugging, OpenWifi,
+    /** 打开设置页(银行模式在设置首页就有入口):银行模式暂停时横幅点的就是它。 */
+    OpenBankingMode,
 }
 
 /** 顶部横幅的一行字和右侧链接。 */
@@ -88,6 +90,8 @@ object StatusCopy {
         Problem.NoModel -> Fix.AddModel
         // 引导页把每一步都讲清楚了,不再弹说明
         is Problem.PhoneHelper -> when {
+            // 银行模式暂停着:这不是故障,是用户亲手要的,直接去银行模式那页。
+            p.status == BuiltinShellStatus.Paused -> Fix.OpenBankingMode
             PhoneSetupCopy.canReconnect(p.status) -> Fix.RetryPhoneHelper
             (p.status as? BuiltinShellStatus.Failed)?.reason == BuiltinShellFailure.ShizukuNotInstalled ||
                 (p.status as? BuiltinShellStatus.Failed)?.reason == BuiltinShellFailure.ShizukuPermissionNeeded -> Fix.OpenPhoneOps
@@ -170,6 +174,12 @@ object StatusCopy {
                     tr(R.string.banner_failed), PhoneSetupCopy.failure(st.reason).title,
                     if (PhoneSetupCopy.canReconnect(st)) PhoneSetupCopy.RECONNECT else tr(R.string.fix_it),
                 )
+            // 银行模式暂停着:标题说在暂停,下面一句说银行 App 现在应该能打开。
+            BuiltinShellStatus.Paused -> BannerCopy(
+                tr(R.string.banking_paused_title),
+                tr(R.string.banking_paused_body),
+                tr(R.string.view),
+            )
             BuiltinShellStatus.Running -> error("not a problem")
         }
         is Problem.Accessibility -> when (p.state) {
