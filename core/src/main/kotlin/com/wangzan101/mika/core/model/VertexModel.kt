@@ -1,6 +1,6 @@
 package com.wangzan101.mika.core.model
 
-import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
 import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request

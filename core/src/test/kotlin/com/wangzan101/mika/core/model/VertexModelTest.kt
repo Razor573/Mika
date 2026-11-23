@@ -1,7 +1,7 @@
 package com.wangzan101.mika.core.model
 
-import com.wangzan101.mika.core.oauth.VertexEndpoints
-import com.wangzan101.mika.core.usage.ModelHttpAttempts
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
+import com.wangzan101.mika.core.model.usage.ModelHttpAttempts
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json

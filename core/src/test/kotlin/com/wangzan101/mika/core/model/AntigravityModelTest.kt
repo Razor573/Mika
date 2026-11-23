@@ -1,6 +1,6 @@
 package com.wangzan101.mika.core.model
 
-import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.model.oauth.AntigravityAuth
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject

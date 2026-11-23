@@ -1,6 +1,6 @@
 package com.wangzan101.mika.about
 
-import com.wangzan101.mika.core.shell.PermissionCommands
+import com.wangzan101.mika.core.device.shell.PermissionCommands
 
 /**
  * Install Mika updates, or repair its installer record, through the phone

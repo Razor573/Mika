@@ -24,13 +24,13 @@ import com.wangzan101.mika.core.model.StopReason
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
 import com.wangzan101.mika.core.model.VertexModel
-import com.wangzan101.mika.core.record.RunEvent
-import com.wangzan101.mika.core.record.RunMetrics
-import com.wangzan101.mika.core.record.RunSink
+import com.wangzan101.mika.core.run.record.RunEvent
+import com.wangzan101.mika.core.run.record.RunMetrics
+import com.wangzan101.mika.core.run.record.RunSink
 import com.wangzan101.mika.core.tool.FakeScreen
-import com.wangzan101.mika.core.uistate.ActionResult
-import com.wangzan101.mika.core.uistate.ScreenSnapshot
-import com.wangzan101.mika.core.uistate.UiElement
+import com.wangzan101.mika.core.screen.uistate.ActionResult
+import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
+import com.wangzan101.mika.core.screen.uistate.UiElement
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -77,7 +77,7 @@ private fun toolsWithUsage(usage: Usage, vararg calls: Part.ToolCall) = ModelRep
 private fun finish(text: String = "done") = com.wangzan101.mika.core.testing.answerReply(text)
 
 /** 屏上有一个操作按钮;每次读取另有新序号,路由测试不会被无新数据收尾打断。 */
-private class SendScreen(private val label: String = "发送", private val inner: FakeScreen = FakeScreen()) : com.wangzan101.mika.core.uistate.ScreenPort by inner {
+private class SendScreen(private val label: String = "发送", private val inner: FakeScreen = FakeScreen()) : com.wangzan101.mika.core.screen.uistate.ScreenPort by inner {
     private var reads = 0
     override suspend fun snapshot() = ScreenSnapshot("s1", "com.x",
         listOf(
@@ -87,7 +87,7 @@ private class SendScreen(private val label: String = "发送", private val inner
 }
 
 /** Safe multi-element screen for tap/scroll/swipe/type/check steps in thesame app. */
-private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : com.wangzan101.mika.core.uistate.ScreenPort by inner {
+private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : com.wangzan101.mika.core.screen.uistate.ScreenPort by inner {
     private var tick = 0
     override suspend fun snapshot(): ScreenSnapshot {
         val n = ++tick
@@ -118,7 +118,7 @@ private class SafeActionScreen(private val inner: FakeScreen = FakeScreen()) : c
 class AgentLoopLightTest {
     private val on = SpeedFlags(lightSteps = true)
 
-    private fun loop(main: ChatModel, light: ChatModel, sink: RunSink = RunSink.NONE, screen: com.wangzan101.mika.core.uistate.ScreenPort = FakeScreen()) =
+    private fun loop(main: ChatModel, light: ChatModel, sink: RunSink = RunSink.NONE, screen: com.wangzan101.mika.core.screen.uistate.ScreenPort = FakeScreen()) =
         AgentLoop(main, toolDispatcher(screen), "BASE", sink = sink, flags = on, router = ModelRouter(main, light))
 
     @Test fun cleanStepsGoToLightAndAreRecorded() = runTest {

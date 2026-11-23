@@ -116,6 +116,8 @@ class VoiceCallSessionTest {
         val rt = FakeRealtime()
         val foreground = MutableStateFlow(true)
         val userTranscripts = mutableListOf<Pair<String, Boolean>>()
+        val assistantTranscripts = mutableListOf<Pair<String, Boolean>>()
+        val assistantDrafts = mutableListOf<String>()
         val session = VoiceCallSession(
             scope = scope,
             audio = audio,
@@ -125,6 +127,8 @@ class VoiceCallSessionTest {
             onVoiceRequest = onVoiceRequest,
             onBargeIn = onBargeIn,
             onUserTranscript = { text, isFinal -> userTranscripts += text to isFinal },
+            onAssistantTranscript = { text, isFinal -> assistantTranscripts += text to isFinal },
+            onAssistantDraft = { assistantDrafts += it },
             timeLimitMs = timeLimitMs,
             clockNanos = clockNanos,
             nowMillis = nowMillis,
@@ -248,11 +252,31 @@ class VoiceCallSessionTest {
         assertEquals(VoiceCallState.Failed(VoiceCallError.MicSilent, 1), h.session.state.value)
     }
 
-    @Test fun `zero energy first chunk fails mic silent`() = runTest {
+    @Test fun `zero chunks while the mic warms up are not a silent mic`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        // 刚切通话模式时有的音频硬件先吐几块全零,这是预热,不是麦克风坏了
+        repeat(3) { h.audio.offerChunk(ShortArray(320)) }
+        runCurrent()
+        assertTrue(h.session.state.value is VoiceCallState.MicCheck)
+        h.audio.offerChunk()
+        runCurrent()
+        assertTrue(h.session.state.value !is VoiceCallState.Failed)
+    }
+
+    @Test fun `only zero chunks for three seconds fails mic silent`() = runTest {
         lateinit var h: Harness
         h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
         runCurrent()
         h.audio.offerChunk(ShortArray(320))
+        runCurrent()
+        assertTrue(h.session.state.value is VoiceCallState.MicCheck)
+        advanceTimeBy(1_500L)
+        h.audio.offerChunk(ShortArray(320))
+        runCurrent()
+        assertTrue(h.session.state.value is VoiceCallState.MicCheck)
+        advanceTimeBy(1_501L)
         runCurrent()
         assertEquals(VoiceCallState.Failed(VoiceCallError.MicSilent, 1), h.session.state.value)
     }
@@ -666,6 +690,104 @@ class VoiceCallSessionTest {
         runCurrent()
         assertTrue(requests.isEmpty())
         assertTrue(h.userTranscripts.isEmpty())
+    }
+
+    @Test fun `turn listens once active and speaks while cloud audio plays`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        assertEquals(VoiceCallTurn.Listening, h.session.turn.value)
+        reachActive(h, this)
+        assertEquals(VoiceCallTurn.Listening, h.session.turn.value)
+        h.rt.emit(VolcRealtimeEvent.Audio(ByteArray(480) { 1 }))
+        runCurrent()
+        assertEquals(VoiceCallTurn.Speaking, h.session.turn.value)
+        advanceTimeBy(VoiceCallSession.SPEAKING_IDLE_MS / 2)
+        runCurrent()
+        assertEquals("刚播完一小段还算在说", VoiceCallTurn.Speaking, h.session.turn.value)
+        advanceTimeBy(VoiceCallSession.SPEAKING_IDLE_MS + VoiceCallSession.TURN_POLL_MS)
+        runCurrent()
+        assertEquals("播放停了一阵就轮回到听", VoiceCallTurn.Listening, h.session.turn.value)
+    }
+
+    @Test fun `a final user transcript thinks and new speech listens again`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        reachActive(h, this)
+        h.rt.emit(VolcRealtimeEvent.UserTranscript("查天气", isFinal = false))
+        runCurrent()
+        assertEquals(VoiceCallTurn.Listening, h.session.turn.value)
+        h.rt.emit(VolcRealtimeEvent.UserTranscript("查天气", isFinal = true))
+        runCurrent()
+        assertEquals(VoiceCallTurn.Thinking, h.session.turn.value)
+        h.rt.emit(VolcRealtimeEvent.UserSpeaking)
+        runCurrent()
+        assertEquals(VoiceCallTurn.Listening, h.session.turn.value)
+        h.session.sendUserText("打字也算问完")
+        assertEquals(VoiceCallTurn.Thinking, h.session.turn.value)
+        h.rt.emit(VolcRealtimeEvent.UserTranscriptionEmpty)
+        runCurrent()
+        assertEquals("没听清就回到听", VoiceCallTurn.Listening, h.session.turn.value)
+    }
+
+    @Test fun `a reply shown locally ends thinking without waiting for speech`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        reachActive(h, this)
+        h.session.sendUserText("现在几点")
+        assertEquals(VoiceCallTurn.Thinking, h.session.turn.value)
+        h.session.onLocalReply()
+        assertEquals("打字的结果只在本地显示、不会播出来,显示了就轮回到听", VoiceCallTurn.Listening, h.session.turn.value)
+    }
+
+    @Test fun `a local reply does not cut off mika while she is talking`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        reachActive(h, this)
+        h.rt.emit(VolcRealtimeEvent.Audio(ByteArray(3200)))
+        runCurrent()
+        assertEquals(VoiceCallTurn.Speaking, h.session.turn.value)
+        h.session.onLocalReply()
+        assertEquals(VoiceCallTurn.Speaking, h.session.turn.value)
+    }
+
+    @Test fun `mute sends silence upstream and zeroes the mic level until unmuted`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        reachActive(h, this)
+        assertFalse(h.session.muted.value)
+        h.session.setMuted(true)
+        assertTrue(h.session.muted.value)
+        h.audio.offerChunk(ShortArray(320) { 5_000 })
+        runCurrent()
+        assertEquals(1, h.rt.sentPcm.size)
+        assertTrue("静音时上行全零(保持节奏)", h.rt.sentPcm.last().all { it == 0.toByte() })
+        assertEquals(0f, h.session.micLevel.value, 0.001f)
+        h.session.setMuted(false)
+        h.audio.offerChunk(ShortArray(320) { 5_000 })
+        advanceTimeBy(20L)
+        runCurrent()
+        assertEquals(2, h.rt.sentPcm.size)
+        assertFalse(h.rt.sentPcm.last().all { it == 0.toByte() })
+        assertEquals(0.625f, h.session.micLevel.value, 0.01f)
+    }
+
+    @Test fun `assistant text streams as a draft before the final transcript`() = runTest {
+        lateinit var h: Harness
+        h = harness(backgroundScope, clockNanos = { currentTime * 1_000_000L }, nowMillis = { currentTime }, connect = { h.rt })
+        runCurrent()
+        reachActive(h, this)
+        h.rt.emit(VolcRealtimeEvent.AssistantTranscript("好的,"))
+        h.rt.emit(VolcRealtimeEvent.AssistantTranscript("我查一下"))
+        runCurrent()
+        assertEquals(listOf("好的,", "好的,我查一下"), h.assistantDrafts)
+        h.rt.emit(VolcRealtimeEvent.AssistantTextEnded)
+        runCurrent()
+        assertEquals(listOf("好的,我查一下" to true), h.assistantTranscripts)
     }
 
     private companion object {

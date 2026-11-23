@@ -3,7 +3,7 @@ package com.wangzan101.mika.ui
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelListResult
 import com.wangzan101.mika.core.model.ModelRole
-import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.model.oauth.AntigravityAuth
 import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.settings.AesGcmKeyCipher
 import com.wangzan101.mika.settings.ChatGptSignIns

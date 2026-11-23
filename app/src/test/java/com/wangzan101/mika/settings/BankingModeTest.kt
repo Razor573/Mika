@@ -1,7 +1,7 @@
 package com.wangzan101.mika.settings
 
-import com.wangzan101.mika.core.shell.BuiltinShellStatus
-import com.wangzan101.mika.core.shell.ShellTransport
+import com.wangzan101.mika.core.device.shell.BuiltinShellStatus
+import com.wangzan101.mika.core.device.shell.ShellTransport
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * 银行模式恢复步骤的纯函数测试:按恢复后的真实状态,算出还有哪些步骤要用户亲手做。
  * 暂停/恢复本身要读系统(无障碍列表、无线调试开关、助手状态),不在 JVM 单测里跑,
- * 由 [com.wangzan101.mika.core.shell.BuiltinShellEngineTest] 在 core 单测里覆盖状态机。
+ * 由 [com.wangzan101.mika.core.device.shell.BuiltinShellEngineTest] 在 core 单测里覆盖状态机。
  */
 class BankingModeTest {
     private fun state(

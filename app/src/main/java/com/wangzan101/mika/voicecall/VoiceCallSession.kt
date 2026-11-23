@@ -33,6 +33,12 @@ sealed interface VoiceCallState {
     data class Failed(val error: VoiceCallError, val attempt: Int) : VoiceCallState
 }
 
+/**
+ * 接通后这一刻轮到谁:听(等你开口/你在说)、想(你说完了,等回答)、说(Mika 的声音正在播)。
+ * 只在 [VoiceCallState.Active] 里有意义;通话页据此给出「在听你说 / 在想 / Mika 在说」。
+ */
+enum class VoiceCallTurn { Listening, Thinking, Speaking }
+
 enum class EndReason { Hangup, Notification, IncomingCall, TimeLimit, Background }
 
 enum class VoiceCallError { Auth, ConnectTimeout, Disconnected, RateLimited, Provider, MicSilent, AudioFocus, Playback, Busy }
@@ -60,6 +66,8 @@ class VoiceCallSession(
     private val onBargeIn: () -> Unit = {},
     private val onUserTranscript: (text: String, isFinal: Boolean) -> Unit = { _, _ -> },
     private val onAssistantTranscript: (text: String, isFinal: Boolean) -> Unit = { _, _ -> },
+    /** 助手这一轮到目前为止的文字(逐段累积),供通话页实时显示;落定仍走 [onAssistantTranscript]。 */
+    private val onAssistantDraft: (text: String) -> Unit = {},
     private val timeLimitMs: Long = MAX_CALL_DURATION_MS,
     private val resumedTimeoutMs: Long = RESUMED_TIMEOUT_MS,
     private val micCheckTimeoutMs: Long = MIC_CHECK_TIMEOUT_MS,
@@ -72,6 +80,15 @@ class VoiceCallSession(
     val micLevel: StateFlow<Float> = _micLevel
     private val _speakerLevel = MutableStateFlow(0f)
     val speakerLevel: StateFlow<Float> = _speakerLevel
+    private val _turn = MutableStateFlow(VoiceCallTurn.Listening)
+    val turn: StateFlow<VoiceCallTurn> = _turn
+    private val _muted = MutableStateFlow(false)
+
+    /** 静音:麦克风照常采集,上行改送静音帧(保持节奏,服务端只当你没说话),电平归零。跨重试保留。 */
+    val muted: StateFlow<Boolean> = _muted
+
+    /** 最近一次真正写进播放轨的云端音频时刻(clockNanos);播放停下一阵后轮回到听。 */
+    @Volatile private var lastSpokeNanos = 0L
 
     private val lock = Any()
     private var runJob: Job? = null
@@ -84,6 +101,19 @@ class VoiceCallSession(
     }
 
     fun hangup() = end(EndReason.Hangup)
+
+    fun setMuted(muted: Boolean) {
+        _muted.value = muted
+        if (muted) _micLevel.value = 0f
+    }
+
+    /**
+     * 回复已在本地显示(打字请求的结果只进转写/面板,云端不会播报):不会再有播放把「在想」带回「在听」,
+     * 由装配方显示后告诉会话。正在播报时不动,播完自然回到听。
+     */
+    fun onLocalReply() {
+        _turn.compareAndSet(VoiceCallTurn.Thinking, VoiceCallTurn.Listening)
+    }
 
     private var typedCount = 0
 
@@ -98,6 +128,7 @@ class VoiceCallSession(
         if (_state.value !is VoiceCallState.Active) return
         val callId = TYPED_CALL_PREFIX + (++typedCount)
         onUserTranscript(clean, true)
+        _turn.value = VoiceCallTurn.Thinking
         onVoiceRequest(callId, clean)
     }
 
@@ -170,6 +201,7 @@ class VoiceCallSession(
                 terminal = false
             }
             _state.value = VoiceCallState.Connecting
+            _turn.value = VoiceCallTurn.Listening
             if (!awaitResumed()) {
                 end(EndReason.Background)
                 return
@@ -222,14 +254,21 @@ class VoiceCallSession(
         throw VoiceCallFailure(VoiceCallError.MicSilent)
     }
 
-    /** 开麦校验:首块必须在限时内到达、非全零、且未被系统静音。 */
+    /**
+     * 开麦校验:限时内要收到一块有声音的音频,且未被系统静音。
+     * 刚切进通话模式时不少音频硬件会先给几块全零(预热),所以全零块跳过、只在整个窗口都没声音时才判失败。
+     */
     private suspend fun checkMic() {
-        val first = withTimeoutOrNull(micCheckTimeoutMs) { audio.captureChunks.receiveCatching().getOrNull() }
-            ?: throw VoiceCallFailure(VoiceCallError.MicSilent)
-        if (audio.micSilenced.value || first.all { it == 0.toShort() }) {
-            throw VoiceCallFailure(VoiceCallError.MicSilent)
-        }
-        _micLevel.value = levelOf(first)
+        val heard = withTimeoutOrNull(micCheckTimeoutMs) {
+            var chunk: ShortArray
+            do {
+                chunk = audio.captureChunks.receiveCatching().getOrNull()
+                    ?: throw VoiceCallFailure(VoiceCallError.MicSilent)
+                if (audio.micSilenced.value) throw VoiceCallFailure(VoiceCallError.MicSilent)
+            } while (chunk.all { it == 0.toShort() })
+            chunk
+        } ?: throw VoiceCallFailure(VoiceCallError.MicSilent)
+        _micLevel.value = levelOf(heard)
     }
 
     /** 提示音直接写播放轨,不进播放队列、不计电平。 */
@@ -258,6 +297,7 @@ class VoiceCallSession(
             coroutineScope {
                 launch { writeLoop(queue) }
                 launch { pumpMic(realtime) }
+                launch { watchSpeaking() }
                 launch {
                     delay(timeLimitMs)
                     end(EndReason.TimeLimit)
@@ -288,6 +328,9 @@ class VoiceCallSession(
             echoWindow.append(text)
             onAssistantTranscript(text, final)
         }
+        fun listen() {
+            _turn.value = VoiceCallTurn.Listening
+        }
         realtime.events.collect { event ->
             when (event) {
                 is VolcRealtimeEvent.Audio ->
@@ -297,10 +340,12 @@ class VoiceCallSession(
                     audio.interruptPlayback()
                     _speakerLevel.value = 0f
                     flushAssistantText(final = false)
+                    listen()
                     onBargeIn()
                 }
                 is VolcRealtimeEvent.UserTranscript -> {
                     onUserTranscript(event.text, event.isFinal)
+                    if (event.isFinal && event.isCurrentTurn) _turn.value = VoiceCallTurn.Thinking
                     // 先登记当轮 final+complete 转写,之后的 function_call 才有资格过闸
                     if (event.isFinal && event.isCompleteFinal && event.isCurrentTurn && !event.hasUnresolvedPriorTurn) {
                         requestGate.onUserTranscript(event.text)
@@ -308,9 +353,13 @@ class VoiceCallSession(
                 }
                 is VolcRealtimeEvent.AssistantTranscript -> {
                     val room = MAX_ASSISTANT_TURN_CHARS - assistantText.length
-                    if (room > 0) assistantText.append(event.delta.take(room))
+                    if (room > 0) {
+                        assistantText.append(event.delta.take(room))
+                        onAssistantDraft(assistantText.toString())
+                    }
                 }
                 VolcRealtimeEvent.AssistantTextEnded -> flushAssistantText(final = true)
+                VolcRealtimeEvent.UserTranscriptionEmpty, VolcRealtimeEvent.UserTranscriptionFailed -> listen()
                 is VolcRealtimeEvent.FunctionCall -> handleFunctionCall(realtime, event)
                 is VolcRealtimeEvent.Failed -> throw event.error
                 VolcRealtimeEvent.Closed -> throw VolcRealtimeException(VolcRealtimeException.Kind.NETWORK)
@@ -341,12 +390,13 @@ class VoiceCallSession(
         while (true) {
             val chunk = audio.captureChunks.receiveCatching().getOrNull()
                 ?: throw VoiceCallFailure(VoiceCallError.MicSilent)
-            _micLevel.value = levelOf(chunk)
+            val muted = _muted.value
+            _micLevel.value = if (muted) 0f else levelOf(chunk)
             var index = 0
             while (index < chunk.size) {
                 val count = minOf(chunk.size - index, (frameBytes - position) / 2)
                 for (k in 0 until count) {
-                    val sample = chunk[index + k].toInt()
+                    val sample = if (muted) 0 else chunk[index + k].toInt()
                     frame[position + 2 * k] = (sample and 0xFF).toByte()
                     frame[position + 2 * k + 1] = (sample shr 8 and 0xFF).toByte()
                 }
@@ -371,6 +421,8 @@ class VoiceCallSession(
                 if (queue.isCurrent(block)) {
                     audio.writePlayback(pcm, block.byteCount)
                     _speakerLevel.value = levelOf(pcm, block.byteCount)
+                    lastSpokeNanos = clockNanos()
+                    _turn.value = VoiceCallTurn.Speaking
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -379,6 +431,17 @@ class VoiceCallSession(
                 throw VoiceCallFailure(VoiceCallError.Playback)
             } finally {
                 queue.release(block)
+            }
+        }
+    }
+
+    /** 播放停下 [SPEAKING_IDLE_MS] 还没新音频,就当这轮说完了,轮回到听。 */
+    private suspend fun watchSpeaking() {
+        while (true) {
+            delay(TURN_POLL_MS)
+            if (_turn.value == VoiceCallTurn.Speaking && clockNanos() - lastSpokeNanos >= SPEAKING_IDLE_MS * 1_000_000L) {
+                _turn.value = VoiceCallTurn.Listening
+                _speakerLevel.value = 0f
             }
         }
     }
@@ -410,6 +473,9 @@ class VoiceCallSession(
         const val MIC_CHECK_TIMEOUT_MS = 3_000L
         /** 通话中查系统音频模式的间隔:来电/去电抢走通话音频时尽快收场。 */
         const val PHONE_CALL_POLL_MS = 1_000L
+        /** 播放停了多久算这轮说完。 */
+        const val SPEAKING_IDLE_MS = 700L
+        const val TURN_POLL_MS = 100L
         private const val MAX_ASSISTANT_TURN_CHARS = 1_024
         private const val LEVEL_FULL_SCALE = 8_000.0
     }

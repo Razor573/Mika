@@ -10,8 +10,8 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.wangzan101.mika.core.net.NetProxy
-import com.wangzan101.mika.core.shell.PermissionCommands
-import com.wangzan101.mika.core.shell.ShellCommandRunner
+import com.wangzan101.mika.core.device.shell.PermissionCommands
+import com.wangzan101.mika.core.device.shell.ShellCommandRunner
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.UUID

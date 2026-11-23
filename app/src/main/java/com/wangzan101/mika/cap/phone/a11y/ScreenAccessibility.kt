@@ -3,16 +3,18 @@ package com.wangzan101.mika.cap.phone.a11y
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.app.Notification
 import android.content.Intent
 import android.graphics.Bitmap
-import android.util.Log
 import android.graphics.Path
-import android.app.Notification
 import android.os.Build
+import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
-import com.wangzan101.mika.core.uistate.ScreenEvent
+import com.wangzan101.mika.calls.onCallerLabelEvent
+import com.wangzan101.mika.core.screen.uistate.ScreenEvent
+import kotlin.coroutines.resume
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -22,7 +24,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
 
 /** Mika 的无障碍服务:操作和事件转给当前已连接实例,任务持有旧实例时也能在重连后恢复。 */
 open class ScreenAccessibility : AccessibilityService() {
@@ -129,14 +130,6 @@ open class ScreenAccessibility : AccessibilityService() {
     suspend fun taps(displayId: Int, x: Float, y: Float, count: Int, holdMs: Long, gapMs: Long): Boolean {
         val at = Path().apply { moveTo(x, y) }
         return dispatch(displayId, (0 until count).map { i -> GestureDescription.StrokeDescription(at, i * (holdMs + gapMs), holdMs.coerceAtLeast(1)) })
-    }
-
-    /** 无障碍的「返回」全局动作:按键注入到虚拟屏失效时的兜底。作用在服务当前聚焦的屏上,只记结果、不记按键内容。 */
-    fun performGlobalBack(): Boolean {
-        val service = instance.value ?: return false
-        val ok = service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-        Log.i(TAG, "performGlobalBack ok=$ok")
-        return ok
     }
 
     private suspend fun dispatch(displayId: Int, strokes: List<GestureDescription.StrokeDescription>): Boolean {

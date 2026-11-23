@@ -13,7 +13,7 @@ import com.wangzan101.mika.core.model.headerOrReject
 import com.wangzan101.mika.core.model.withHeaders
 import com.wangzan101.mika.core.net.NetProxy
 import com.wangzan101.mika.core.net.awaitBody
-import com.wangzan101.mika.core.oauth.VertexEndpoints
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray

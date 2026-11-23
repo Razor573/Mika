@@ -10,10 +10,10 @@ import com.wangzan101.mika.a11y.MikaAccessibilityService
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.phone.a11y.ScreenAccessibility
 import com.wangzan101.mika.cap.phone.setup.DeveloperSettings
-import com.wangzan101.mika.core.shell.BuiltinShellControl
-import com.wangzan101.mika.core.shell.BuiltinShellStatus
-import com.wangzan101.mika.core.shell.PermissionCommands
-import com.wangzan101.mika.core.shell.ShellTransport
+import com.wangzan101.mika.core.device.shell.BuiltinShellControl
+import com.wangzan101.mika.core.device.shell.BuiltinShellStatus
+import com.wangzan101.mika.core.device.shell.PermissionCommands
+import com.wangzan101.mika.core.device.shell.ShellTransport
 import com.wangzan101.mika.task.TaskService
 
 /**

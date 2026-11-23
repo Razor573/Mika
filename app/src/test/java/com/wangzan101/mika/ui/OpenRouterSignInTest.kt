@@ -2,12 +2,20 @@ package com.wangzan101.mika.ui
 
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelListResult
-import com.wangzan101.mika.core.oauth.OpenRouterAuth
+import com.wangzan101.mika.core.model.oauth.OpenRouterAuth
 import com.wangzan101.mika.i18n.ChineseTexts
 import com.wangzan101.mika.settings.AesGcmKeyCipher
 import com.wangzan101.mika.settings.ChatGptSignIns
 import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.configFor
+import com.wangzan101.mika.settings.connect
+import com.wangzan101.mika.settings.connectOpenRouter
+import com.wangzan101.mika.settings.openRouterAccount
+import com.wangzan101.mika.settings.providerKey
+import com.wangzan101.mika.settings.signOutOpenRouter
+import java.io.File
+import javax.crypto.KeyGenerator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,8 +37,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
-import javax.crypto.KeyGenerator
+import com.wangzan101.mika.settings.ui.models.AccountProvider
+import com.wangzan101.mika.settings.ui.models.ModelSetupViewModel
+import com.wangzan101.mika.settings.ui.models.SignInBrowser
+import com.wangzan101.mika.settings.ui.models.signInWithAccount
+import com.wangzan101.mika.settings.ui.models.signOutAccount
+import com.wangzan101.mika.settings.ui.models.signedInShown
 
 /**
  * 用 OpenRouter 账号登录走一遍:浏览器(假的)打开授权页,带着 code 回到本机回调,换到 Key,
@@ -132,7 +144,7 @@ class OpenRouterSignInTest {
         assertEquals(0, server.requestCount)
     }
 
-    @Test fun accountWithOnlyTtsModelsHasNoDefaultMainModel() {
+    @Test fun accountSignInPicksAUsableMainModel() {
         val models = listOf(
             ListedModel("fishaudio/drama-3-int4"),
             ListedModel("vendor/synth", unsupportedApis = listOf("/v1/audio/speech")),
@@ -140,7 +152,6 @@ class OpenRouterSignInTest {
         )
         val s = store(models)
         val existing = s.connectOpenRouter("old-key", models)
-        models.forEach { assertTrue(s.setTtsModel(existing.id, it.id, enabled = true)) }
         server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody("""{"key":"sk-or-v1-NEW"}"""))
         val vm = ModelSetupViewModel(s, scope, io = Dispatchers.IO, browser = Browser(), signIns = ChatGptSignIns(scope))
 
@@ -149,7 +160,9 @@ class OpenRouterSignInTest {
         assertEquals(existing.id, ui.signedInProvider)
         assertTrue(ui.openRouterAccount!!.signedIn)
         assertEquals(models, s.openRouterAccount()?.models)
-        assertNull(ui.roles.main)
+        // 不再按 ttsModels 标记排除:第一个可用的对话模型成为主模型
+        assertNotNull(ui.roles.main)
+        assertEquals("fishaudio/drama-3-int4", s.configFor(com.wangzan101.mika.core.model.ModelRole.Main)?.model)
     }
 
     /**
