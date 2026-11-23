@@ -10,6 +10,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import com.wangzan101.mika.core.tool.ToolIndex
 import com.wangzan101.mika.core.tool.Verb
 
@@ -60,6 +62,9 @@ object HistoryPruner {
     /** 全量的界面读取(回看结果里的元素文字同样会过时;回看本身不算一次读取)。 */
     private val FULL_VERBS = setOf(Verb.Observe, Verb.ListElements)
     private const val SCREEN = "screen"
+    private val INTERFACE_KEYS = setOf("elements", ScreenElementTable.KEY, "tree", "treeChanges", "windows", "nodes")
+    private val BATCH_VIEW_MARKERS = listOf("\"elements\"", "\"elementTables\"", "\"tree\"", "\"snapshotId\"")
+    private val PINNED_VERBS = setOf(Verb.HandToUser, Verb.AskUser, Verb.RequestConfirmation)
     /** 缩短时一定留着的结局字段。 */
     private val OUTCOME = setOf("ok", "error", "message", "recoverable", "exitCode")
 
@@ -158,13 +163,291 @@ object HistoryPruner {
         return p.copy(content = withIds)
     }
 
+    fun pruneOlderObservations(
+        messages: List<Message>,
+        tools: ToolIndex,
+        keepFull: Int = ContextCompressor.KEEP_FULL_OBSERVATIONS,
+    ): List<Message> {
+        require(keepFull >= 0)
+        val verbs = callVerbs(messages, tools)
+        val obsIndices = messages.indices.filter { isObservationMessage(messages[it], verbs) }
+        if (obsIndices.size <= keepFull) return messages
+        val pruneObs = obsIndices.take(obsIndices.size - keepFull).toSet()
+        val pruneAttachedImages = HashSet<Int>()
+        for (idx in pruneObs) {
+            if (messages[idx].role == Role.Tool) {
+                val next = idx + 1
+                if (next < messages.size && next !in obsIndices &&
+                    messages[next].role == Role.User && messages[next].author == Author.Mika &&
+                    messages[next].parts.any { it is Part.Image }) {
+                    pruneAttachedImages += next
+                }
+            }
+        }
+        var changed = false
+        val out = messages.mapIndexed { i, m ->
+            when {
+                i in pruneObs -> {
+                    val parts = m.parts.map { p ->
+                        when {
+                            p is Part.ToolResult && isUnprunedUiResult(p, verbs[p.callId]) ->
+                                shrinkObservationResult(p, verbs[p.callId])
+                            p is Part.Image -> Part.Text(p.screenshotId?.let(::olderImage) ?: OMITTED_IMAGE)
+                            m.role == Role.User && m.author == Author.Mika && isUnprunedBatchViewPart(p) ->
+                                Part.Text(OMITTED)
+                            else -> p
+                        }
+                    }
+                    if (parts == m.parts) m else { changed = true; m.copy(parts = parts) }
+                }
+                i in pruneAttachedImages -> {
+                    val parts = m.parts.map { p ->
+                        if (p is Part.Image) Part.Text(p.screenshotId?.let(::olderImage) ?: OMITTED_IMAGE) else p
+                    }
+                    if (parts == m.parts) m else { changed = true; m.copy(parts = parts) }
+                }
+                else -> m
+            }
+        }
+        return if (changed) out else messages
+    }
+
+    fun enforceCap(
+        messages: List<Message>,
+        tools: ToolIndex,
+        fits: (List<Message>) -> Boolean,
+    ): List<Message> {
+        if (fits(messages)) return messages
+        var out = pruneOlderObservations(messages, tools, ContextCompressor.KEEP_FULL_OBSERVATIONS)
+        if (fits(out)) return out
+        out = shrinkOversized(out, fits)
+        if (fits(out)) return out
+        out = pruneOlderObservations(out, tools, 1)
+        if (fits(out)) return out
+        out = pruneOlderObservations(out, tools, 0)
+        if (fits(out)) return out
+        out = stripNonUserImages(out)
+        if (fits(out)) return out
+        out = dropOldestRounds(out, tools, fits)
+        if (fits(out)) return out
+        return clipOversizedParts(out, fits)
+    }
+
+    internal fun observationRounds(messages: List<Message>, tools: ToolIndex, toolStarts: List<Int>): List<Int> {
+        if (toolStarts.isEmpty()) return emptyList()
+        val verbs = callVerbs(messages, tools)
+        return toolStarts.indices.filter { k ->
+            val start = toolStarts[k]
+            val end = toolStarts.getOrElse(k + 1) { messages.size }
+            (start until end).any { idx -> isObservationMessage(messages[idx], verbs) }
+        }
+    }
+
+    private fun isObservationMessage(m: Message, verbs: Map<String, Verb?>): Boolean {
+        if (m.author == Author.User) return false
+        if (m.parts.any { it is Part.ToolResult && isUnprunedUiResult(it, verbs[it.callId]) }) return true
+        return m.role == Role.User && m.author == Author.Mika && m.parts.any(::isUnprunedBatchViewPart)
+    }
+
+    private fun isUnprunedBatchViewPart(p: Part): Boolean =
+        p is Part.Text && ContextBuilder.kindOf(p.text) == null && OMITTED !in p.text &&
+            BATCH_VIEW_MARKERS.any { it in p.text }
+
+    private fun isUnprunedUiResult(p: Part.ToolResult, verb: Verb?): Boolean {
+        val obj = parse(p.content)
+        if (obj != null) {
+            if (obj[SCREEN] is JsonObject) return true
+            if (INTERFACE_KEYS.any { k -> val v = obj[k]; v != null && v != JsonPrimitive(OMITTED) }) return true
+            if (verb == Verb.ViewPastScreens) {
+                val shots = obj["screenshots"] as? JsonArray
+                if (shots != null && shots.any { (it as? JsonObject)?.get("elementsText")?.let { et -> et != JsonPrimitive(OMITTED) } == true }) return true
+            }
+        }
+        if (OMITTED in p.content || OMITTED_READ in p.content || (obj != null && OBS_IDS in obj)) return false
+        return verb in INTERFACE_VERBS || verb == Verb.ViewPastScreens || p.reads.any { it.form == ObsForm.Interface }
+    }
+
+    private fun shrinkObservationResult(p: Part.ToolResult, verb: Verb?): Part.ToolResult {
+        val obj = parse(p.content)
+        var content = p.content
+        if (obj != null && obj[SCREEN] is JsonObject) {
+            content = shrinkScreen(content)
+        }
+        val afterScreen = parse(content)
+        val hasInterfaceKeys = afterScreen != null && INTERFACE_KEYS.any { k ->
+            val v = afterScreen[k]; v != null && v != JsonPrimitive(OMITTED)
+        }
+        content = when {
+            verb == Verb.ViewPastScreens -> shrinkRecall(content)
+            hasInterfaceKeys || verb in INTERFACE_VERBS || p.reads.any { it.form == ObsForm.Interface } -> shrinkInterface(content)
+            else -> content
+        }
+        return if (content == p.content) p else withObsIds(p, content)
+    }
+
+    private fun stripNonUserImages(messages: List<Message>): List<Message> {
+        var changed = false
+        val out = messages.map { m ->
+            if (m.author == Author.User || m.parts.none { it is Part.Image }) m
+            else {
+                changed = true
+                m.copy(parts = m.parts.map { p ->
+                    if (p is Part.Image) Part.Text(p.screenshotId?.let(::olderImage) ?: OMITTED_IMAGE) else p
+                })
+            }
+        }
+        return if (changed) out else messages
+    }
+
+    private fun isSummaryMessage(m: Message): Boolean =
+        m.author == Author.Mika && m.role == Role.User &&
+            (ContextBuilder.bodyOf(m)?.startsWith(ContextCompressor.HEADER) == true ||
+                m.parts.any { it is Part.Text && it.text.startsWith(ContextCompressor.HEADER) })
+
+    private fun isPinnedMessage(m: Message): Boolean =
+        m.author == Author.User || ContextBuilder.kindOf(m)?.pinned == true || isSummaryMessage(m)
+
+    private fun dropOldestRounds(
+        messages: List<Message>,
+        tools: ToolIndex,
+        fits: (List<Message>) -> Boolean,
+    ): List<Message> {
+        var work = messages
+        while (!fits(work)) {
+            val toolStarts = work.indices.filter { work[it].role == Role.Assistant && work[it].parts.any { p -> p is Part.ToolCall } }
+            if (toolStarts.size <= 1) break
+            val aIdx = toolStarts.dropLast(1).firstOrNull { idx ->
+                work[idx].parts.filterIsInstance<Part.ToolCall>().none { tools.verb(it.name) in PINNED_VERBS }
+            } ?: break
+            val end = work.indices.firstOrNull { it > aIdx && work[it].role == Role.Assistant } ?: work.size
+            val callIds = work[aIdx].parts.filterIsInstance<Part.ToolCall>().map { it.id }.toSet()
+            val next = ArrayList<Message>(work.size)
+            next.addAll(work.subList(0, aIdx))
+            for (j in (aIdx + 1) until end) {
+                val m = work[j]
+                when {
+                    m.role == Role.Tool -> {
+                        val remaining = m.parts.filterNot { it is Part.ToolResult && it.callId in callIds }
+                        if (remaining.isNotEmpty()) next += m.copy(parts = remaining)
+                    }
+                    isPinnedMessage(m) -> {
+                        val stripped = ContextBuilder.withoutRuntimeState(m)
+                        if (stripped.parts.isNotEmpty()) next += stripped
+                    }
+                }
+            }
+            next.addAll(work.subList(end, work.size))
+            work = next
+        }
+        while (!fits(work)) {
+            val idx = (0 until work.lastIndex).firstOrNull { j ->
+                val m = work[j]
+                m.role != Role.Tool && !isPinnedMessage(m) && m.parts.none { it is Part.ToolCall }
+            } ?: break
+            work = work.toMutableList().also { it.removeAt(idx) }
+        }
+        return work
+    }
+
+    private fun clipOversizedParts(
+        messages: List<Message>,
+        fits: (List<Message>) -> Boolean,
+    ): List<Message> {
+        val work = messages.toMutableList()
+        fun applyPart(msgIdx: Int, partIdx: Int, s: String) {
+            val m = work[msgIdx]
+            val updated = m.parts.toMutableList()
+            updated[partIdx] = when (val p = updated[partIdx]) {
+                is Part.Thinking -> p.copy(text = s)
+                is Part.ToolResult -> p.copy(content = s)
+                is Part.Text -> p.copy(text = s)
+                else -> p
+            }
+            work[msgIdx] = m.copy(parts = updated)
+        }
+        fun partText(p: Part): String? = when (p) {
+            is Part.Thinking -> p.text
+            is Part.ToolResult -> p.content
+            is Part.Text -> p.text
+            else -> null
+        }
+        if (!fits(emptyList())) {
+            for (i in work.indices) {
+                if (work[i].author == Author.User) continue
+                for (j in work[i].parts.indices) {
+                    val raw = partText(work[i].parts[j]) ?: continue
+                    if (TokenEstimate.of(raw) > BIG_RESULT_TOKENS) {
+                        applyPart(i, j, TokenEstimate.clip(raw, BIG_RESULT_TOKENS))
+                    }
+                }
+            }
+            return work
+        }
+        fun clipCandidateList(candidates: List<Pair<Int, Int>>) {
+            for ((msgIdx, partIdx) in candidates) {
+                if (fits(work)) return
+                val raw = partText(work[msgIdx].parts[partIdx]) ?: continue
+                if (TokenEstimate.of(raw) == 0) continue
+                applyPart(msgIdx, partIdx, TokenEstimate.clip(raw, 0))
+                if (!fits(work)) continue
+                var lo = 0
+                var hi = TokenEstimate.of(raw)
+                while (lo < hi) {
+                    val mid = (lo + hi + 1) / 2
+                    applyPart(msgIdx, partIdx, TokenEstimate.clip(raw, mid))
+                    if (fits(work)) lo = mid else hi = mid - 1
+                }
+                applyPart(msgIdx, partIdx, TokenEstimate.clip(raw, lo))
+                return
+            }
+        }
+        fun ranked(predicate: (Message, Part) -> Boolean): List<Pair<Int, Int>> =
+            work.indices.flatMap { i ->
+                work[i].parts.indices.mapNotNull { j ->
+                    val p = work[i].parts[j]
+                    if (!predicate(work[i], p)) null else {
+                        val size = partText(p)?.let(TokenEstimate::of) ?: 0
+                        if (size > 0) Triple(i, j, size) else null
+                    }
+                }
+            }.sortedByDescending { it.third }.map { it.first to it.second }
+
+        clipCandidateList(ranked { _, p -> p is Part.Thinking })
+        if (fits(work)) return work
+        clipCandidateList(ranked { m, p -> m.author != Author.User && p is Part.ToolResult })
+        if (fits(work)) return work
+        clipCandidateList(ranked { m, p -> m.author != Author.User && !isPinnedMessage(m) && p is Part.Text })
+        if (fits(work)) return work
+        clipCandidateList(ranked { m, p -> m.author != Author.User && isPinnedMessage(m) && !isSummaryMessage(m) && p is Part.Text })
+        if (fits(work)) return work
+        clipCandidateList(ranked { m, p -> isSummaryMessage(m) && p is Part.Text })
+        return work
+    }
+
     /** 长字段(长字符串、大数组/对象)换成 [OMITTED_READ],结局字段留着;不是 JSON 的整段换掉。 */
     private fun shrinkRead(content: String): String {
         val obj = parse(content) ?: return OMITTED_READ
-        return JsonObject(obj.mapValues { (k, v) ->
+        val firstPass = JsonObject(obj.mapValues { (k, v) ->
             val long = if (v is JsonPrimitive) v.isString && v.content.length > LONG_TEXT else v.toString().length > LONG_TEXT
             if (long && k !in OUTCOME) JsonPrimitive(OMITTED_READ) else v
-        }).toString()
+        })
+        if (TokenEstimate.of(firstPass.toString()) <= BIG_RESULT_TOKENS) return firstPass.toString()
+        val clippedOutcome = JsonObject(firstPass.mapValues { (k, v) ->
+            if (k in OUTCOME) {
+                val raw = if (v is JsonPrimitive && v.isString) v.content else v.toString()
+                if (TokenEstimate.of(raw) > BIG_RESULT_TOKENS / 4) {
+                    if (v is JsonPrimitive && v.isString) JsonPrimitive(TokenEstimate.clip(raw, BIG_RESULT_TOKENS / 4))
+                    else JsonPrimitive(OMITTED_READ)
+                } else v
+            } else v
+        })
+        if (TokenEstimate.of(clippedOutcome.toString()) <= BIG_RESULT_TOKENS) return clippedOutcome.toString()
+        val minimal = buildJsonObject {
+            for (k in OUTCOME) clippedOutcome[k]?.let { put(k, it) }
+            clippedOutcome["snapshotId"]?.let { put("snapshotId", it) }
+            put("omitted", OMITTED_READ)
+        }
+        return if (TokenEstimate.of(minimal.toString()) <= BIG_RESULT_TOKENS) minimal.toString() else OMITTED_READ
     }
 
     private fun callVerbs(messages: List<Message>, tools: ToolIndex): Map<String, Verb?> {
@@ -210,7 +493,7 @@ object HistoryPruner {
         val obj = parse(content) ?: return content
         val small = obj.mapValues { (k, v) ->
             val long = if (v is JsonPrimitive) v.isString && v.content.length > LONG_TEXT else v.toString().length > LONG_TEXT
-            if (k == "elements" || k == ScreenElementTable.KEY || k == "tree" || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
+            if (k in INTERFACE_KEYS || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
         }
         return JsonObject(small).toString()
     }

@@ -52,11 +52,20 @@ internal class ModelCaller(
     private val chainProviderIds: List<String?> = emptyList(),
 ) {
     /** 每个模型一份压缩状态:各自的上下文、各自发出的那份历史,轻量模型那次压缩不连累主模型的请求前缀。 */
+    private val inputTokenCap: Int? = if (flags.inputTokenCap) ContextLimits.MAX_INPUT_TOKENS else null
     private val compressors = java.util.IdentityHashMap<ChatModel, ContextCompressor>()
     private fun compressorFor(m: ChatModel) =
-        compressors.getOrPut(m) { ContextCompressor(tools.index, structured = flags.structuredCompaction,
-            diffScreens = tools.inlineScreen, triggerOverride = m.capabilities.compactionTriggerTokens,
-            foldEvery = m.capabilities.compactionEveryRounds) }
+        compressors.getOrPut(m) {
+            ContextCompressor(
+                tools.index,
+                structured = flags.structuredCompaction,
+                diffScreens = tools.inlineScreen,
+                triggerOverride = m.capabilities.compactionTriggerTokens,
+                foldEvery = if (flags.periodicCompaction) null else m.capabilities.compactionEveryRounds,
+                compactEverySteps = if (flags.periodicCompaction) ContextCompressor.COMPACT_EVERY_STEPS else 0,
+                maxInputTokens = inputTokenCap,
+            )
+        }
     private val compactions = java.util.IdentityHashMap<ChatModel, CompactionState>()
     /** 本任务里已为重试等过的时间(对着 [RetryPolicy.taskWaitBudgetMs])。 */
     private var taskRetryWaitMs = 0L
@@ -311,19 +320,43 @@ internal class ModelCaller(
         onText: ((String) -> Unit)?, clock: AttemptClock, maxRetries: Int,
     ): ModelReply {
         var retries = 0
-        val overhead = TokenEstimate.of(systemPrompt) + specs.sumOf { TokenEstimate.of(it.name + it.description + it.parametersJsonSchema) }
+        val effectivePrompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
+        val overhead = TokenEstimate.of(effectivePrompt) + specs.sumOf { TokenEstimate.of(it.name + it.description + it.parametersJsonSchema) }
         val contextTokens = using.capabilities.contextTokens
         val compressor = compressorFor(using)
         var compaction = compactions[using] ?: CompactionState()
         var overflowRetried = false
         var overflowRewrote = false
+        val limits = ContextLimits.of(contextTokens, using.capabilities.compactionTriggerTokens, inputTokenCap)
+        val cap = inputTokenCap?.let { minOf(limits.usable, it) } ?: limits.usable
         while (true) {
             val current = ContextRecovery.ensure(history, compressor.current(history, contextTokens))
             val currentTokens = requestTokens(current, using, overhead, compressor.scale)
-            val raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
+            var raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
             if (raw.rewritten) anchors.clear()
-            val restored = ContextRecovery.ensure(history, raw.messages)
-            val sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            var restored = ContextRecovery.ensure(history, raw.messages)
+            var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            fun exceedsCap(est: Int) =
+                UsageMeter.estimate(est + overhead, compressor.scale) > cap || (inputTokenCap != null && (est + overhead) > inputTokenCap)
+            if (inputTokenCap != null && exceedsCap(sent.estimate)) {
+                if (!compaction.aggressive || !raw.rewritten) {
+                    compaction = compaction.copy(aggressive = true)
+                    raw = compressor.compress(history, contextTokens, currentTokens = Int.MAX_VALUE, aggressive = true, fixedOverhead = overhead, maxImages = using.capabilities.maxImages)
+                    if (raw.rewritten) anchors.clear()
+                    restored = ContextRecovery.ensure(history, raw.messages)
+                    sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+                }
+                if (exceedsCap(sent.estimate)) {
+                    val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(TokenEstimate.of(it)) }
+                    if (capped !== sent.messages) {
+                        anchors.clear()
+                        sent = sent.copy(messages = capped, estimate = TokenEstimate.of(capped), rewritten = true)
+                    }
+                }
+                if (exceedsCap(sent.estimate)) {
+                    throw ModelError.ContextTooLong()
+                }
+            }
             val (next, report) = CompactionPolicy.sent(compaction, sent.foldedSteps)
             if (report) emit(RunEvent.Compressed(now(), sent.foldedSteps))
             compaction = next
@@ -338,7 +371,7 @@ internal class ModelCaller(
                 lastRetryWaitMs = clock.firstAttemptAt?.let { sentAt - it } ?: 0L
                 if (clock.firstAttemptAt == null) clock.firstAttemptAt = sentAt
                 suspend fun invokeModel(): ModelReply {
-                    val prompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
+                    val prompt = effectivePrompt
                     return if (onText == null) using.complete(prompt, sent.messages, specs)
                     else if (using is StreamingChatModel) using.completeStreaming(prompt, sent.messages, specs, onText)
                     else using.complete(prompt, sent.messages, specs).also { result ->
@@ -352,8 +385,8 @@ internal class ModelCaller(
                     else invokeModel()
                 val reply = if (trace == null) send() else {
                     val change = when {
-                        overflowRewrote -> "overflow_compaction folded=" + raw.foldedSteps
-                        raw.rewritten && current != sent.messages -> "history_rewritten folded=" + raw.foldedSteps
+                        overflowRewrote -> "overflow_compaction folded=" + sent.foldedSteps
+                        sent.rewritten && current != sent.messages -> "history_rewritten folded=" + sent.foldedSteps
                         else -> null
                     }
                     overflowRewrote = false
