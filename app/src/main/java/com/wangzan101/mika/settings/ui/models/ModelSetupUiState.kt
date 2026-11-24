@@ -3,6 +3,7 @@ package com.wangzan101.mika.settings.ui.models
 import com.wangzan101.mika.R
 import com.wangzan101.mika.core.model.chatgpt.signInWithChatGpt
 import com.wangzan101.mika.core.model.ApiKeyText
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
 import com.wangzan101.mika.core.model.ModelGroup
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.net.LocalHosts
@@ -94,6 +95,11 @@ data class AddForm(
     val noList: Boolean = false,
     val name: String = "",
     val manual: Boolean = false,
+    val projectId: String = "",
+    val location: String = VertexEndpoints.DEFAULT_LOCATION,
+    val saSummary: String = "",
+    val saError: String? = null,
+    internal val autoProjectId: String = "",
 ) {
     /** 显示「模型名」一栏:没列出模型,或用户要手填。 */
     val showModel: Boolean get() = noList || manual
@@ -110,6 +116,8 @@ data class AddForm(
 
     val isCustom: Boolean get() = preset == ProviderPresets.custom.label
 
+    val isVertex: Boolean get() = kind == ProviderConfig.Kind.Vertex
+
     /** 跑在用户自己机器上的服务(见 [ProviderPreset.selfHosted]):地址预填了本机的默认端口,要能改成那台机器的。 */
     val isSelfHosted: Boolean get() = presetFor(preset).selfHosted
 
@@ -124,6 +132,19 @@ data class AddForm(
             else -> null
         }
 
+    val projectProblem: String?
+        get() = when {
+            !isVertex -> null
+            projectId.isBlank() -> tr(R.string.vertex_project_required)
+            runCatching { VertexEndpoints.validateProjectId(projectId) }.isFailure -> tr(R.string.vertex_project_invalid)
+            else -> null
+        }
+
+    val locationProblem: String?
+        get() = if (isVertex && location.isNotBlank() && runCatching { VertexEndpoints.normalizeLocation(location) }.isFailure) {
+            tr(R.string.vertex_location_invalid)
+        } else null
+
     /** 明文 http 又不在本机、局域网的地址:提醒一句,不拦着(见 [LocalHosts])。 */
     val unencryptedWarning: String?
         get() = if (urlProblem == null && LocalHosts.unencryptedRemote(baseUrl)) tr(R.string.model_url_unencrypted) else null
@@ -132,14 +153,18 @@ data class AddForm(
     val keyRequired: Boolean get() = !isSelfHosted && !(isCustom && kind == ProviderConfig.Kind.OpenAiCompat)
 
     /** Key 里还有放不进请求头的字符:两个保存动作都不能发请求、也不能把 Key 存下来。 */
-    val keyRejected: Boolean get() = keyNotice == ApiKeyText.Notice.IllegalCharacters
+    val keyRejected: Boolean get() = !isVertex && keyNotice == ApiKeyText.Notice.IllegalCharacters
 
     val canTest: Boolean get() =
-        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) && test != ListState.Running && (!noList || model.isNotBlank())
+        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) &&
+            (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
+            test != ListState.Running && (!noList || model.isNotBlank())
 
     /** 不测试也能存:地址格式对、该有 Key 的有 Key、Key 放得进请求头。和 [canTest] 不同,不看测试进度,也不要求填模型名。 */
     val canSaveUntested: Boolean get() =
-        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) && test != ListState.Running
+        urlProblem == null && !keyRejected && (!keyRequired || apiKey.isNotBlank()) &&
+            (!isVertex || (saError == null && projectProblem == null && locationProblem == null)) &&
+            test != ListState.Running
 
     /** 自定义填的是某家服务商的官方地址(主机名对得上,见 [ProviderPresets.forHost]):建议改用那个预设。 */
     val suggestedPreset: ProviderPreset? get() = if (isCustom && urlProblem == null) ProviderPresets.forHost(baseUrl) else null
@@ -212,6 +237,7 @@ data class ModelSetupUi(
     val openRouterAccount: SubscriptionAccount? = null,
     /** xAI、OpenRouter 的登录进度。 */
     val accountSignIn: AccountSignInUi = AccountSignInUi(),
+    val vertexSummaries: Map<String, String> = emptyMap(),
     /** 刚用账号登录成功的服务商 id:界面打开它的详情页(看账号和模型、设主模型),打开后清掉。 */
     val signedInProvider: String? = null,
     /**

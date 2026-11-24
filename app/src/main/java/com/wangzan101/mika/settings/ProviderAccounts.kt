@@ -91,7 +91,8 @@ fun ProviderStore.antigravityProvider(): Provider? = _providers.value.firstOrNul
 fun ProviderStore.vertexAccountSummary(providerId: String): Pair<String, String>? {
     val raw = providerKey(providerId) ?: return null
     val sa = ProviderStore.vertexServiceAccountFromJson(raw) ?: return null
-    return sa.clientEmail to sa.projectId
+    val projectId = provider(providerId)?.projectId?.ifBlank { sa.projectId } ?: sa.projectId
+    return sa.clientEmail to projectId
 }
 
 internal fun ProviderStore.invalidateVertexTokens(providerId: String) = synchronized(vertexTokens) {

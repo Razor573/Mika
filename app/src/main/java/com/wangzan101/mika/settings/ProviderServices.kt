@@ -251,7 +251,7 @@ suspend fun ProviderStore.probe(
     model: String, endpoint: ModelEndpoint?, caps: Capabilities,
     providerId: String = "",
 ): ProbeResult {
-    val probeKey = apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
+    val probeKey = if (kind == ProviderConfig.Kind.Vertex) apiKey else apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
     val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true), providerId = providerId)
     val m = modelFactory(cfg, probeKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
     return try {
@@ -279,7 +279,7 @@ suspend fun ProviderStore.listModels(kind: ProviderConfig.Kind, baseUrl: String,
 /** 重新列一个已连接服务商的模型:用存着的 Key;订阅登录用访问令牌(快过期先换新的)。 */
 suspend fun ProviderStore.listModels(p: Provider): ModelListResult {
     if (p.kind != ProviderConfig.Kind.ChatGpt && p.kind != ProviderConfig.Kind.Xai) {
-        val key = activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() }
+        val key = if (p.kind == ProviderConfig.Kind.Vertex) providerKey(p.id) else activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() }
         return listModels(p.kind, p.baseUrl, key, p.sessionHeader)
     }
     val token = try {

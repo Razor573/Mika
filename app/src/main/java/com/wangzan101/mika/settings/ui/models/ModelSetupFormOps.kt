@@ -9,6 +9,9 @@ import com.wangzan101.mika.core.model.ModelEndpoint
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelListResult
 import com.wangzan101.mika.core.model.ModelRole
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
+import com.wangzan101.mika.core.model.oauth.VertexServiceAccount
+import com.wangzan101.mika.settings.updateVertexSettings
 import com.wangzan101.mika.i18n.tr
 import com.wangzan101.mika.settings.ModelOptions
 import com.wangzan101.mika.settings.ProbeResult
@@ -43,12 +46,25 @@ fun ModelSetupViewModel.closeForm() {
 fun ModelSetupViewModel.selectPreset(label: String) {
     val p = AddForm.presetFor(label)
     if (p.label == _state.value.form.preset) return
-    val form = _state.value.form
-    edit { AddForm.of(p).copy(apiKey = form.apiKey, keyNotice = form.keyNotice) }
+    val prev = _state.value.form
+    val keepKey = prev.isVertex == (p.kind == ProviderConfig.Kind.Vertex)
+    edit {
+        val next = AddForm.of(p)
+        if (keepKey) next.copy(apiKey = prev.apiKey, keyNotice = prev.keyNotice) else next
+    }
 }
 
 // 换了接口类型或地址,上次「没列出模型」就不作数了,要重新列
-fun ModelSetupViewModel.setKind(kind: ProviderConfig.Kind) = edit { it.copy(kind = kind, noList = false) }
+fun ModelSetupViewModel.setKind(kind: ProviderConfig.Kind) = edit {
+    if (it.isVertex != (kind == ProviderConfig.Kind.Vertex)) {
+        it.copy(
+            kind = kind, noList = false, apiKey = "", keyNotice = ApiKeyText.Notice.None, projectId = "",
+            location = VertexEndpoints.DEFAULT_LOCATION, saSummary = "", saError = null, autoProjectId = "",
+        )
+    } else {
+        it.copy(kind = kind, noList = false)
+    }
+}
 
 fun ModelSetupViewModel.setBaseUrl(url: String) = edit { it.copy(baseUrl = url, noList = false) }
 
@@ -69,8 +85,48 @@ fun ModelSetupViewModel.setAccountId(input: String) {
 
 /** 粘贴或逐字改 Key:去掉零宽;换行和其它放不进请求头的字符原样留下并立刻标出来。 */
 fun ModelSetupViewModel.setApiKey(key: String) {
+    if (_state.value.form.isVertex) {
+        setServiceAccountJson(key)
+        return
+    }
     val accepted = ApiKeyText.accept(key)
     edit { it.copy(apiKey = accepted.text, keyNotice = accepted.notice) }
+}
+
+fun ModelSetupViewModel.setServiceAccountJson(raw: String) = edit {
+    if (raw.isBlank()) {
+        val resetProject = if (it.projectId == it.autoProjectId) "" else it.projectId
+        return@edit it.copy(apiKey = raw, keyNotice = ApiKeyText.Notice.None, saSummary = "", saError = null, projectId = resetProject, autoProjectId = "")
+    }
+    val parsed = runCatching { VertexServiceAccount.parse(raw) }.getOrNull()
+    if (parsed == null) {
+        it.copy(apiKey = raw, keyNotice = ApiKeyText.Notice.None, saSummary = "", saError = tr(R.string.vertex_sa_invalid))
+    } else {
+        val keepTypedProject = it.projectId.isNotBlank() && it.projectId != it.autoProjectId
+        val nextProject = if (keepTypedProject) it.projectId else parsed.projectId
+        it.copy(
+            apiKey = raw,
+            keyNotice = ApiKeyText.Notice.None,
+            saSummary = parsed.displaySummary,
+            saError = null,
+            projectId = nextProject,
+            autoProjectId = parsed.projectId,
+        )
+    }
+}
+
+fun ModelSetupViewModel.setProjectId(projectId: String) = edit { it.copy(projectId = projectId) }
+
+fun ModelSetupViewModel.setLocation(location: String) = edit { it.copy(location = location) }
+
+fun ModelSetupViewModel.updateVertexSettings(providerId: String, projectId: String, location: String): Boolean {
+    val updated = store.updateVertexSettings(providerId, projectId, location)
+    if (updated) {
+        sync()
+        refreshJobs.remove(providerId)?.cancel()
+        refresh(providerId)
+    }
+    return updated
 }
 
 fun ModelSetupViewModel.setModel(model: String) = edit { it.copy(model = model) }
@@ -99,7 +155,7 @@ internal fun ModelSetupViewModel.edit(change: (AddForm) -> AddForm) {
 fun ModelSetupViewModel.testAndSave() {
     val f = _state.value.form
     if (!f.canTest) return
-    val key = headerKey(f.apiKey) ?: return rejectKey()
+    val key = if (f.isVertex) f.apiKey.trim() else (headerKey(f.apiKey) ?: return rejectKey())
     testJob?.cancel()
     _state.update { it.copy(form = it.form.copy(test = ListState.Running), probeNote = null, pickToProbe = null) }
     testJob = scope.launch {
@@ -124,6 +180,8 @@ fun ModelSetupViewModel.testAndSave() {
                 store.connect(
                     f.providerName, f.kind, baseUrl, key, models, f.sessionHeader,
                     typed = setOfNotNull(typed.takeIf { it.isNotEmpty() && models.none { model -> model.id == it } }),
+                    projectId = if (f.isVertex) f.projectId.trim() else "",
+                    location = if (f.isVertex) VertexEndpoints.normalizeLocation(f.location) else "",
                 )
             }
         } catch (e: CancellationException) {
@@ -168,7 +226,7 @@ fun ModelSetupViewModel.testAndSave() {
 fun ModelSetupViewModel.saveWithoutTest() {
     val f = _state.value.form
     if (!f.canSaveUntested) return
-    val key = headerKey(f.apiKey) ?: return rejectKey()
+    val key = if (f.isVertex) f.apiKey.trim() else (headerKey(f.apiKey) ?: return rejectKey())
     testJob?.cancel()
     _state.update { it.copy(form = it.form.copy(test = ListState.Running), probeNote = null, pickToProbe = null) }
     testJob = scope.launch {

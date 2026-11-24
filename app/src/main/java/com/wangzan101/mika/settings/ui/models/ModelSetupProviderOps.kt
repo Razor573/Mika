@@ -15,7 +15,10 @@ import com.wangzan101.mika.settings.removeProvider
 import com.wangzan101.mika.settings.removeProviderKey
 import com.wangzan101.mika.settings.signOutAccount
 import com.wangzan101.mika.settings.signOutChatGpt
+import com.wangzan101.mika.core.model.oauth.VertexEndpoints
+import com.wangzan101.mika.core.model.oauth.VertexServiceAccount
 import com.wangzan101.mika.settings.updateProviderKey
+import com.wangzan101.mika.settings.updateVertexSettings
 import com.wangzan101.mika.voice.model.VoiceModelRef
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.update
@@ -31,9 +34,10 @@ fun ModelSetupViewModel.refresh(providerId: String) {
     _state.update { it.copy(listing = it.listing + (providerId to ListState.Running)) }
     refreshJobs[providerId] = scope.launch {
         val r = listSafely { store.listModels(p) }
+        val preserveCacheOnNotSupported = p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini
         val models: List<ListedModel>? = when (r) {
             is ModelListResult.Ok -> r.models
-            is ModelListResult.Failed -> if (r.reason == ListFailure.NotSupported) emptyList() else null
+            is ModelListResult.Failed -> if (!preserveCacheOnNotSupported && r.reason == ListFailure.NotSupported) emptyList() else null
         }
         if (models != null) withContext(io) { store.rememberModels(p.id, models) }
         val after = if (r is ModelListResult.Failed && models == null) ListState.Failed(listMessage(r)) else ListState.Idle
@@ -57,17 +61,31 @@ internal fun ModelSetupViewModel.listable(p: Provider) = if (p.signIn != null) s
  * 换 Key,然后用新 Key 重新列一次模型。零宽先去掉;换行和其它放不进请求头的字符不保存、不列模型。
  */
 fun ModelSetupViewModel.changeKey(providerId: String, apiKey: String) {
-    val k = headerKey(apiKey) ?: return
+    val isVertex = store.provider(providerId)?.kind == ProviderConfig.Kind.Vertex
+    val k = if (isVertex) apiKey.trim() else (headerKey(apiKey) ?: return)
     if (k.isEmpty()) return
     scope.launch {
-        try {
-            withContext(io) { store.updateProviderKey(providerId, k) }
+        val updated = try {
+            withContext(io) {
+                val p = store.provider(providerId) ?: return@withContext false
+                if (p.kind == ProviderConfig.Kind.Vertex) {
+                    val sa = runCatching { VertexServiceAccount.parse(k) }.getOrNull() ?: return@withContext false
+                    store.updateProviderKey(providerId, k)
+                    if (p.projectId.isBlank() && sa.projectId.isNotBlank()) {
+                        store.updateVertexSettings(providerId, sa.projectId, p.location.ifBlank { VertexEndpoints.DEFAULT_LOCATION })
+                    }
+                } else {
+                    store.updateProviderKey(providerId, k)
+                }
+                true
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             _state.update { it.copy(listing = it.listing + (providerId to ListState.Failed(listFailureText(e)))) }
             return@launch
         }
+        if (!updated) return@launch
         refreshJobs.remove(providerId)?.cancel()
         refresh(providerId)
         sync()

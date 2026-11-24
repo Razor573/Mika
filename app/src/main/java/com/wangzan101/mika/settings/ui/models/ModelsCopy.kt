@@ -416,3 +416,18 @@ object ModelsCopy {
         if (state is ListState.Failed) LIST_FAILED
         else listOfNotNull(CONNECTED, modelCount(p), roles.takeIf { it.isNotEmpty() }?.let { tr(R.string.models_used_by, roleNames(it)) }).joinToString(" · ")
 }
+
+
+private val REFRESH_TIME_FORMAT = java.time.format.DateTimeFormatter.ofPattern("HH:mm")
+
+internal fun formatLastRefreshed(
+    epochMs: Long,
+    nowMs: Long = System.currentTimeMillis(),
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+): String {
+    val at = java.time.Instant.ofEpochMilli(epochMs).atZone(zone)
+    val today = java.time.Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+    if (at.toLocalDate() == today) return REFRESH_TIME_FORMAT.format(at)
+    val locale = if (com.wangzan101.mika.i18n.UiText.source != null) com.wangzan101.mika.i18n.uiLocale() else java.util.Locale.getDefault()
+    return java.time.format.DateTimeFormatter.ofPattern("MMM d, HH:mm", locale).format(at)
+}

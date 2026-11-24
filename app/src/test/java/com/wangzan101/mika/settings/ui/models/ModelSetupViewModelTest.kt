@@ -52,6 +52,9 @@ import com.wangzan101.mika.voice.model.VoiceModel
 import com.wangzan101.mika.voice.model.VoiceModelRef
 import com.wangzan101.mika.voice.model.VoiceService
 import com.wangzan101.mika.voice.model.voiceTestEnvironment
+import java.io.File
+import java.security.KeyPairGenerator
+import java.util.Base64
 import javax.crypto.KeyGenerator
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -60,6 +63,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule

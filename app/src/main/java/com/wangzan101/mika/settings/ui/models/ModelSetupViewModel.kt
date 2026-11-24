@@ -3,6 +3,7 @@ package com.wangzan101.mika.settings.ui.models
 import com.wangzan101.mika.settings.ChatGptSignIns
 import com.wangzan101.mika.settings.ProviderPresets
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.vertexAccountSummary
 import com.wangzan101.mika.settings.SignInTarget
 import com.wangzan101.mika.settings.accountSession
 import com.wangzan101.mika.settings.chatGptProvider
@@ -127,6 +128,20 @@ class ModelSetupViewModel(
                 store.accountSession(p.id).let { SubscriptionAccount(it?.label.orEmpty(), it?.signedIn == true) }
             },
             openRouterAccount = store.openRouterAccount()?.let { p -> SubscriptionAccount("", store.hasKey(p.id)) },
+            vertexSummaries = providers.asSequence()
+                .filter { it.kind == ProviderConfig.Kind.Vertex }
+                .mapNotNull { p ->
+                    store.vertexAccountSummary(p.id)?.let { (email, proj) ->
+                        val summary = when {
+                            email.isNotBlank() && proj.isNotBlank() -> "$email ($proj)"
+                            email.isNotBlank() -> email
+                            proj.isNotBlank() -> proj
+                            else -> return@mapNotNull null
+                        }
+                        p.id to summary
+                    }
+                }
+                .toMap(),
             speech = speech?.choice?.value ?: SpeechChoice.Auto,
             systemSpeech = systemSpeech(),
             sttCatalog = stt?.takeIf { it.migrated }?.catalog?.state?.value,
