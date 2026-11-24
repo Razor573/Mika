@@ -156,6 +156,8 @@ class ProviderStore(
             val location: String,
             val model: String,
             val sessionHeader: String?,
+            val baseUrl: String = "",
+            val staticToken: String? = null,
         ) : GroundingTarget
 
         class Unsupported(override val providerName: String) : GroundingTarget

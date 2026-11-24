@@ -96,7 +96,7 @@ internal fun ProviderStore.meteredWith(
         compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
     )) else cfg.copy(capabilities = cfg.capabilities.copy(
         contextTokens = settings.windowTokens ?: cfg.capabilities.contextTokens,
-        compactionTriggerTokens = settings.triggerTokens,
+        compactionTriggerTokens = settings.triggerTokens?.let { settings.limits(cfg.capabilities.contextTokens).trigger },
         compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
     ))
     val roleEffort = effortOverride ?: _roles.value.reasoningEffort(role)
@@ -166,12 +166,13 @@ internal fun ProviderStore.resolveGrounding(): GroundingTarget? {
         ProviderConfig.Kind.Vertex -> {
             val rawSa = apiKey(cfg.id)?.takeIf { it.isNotBlank() } ?: providerKey(cfg.providerId).orEmpty()
             val parsedSa = ProviderStore.vertexServiceAccountFromJson(rawSa)
+            val staticToken = if (parsedSa == null && rawSa.isNotBlank() && ApiKeyText.isHeaderLegal(rawSa.trim())) rawSa.trim() else null
             val projectId = cfg.projectId.ifBlank { p?.projectId.orEmpty() }.ifBlank { parsedSa?.projectId.orEmpty() }
             val location = VertexEndpoints.normalizeLocation(cfg.location.ifBlank { p?.location.orEmpty() })
-            if (parsedSa == null || projectId.isBlank() || cfg.model.isBlank()) {
+            if ((parsedSa == null && staticToken == null) || projectId.isBlank() || cfg.model.isBlank()) {
                 GroundingTarget.Unsupported(providerName)
             } else {
-                GroundingTarget.Vertex(providerName, cfg.providerId, projectId, location, cfg.model, p?.sessionHeader)
+                GroundingTarget.Vertex(providerName, cfg.providerId, projectId, location, cfg.model, p?.sessionHeader, baseUrl.trim(), staticToken)
             }
         }
         else -> GroundingTarget.Unsupported(providerName)
@@ -199,10 +200,11 @@ fun ProviderStore.googleGroundingSearch(session: ModelSession = ModelSession.fre
         is GroundingTarget.Vertex -> GoogleGroundingSearch.forVertex(
             projectId = target.projectId,
             location = target.location,
-            token = vertexTokenProviderFor(target.providerId),
+            token = target.staticToken?.let { tok -> com.wangzan101.mika.core.model.BearerToken { tok } } ?: vertexTokenProviderFor(target.providerId),
             model = target.model,
             client = http,
             headers = headers(target.sessionHeader, session),
+            baseUrl = target.baseUrl.takeUnless { it.isBlank() || it == VertexEndpoints.GLOBAL_HOST },
         )
     }
 
@@ -272,7 +274,7 @@ internal fun ProviderStore.listedOf(cfg: ProviderConfig): ListedModel? =
 
 /** 列出这个服务商的可用模型(见 [ModelCatalog]);不属于任何对话,声明了会话头的用新的会话号。 */
 suspend fun ProviderStore.listModels(kind: ProviderConfig.Kind, baseUrl: String, apiKey: String?, sessionHeader: String? = null): ModelListResult {
-    val probeKey = apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
+    val probeKey = if (kind == ProviderConfig.Kind.Vertex) apiKey else apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
     return modelLister(kind, baseUrl, probeKey, headers(sessionHeader, ModelSession.fresh()))
 }
 

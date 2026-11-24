@@ -16,7 +16,7 @@ class LicensesTest {
         "AndroidX(含 Jetpack Compose)" to "AndroidX (including Jetpack Compose)",
         "Guava ListenableFuture(由 AndroidX 库引入)" to "Guava ListenableFuture (pulled in by AndroidX)",
         "MCP 服务品牌 logo（mcp/mcp-logos.json）" to "MCP service brand logos (mcp/mcp-logos.json)",
-        "MCP 服务品牌 logo 补充（mcp/mcp-logos.json）" to "MCP service brand logos supplement (mcp/mcp-logos.json)",
+        "MCP 服务品牌 logo 补充集（mcp/mcp-logos.json）" to "MCP service brand logos supplement (mcp/mcp-logos.json)",
     )
 
     @Test
