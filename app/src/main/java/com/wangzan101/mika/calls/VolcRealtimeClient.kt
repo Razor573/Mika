@@ -249,6 +249,54 @@ class VolcRealtimeSession internal constructor(
         return send(if (openAi) OpenAiCallProtocol.greeting(text) else VolcRealtimeProtocol.greeting(nextId(), text))
     }
 
+    /**
+     * 前台的汇报:代码拼好的一句话原样念出(和开场白同一条路),排队由服务端管。
+     * 交出去之后开播的那段回复播完才算说完;在那之前用户开口、回复被取消或通话断了,都算没说完。
+     */
+    @Synchronized override fun sendNotice(text: String, ended: (spoken: Boolean) -> Unit): Boolean {
+        if (phase != Phase.ACTIVE || text.isBlank() || text.length > VolcRealtimeProtocol.MAX_TOOL_RESULT_CHARS) return false
+        val sent = send(if (openAi) OpenAiCallProtocol.greeting(text) else VolcRealtimeProtocol.greeting(nextId(), text))
+        if (sent) notices.addLast(PendingNotice(ended))
+        return sent
+    }
+
+    /**
+     * 给模型的提示,由它转述:能加 system 文字项的实时协议加一项再请它回话,说没说完和汇报一样跟踪。
+     * 双工对话协议能交给模型的文字只有照念的 speech_text_buffer,没有让模型接着回话的文字输入:返回 false
+     * (电话前台据此改让模型再请示去取回复,见 [PhoneDesk.canCue])。
+     */
+    @Synchronized override fun sendCue(text: String, ended: (spoken: Boolean) -> Unit): Boolean {
+        if (!openAi || phase != Phase.ACTIVE || text.isBlank() || text.length > VolcRealtimeProtocol.MAX_TOOL_RESULT_CHARS) return false
+        if (!send(OpenAiCallProtocol.systemNote(text)) || !send(OpenAiCallProtocol.respond())) return false
+        notices.addLast(PendingNotice(ended))
+        return true
+    }
+
+    /** 只当背景的提示:能加 system 文字项的实时协议加一项,不请它开口;双工对话协议没有这种输入,返回 false。 */
+    @Synchronized override fun sendContext(text: String): Boolean {
+        if (!openAi || phase != Phase.ACTIVE || text.isBlank() || text.length > VolcRealtimeProtocol.MAX_TOOL_RESULT_CHARS) return false
+        return send(OpenAiCallProtocol.systemNote(text))
+    }
+
+    /** 交出去还没说完的汇报;[playing] 表示交出去之后已经有一段新回复开播,它播完这条就算说完。 */
+    private class PendingNotice(val ended: (Boolean) -> Unit, var playing: Boolean = false)
+    private val notices = ArrayDeque<PendingNotice>()
+
+    /** 一段新回复开播了:排在最前、还没开播的汇报就是它。 */
+    private fun noticeAudioStarted() {
+        notices.firstOrNull { !it.playing }?.playing = true
+    }
+
+    /** 一段回复播完了:正在播的那条汇报说完了。 */
+    private fun noticeAudioDone() {
+        if (notices.firstOrNull()?.playing == true) notices.removeFirst().ended(true)
+    }
+
+    /** 用户开口、回复被取消、通话断了:交出去的汇报都算没说完。 */
+    private fun cutNotices() {
+        while (notices.isNotEmpty()) notices.removeFirst().ended(false)
+    }
+
     @Synchronized override fun setMuted(muted: Boolean): Boolean {
         if (phase != Phase.ACTIVE) return false
         if (this.muted == muted) return true
@@ -457,6 +505,7 @@ class VolcRealtimeSession internal constructor(
                 if (!audioActive || (responseId != null && responseId != audioId)) {
                     audioId = responseId
                     audioActive = true
+                    noticeAudioStarted()
                     publish(VolcRealtimeEvent.AssistantAudioStarted)
                 }
             }
@@ -467,6 +516,7 @@ class VolcRealtimeSession internal constructor(
                 acceptResponseIdentity(responseId)
                 if (!audioActive) {
                     audioActive = true
+                    noticeAudioStarted()
                     publish(VolcRealtimeEvent.AssistantAudioStarted)
                 }
                 if (responseId != null) {
@@ -483,6 +533,7 @@ class VolcRealtimeSession internal constructor(
             VolcRealtimeProtocol.AUDIO_DONE -> if (!isRetiredResponse(responseId) && audioActive && (responseId == null || responseId == audioId || audioId == null)) {
                 audioActive = false
                 audioId = null
+                noticeAudioDone()
                 publish(VolcRealtimeEvent.AssistantAudioEnded)
             }
             VolcRealtimeProtocol.CANCELED -> {
@@ -552,8 +603,10 @@ class VolcRealtimeSession internal constructor(
                 stale -> "stale_response"
                 name == VolcRealtimeProtocol.DTMF_FUNCTION && config.enablePhoneDtmf ->
                     if (arguments == null || !VolcRealtimeProtocol.validDtmfArguments(arguments)) "invalid_arguments" else null
-                name == VolcRealtimeProtocol.MIKA_REQUEST_FUNCTION && config.agentTools ->
-                    if (arguments == null || !VolcRealtimeProtocol.validAgentArguments(arguments)) "invalid_arguments" else null
+                name in VolcRealtimeProtocol.phoneDeskToolNames && config.enablePhoneDtmf ->
+                    if (arguments == null || !VolcRealtimeProtocol.validDeskArguments(name!!, arguments)) "invalid_arguments" else null
+                name in VolcRealtimeProtocol.deskToolNames && config.agentTools ->
+                    if (arguments == null || !VolcRealtimeProtocol.validDeskArguments(name!!, arguments)) "invalid_arguments" else null
                 else -> "unsupported_tool"
             }
             if (error != null) {
@@ -628,6 +681,7 @@ class VolcRealtimeSession internal constructor(
     }
 
     private fun interruptAudio() {
+        cutNotices()
         // Text can arrive before synthesis starts. Retire that observed identity too.
         retireResponse(lastResponseId)
         lastResponseId = null
@@ -685,6 +739,7 @@ class VolcRealtimeSession internal constructor(
         if (phase == Phase.ENDED) return
         phase = Phase.ENDED
         closeWatchdog?.cancel()
+        cutNotices()
         val connection = socket
         socket = null
         if (cancelSocket) connection?.cancel()

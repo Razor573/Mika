@@ -6,7 +6,6 @@ import com.wangzan101.mika.chat.DeleteBatch
 import com.wangzan101.mika.chat.SharedDraft
 import com.wangzan101.mika.chat.SharedDraftAttachment
 import com.wangzan101.mika.memory.RunNotes
-import com.wangzan101.mika.task.SteerNote
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -158,8 +157,11 @@ internal class ChatSession(private val vm: ChatViewModel) {
         return ex.copy(memoryNotes = n.memoryNotes, usedMemory = n.usedMemory, skillNotes = n.skillNotes)
     }
 
-    fun canAttach(ui: ChatUi) = ui.attachEnabled && !ui.importing &&
-        (ui.composer == ComposerMode.Idle || ui.followUpMode == FollowUpMode.Queue)
+    /**
+     * 能不能加附件:接了前台时随时能加(带附件的一句派成一件新任务,有没有任务在跑都一样);
+     * 没接前台(只在测试里)时附件随新任务直接开,只在这条会话没有任务在跑时能加。
+     */
+    fun canAttach(ui: ChatUi) = ui.attachEnabled && !ui.importing && (vm.deskFor(ui.conversationId) != null || ui.composer == ComposerMode.Idle)
 
     /**
      * 小画面什么时候给:屏得开过(其余字段照算,开屏那一刻直接用)。用户关掉了这个任务的小画面时只留小按钮,
@@ -170,9 +172,6 @@ internal class ChatSession(private val vm: ChatViewModel) {
         pipClosed -> p.copy(expanded = false, closed = true)
         else -> p.copy(closed = false)
     }
-
-    /** 原话的任务还没交给服务时插的话。 */
-    val held = mutableListOf<SteerNote>()
 
     /** 这个对话存下的轮次,连同各轮导出的文件和此刻的记忆与技能提示。 */
     fun saved(conversationId: String): List<Exchange> =

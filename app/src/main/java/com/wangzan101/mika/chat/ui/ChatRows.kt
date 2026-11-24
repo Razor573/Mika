@@ -25,9 +25,19 @@ internal fun chatItemKeys(
     kept: KeptPage?,
     phoneSetupRow: Int?,
     hasBlocked: Boolean,
+    calls: CallMarks = CallMarks.None,
+    needs: List<String> = emptyList(),
 ): List<String> = buildList {
-    if (exchanges.isEmpty() && !hasBlocked) add("empty")
+    if (exchanges.isEmpty() && !hasBlocked && calls.isEmpty()) add("empty")
     exchanges.forEachIndexed { index, ex ->
+        calls.before(index).forEach { add(it.key) }
+        if (timeMarkAt(exchanges, index, calls) != null) add(timeMarkKey(index))
+        // 前台的一行:用户气泡、前台的话(没话时也占一行)
+        if (ex.deskReply != null) {
+            if (ex.goal.isNotEmpty()) add("u$index")
+            add("r$index")
+            return@forEachIndexed
+        }
         if (ex.goal.isNotEmpty()) add("u$index")
         val active = ex.status.isActive()
         val answering = ex.status == ExchangeStatus.Working && !ex.draft.isNullOrBlank()
@@ -44,6 +54,8 @@ internal fun chatItemKeys(
         if (ex.runId != null && (ex.memoryNotes.isNotEmpty() || ex.skillNotes.isNotEmpty())) add("m$index")
         if (phoneSetupRow == index) add("ps$index")
     }
+    calls.tail.forEach { add(it.key) }
+    needs.forEach { add(needCardKey(it)) }
     if (phoneSetupRow == -1 && exchanges.isNotEmpty()) add("phone-setup")
     if (hasBlocked) add("blocked")
 }
@@ -57,10 +69,36 @@ internal fun chatItemCount(
     kept: KeptPage?,
     phoneSetupRow: Int?,
     hasBlocked: Boolean,
-): Int = chatItemKeys(exchanges, kept, phoneSetupRow, hasBlocked).size
+    calls: CallMarks = CallMarks.None,
+    needs: List<String> = emptyList(),
+): Int = chatItemKeys(exchanges, kept, phoneSetupRow, hasBlocked, calls, needs).size
+
+/** 前台派出的任务 [taskId] 要你处理时,对话末尾那张问题卡的行 key。 */
+internal fun needCardKey(taskId: String) = "need-$taskId"
+
+/** 相邻两轮隔了这么久以上,中间画一行时间。 */
+internal const val TIME_MARK_GAP_MS = 5 * 60_000L
+
+/** 第 [index] 轮上面那行时间的 key。 */
+internal fun timeMarkKey(index: Int) = "t$index"
+
+/** 这一轮的时刻:恢复出来的轮用存下的时刻,这次新开的用开始的时刻;都没有为 null。 */
+internal val Exchange.timeMs: Long? get() = atMs ?: startedAt.takeIf { it > 0L }
+
+/**
+ * 第 [index] 轮上面那行时间的时刻:第一轮有时刻就画,之后离上一个有时刻的轮隔了 [TIME_MARK_GAP_MS] 以上才画;
+ * 这一轮前面紧挨着通话行(通话行自己带时间)、或这一轮没有时刻时为 null。
+ */
+internal fun timeMarkAt(exchanges: List<Exchange>, index: Int, calls: CallMarks): Long? {
+    if (calls.before(index).isNotEmpty()) return null
+    val at = exchanges.getOrNull(index)?.timeMs ?: return null
+    val previous = (index - 1 downTo 0).firstNotNullOfOrNull { exchanges[it].timeMs }
+    return at.takeIf { previous == null || at - previous > TIME_MARK_GAP_MS }
+}
 
 /** 目标消息在 [chatItemKeys] 里的 key;轮次或消息已经不在了时返回 null。 */
 internal fun chatTargetKey(exchanges: List<Exchange>, target: ChatTarget): String? {
+    if (target is ChatTarget.Call) return callStartKey(target.callId)
     val turn = target.turnIndex
     val ex = exchanges.getOrNull(turn) ?: return null
     return when (target) {
@@ -73,6 +111,7 @@ internal fun chatTargetKey(exchanges: List<Exchange>, target: ChatTarget): Strin
         is ChatTarget.Reply -> turnStartKey(turn, ex)
         is ChatTarget.Files -> if (ex.files.isNotEmpty()) "f$turn" else turnStartKey(turn, ex)
         is ChatTarget.Status -> "r$turn"
+        is ChatTarget.Call -> callStartKey(target.callId)
     }
 }
 
@@ -90,4 +129,5 @@ private val ChatTarget.turnIndex: Int
         is ChatTarget.Reply -> this.turnIndex
         is ChatTarget.Files -> this.turnIndex
         is ChatTarget.Status -> this.turnIndex
+        is ChatTarget.Call -> -1
     }

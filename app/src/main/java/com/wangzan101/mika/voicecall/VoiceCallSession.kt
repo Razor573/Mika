@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -29,7 +30,8 @@ sealed interface VoiceCallState {
     data object Connecting : VoiceCallState
     data object MicCheck : VoiceCallState
     data class Active(val startedAt: Long) : VoiceCallState
-    data class Ended(val reason: EndReason) : VoiceCallState
+    /** [idleMinutes] 只对 [EndReason.Idle] 有意义:静了几分钟挂的。 */
+    data class Ended(val reason: EndReason, val idleMinutes: Int = 0) : VoiceCallState
     data class Failed(val error: VoiceCallError, val attempt: Int) : VoiceCallState
 }
 
@@ -39,7 +41,16 @@ sealed interface VoiceCallState {
  */
 enum class VoiceCallTurn { Listening, Thinking, Speaking }
 
-enum class EndReason { Hangup, Notification, IncomingCall, TimeLimit, Background }
+/** [Idle]:通话里好一阵没有新内容(谁都没说话、没打字、任务也没进展),到了设置的时长自动挂断。 */
+enum class EndReason { Hangup, Notification, IncomingCall, Idle, Background;
+
+    /** 记进通话记录([com.wangzan101.mika.chat.ConversationCall.endReason])的线上值。 */
+    val wire: String get() = when (this) {
+        Idle -> com.wangzan101.mika.chat.ConversationCall.END_IDLE
+        Hangup -> com.wangzan101.mika.chat.ConversationCall.END_HANGUP
+        else -> name.lowercase()
+    }
+}
 
 enum class VoiceCallError { Auth, ConnectTimeout, Disconnected, RateLimited, Provider, MicSilent, AudioFocus, Playback, Busy }
 
@@ -49,7 +60,8 @@ enum class VoiceCallError { Auth, ConnectTimeout, Disconnected, RateLimited, Pro
  * 云端问候语(每会话只播一次)→ Active。
  *
  * Active 后三路并行:事件消费(下行音频进 20 秒上限的 [CallPlaybackQueue];barge-in 代次作废 + 硬件 flush;
- * mika_request 先登记当轮转写再过安全闸)、采集上行(20ms 帧绝对 deadline pacing)、10 分钟上限。
+ * 前台工具调用凡带用户原话的,先登记当轮转写再过安全闸)、采集上行(20ms 帧绝对 deadline pacing)、静默挂断(没有总时长上限,见 [idleMs])。
+ * 用户插话只打断助手正在说的话,不碰后台任务。
  * 收尾幂等:挂断/结束/失败统一走 finally 释放焦点、采集、播放与实时会话;外部取消不算失败。
  *
  * 安全闸([requestGate])每会话新建、跨重试不重置:callId 一次性要扛住重连重放。
@@ -62,13 +74,22 @@ class VoiceCallSession(
     private val greeting: String,
     private val echoWindow: RingBuffer<String> = RingBuffer(ECHO_WINDOW_CAPACITY_CHARS),
     private val requestGate: VoiceCallRequest = VoiceCallRequest(echoWindow),
-    private val onVoiceRequest: (callId: String, text: String) -> Unit = { _, _ -> },
-    private val onBargeIn: () -> Unit = {},
+    /** 模型调的前台工具(带原话的已过安全闸,原话换成放行的当轮转写);装配方执行后用同一 callId 回结果。 */
+    private val onDeskCall: (callId: String, name: String, args: JsonObject) -> Unit = { _, _, _ -> },
+    /** 打的字会话接不了(实时会话不收文字)时交给装配方直接派单,结果在本地显示。 */
+    private val onTypedText: (text: String) -> Unit = {},
     private val onUserTranscript: (text: String, isFinal: Boolean) -> Unit = { _, _ -> },
     private val onAssistantTranscript: (text: String, isFinal: Boolean) -> Unit = { _, _ -> },
     /** 助手这一轮到目前为止的文字(逐段累积),供通话页实时显示;落定仍走 [onAssistantTranscript]。 */
     private val onAssistantDraft: (text: String) -> Unit = {},
-    private val timeLimitMs: Long = MAX_CALL_DURATION_MS,
+    /**
+     * 通话里多久没有新内容就挂断;null 不自动挂。新内容:你开口(说到一半也算)、打字、Mika 说话、任务有进展([onActivity])。
+     * 到点前 [IDLE_WARNING_MS] 先问一句还在不在:能让模型接着回话的会话交 [idleCue] 由它转述,不能的照念 [idleLine];
+     * 这句提醒本身不算新内容。
+     */
+    private val idleMs: Long? = DEFAULT_IDLE_MS,
+    private val idleCue: String = "",
+    private val idleLine: String = "",
     private val resumedTimeoutMs: Long = RESUMED_TIMEOUT_MS,
     private val micCheckTimeoutMs: Long = MIC_CHECK_TIMEOUT_MS,
     private val clockNanos: () -> Long = System::nanoTime,
@@ -90,6 +111,12 @@ class VoiceCallSession(
     /** 最近一次真正写进播放轨的云端音频时刻(clockNanos);播放停下一阵后轮回到听。 */
     @Volatile private var lastSpokeNanos = 0L
 
+    /** 最近一次有新内容的时刻(clockNanos);静默计时从这里算。 */
+    @Volatile private var lastActivityNanos = 0L
+
+    /** 已经问过「还在吗」、还没等到你或任务的新动静:这期间 Mika 自己说的话不重新计时(那就是在念提醒)。 */
+    @Volatile private var idleWarned = false
+
     private val lock = Any()
     private var runJob: Job? = null
     private var terminal = false
@@ -101,6 +128,15 @@ class VoiceCallSession(
     }
 
     fun hangup() = end(EndReason.Hangup)
+
+    /** 通话外来的新内容(派出去的任务有了进展):静默计时重来。 */
+    fun onActivity() = markActivity(fromMika = false)
+
+    private fun markActivity(fromMika: Boolean) {
+        if (fromMika && idleWarned) return
+        if (!fromMika) idleWarned = false
+        lastActivityNanos = clockNanos()
+    }
 
     fun setMuted(muted: Boolean) {
         _muted.value = muted
@@ -115,21 +151,25 @@ class VoiceCallSession(
         _turn.compareAndSet(VoiceCallTurn.Thinking, VoiceCallTurn.Listening)
     }
 
-    private var typedCount = 0
+    /** 此刻接通的会话;没接通时为 null。 */
+    @Volatile private var live: CallRealtimeSession? = null
 
     /**
-     * 通话面板的文字输入:打字与说话同路——登记进转写(问),并以合成 callId([TYPED_CALL_PREFIX]+序号)
-     * 直接派发给语音请求处理。打字本就是用户亲述,不过安全闸(闸防的是模型伪造);装配方对
-     * 合成 callId 的结果回本地(进转写/面板),协议层没有它登记的 callId。仅 Active 态受理,空白忽略。
+     * 通话面板的文字输入:打字与说话同路——登记进转写(问),也登记成当轮转写(之后模型据此调工具照样过闸)。
+     * 会话能接文字(标准模式)就当一句话交给它回;接不了(实时模式)就把这段字记成用户亲述的原话,
+     * 交给 [onTypedText] 直接派单。仅 Active 态受理,空白忽略。
      */
     fun sendUserText(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
         if (_state.value !is VoiceCallState.Active) return
-        val callId = TYPED_CALL_PREFIX + (++typedCount)
+        markActivity(fromMika = false)
         onUserTranscript(clean, true)
         _turn.value = VoiceCallTurn.Thinking
-        onVoiceRequest(callId, clean)
+        requestGate.onUserTranscript(clean)
+        if (live?.sendUserText(clean) == true) return
+        requestGate.acceptTyped(clean)
+        onTypedText(clean)
     }
 
     /**
@@ -139,11 +179,11 @@ class VoiceCallSession(
     fun end(reason: EndReason) {
         val job = synchronized(lock) {
             if (terminal) {
-                if (_state.value is VoiceCallState.Failed) _state.value = VoiceCallState.Ended(reason)
+                if (_state.value is VoiceCallState.Failed) _state.value = endedFor(reason)
                 return
             }
             terminal = true
-            _state.value = VoiceCallState.Ended(reason)
+            _state.value = endedFor(reason)
             runJob
         }
         job?.cancel()
@@ -218,6 +258,7 @@ class VoiceCallSession(
             playTone()
             greetOnce(realtime)
             _state.value = VoiceCallState.Active(nowMillis())
+            live = realtime
             runActive(realtime)
         } catch (cancelled: CancellationException) {
             throw cancelled // 外部取消不是失败,终态由取消方决定
@@ -230,6 +271,7 @@ class VoiceCallSession(
             fail(VoiceCallError.Provider, attempt)
         } finally {
             audio.onFocusLost = null
+            live = null
             runCatching { realtime?.close() }
             audio.stopCapture()
             audio.stopPlayback()
@@ -298,10 +340,7 @@ class VoiceCallSession(
                 launch { writeLoop(queue) }
                 launch { pumpMic(realtime) }
                 launch { watchSpeaking() }
-                launch {
-                    delay(timeLimitMs)
-                    end(EndReason.TimeLimit)
-                }
+                idleMs?.let { limit -> launch { watchIdle(realtime, limit) } }
                 // 系统通话(来电/去电)会顶掉我们的通话:通话中轮询音频模式,进来就以「来电」收场
                 launch {
                     while (true) {
@@ -319,6 +358,26 @@ class VoiceCallSession(
         }
     }
 
+    /** 静默挂断:到 [IDLE_WARNING_MS] 前问一句,一直没动静到点就挂;短于一分钟的提醒时长按一半算。 */
+    private suspend fun watchIdle(realtime: CallRealtimeSession, limit: Long) {
+        val warnAfter = (limit - IDLE_WARNING_MS).coerceAtLeast(limit / 2)
+        idleWarned = false
+        lastActivityNanos = clockNanos()
+        while (true) {
+            delay(IDLE_POLL_MS)
+            val quietMs = (clockNanos() - lastActivityNanos) / 1_000_000L
+            if (quietMs >= limit) {
+                end(EndReason.Idle)
+                return
+            }
+            if (quietMs >= warnAfter && !idleWarned) {
+                idleWarned = true
+                if (idleCue.isNotBlank() && realtime.sendCue(idleCue)) continue
+                if (idleLine.isNotBlank() && realtime.sendNotice(idleLine)) echoWindow.append(idleLine)
+            }
+        }
+    }
+
     private suspend fun readEvents(realtime: CallRealtimeSession, queue: CallPlaybackQueue) {
         val assistantText = StringBuilder()
         fun flushAssistantText(final: Boolean) {
@@ -333,17 +392,22 @@ class VoiceCallSession(
         }
         realtime.events.collect { event ->
             when (event) {
-                is VolcRealtimeEvent.Audio ->
+                is VolcRealtimeEvent.Audio -> {
+                    markActivity(fromMika = true)
                     if (queue.offer(event.pcm) == null) throw VoiceCallFailure(VoiceCallError.Playback)
+                }
                 VolcRealtimeEvent.UserSpeaking, VolcRealtimeEvent.AssistantInterrupted -> {
+                    if (event == VolcRealtimeEvent.UserSpeaking) markActivity(fromMika = false)
+                    // 用户又开口:上一句话授权的调用到此为止
+                    if (event == VolcRealtimeEvent.UserSpeaking) requestGate.onUserTurnStart()
                     queue.invalidate()
                     audio.interruptPlayback()
                     _speakerLevel.value = 0f
                     flushAssistantText(final = false)
                     listen()
-                    onBargeIn()
                 }
                 is VolcRealtimeEvent.UserTranscript -> {
+                    markActivity(fromMika = false)
                     onUserTranscript(event.text, event.isFinal)
                     if (event.isFinal && event.isCurrentTurn) _turn.value = VoiceCallTurn.Thinking
                     // 先登记当轮 final+complete 转写,之后的 function_call 才有资格过闸
@@ -352,6 +416,7 @@ class VoiceCallSession(
                     }
                 }
                 is VolcRealtimeEvent.AssistantTranscript -> {
+                    markActivity(fromMika = true)
                     val room = MAX_ASSISTANT_TURN_CHARS - assistantText.length
                     if (room > 0) {
                         assistantText.append(event.delta.take(room))
@@ -369,15 +434,21 @@ class VoiceCallSession(
         throw VolcRealtimeException(VolcRealtimeException.Kind.NETWORK)
     }
 
+    /**
+     * 带原话(words)的前台工具先过安全闸,放行的原话核对过落在当轮转写里,换成整句交出去;
+     * 不带原话的照样交出去,由前台执行器拒掉(四个工具都要原话)。
+     */
     private fun handleFunctionCall(realtime: CallRealtimeSession, event: VolcRealtimeEvent.FunctionCall) {
-        if (event.name != VolcRealtimeProtocol.MIKA_REQUEST_FUNCTION) return
-        val utterance = (event.arguments["utterance"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+        if (event.name !in VolcRealtimeProtocol.deskToolNames) return
+        val words = event.arguments["words"] ?: return onDeskCall(event.callId, event.name, event.arguments)
+        val utterance = (words as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
         when (val decision = requestGate.offer(event.callId, utterance)) {
-            is VoiceCallDecision.Accept -> onVoiceRequest(event.callId, decision.text)
+            is VoiceCallDecision.Accept ->
+                onDeskCall(event.callId, event.name, JsonObject(event.arguments + ("words" to JsonPrimitive(decision.text))))
             VoiceCallDecision.Reject -> realtime.sendToolResult(event.callId, buildJsonObject {
                 put("status", "rejected")
-                put("reason", "utterance_not_verified")
-                put("next", "Do not act on this request. Only if the user says it again as a new utterance, call mika_request once more with it; the retry must use the new call_id.")
+                put("reason", "words_not_verified")
+                put("next", "Do not act on this. Only if the user says it again as a new utterance, call the tool once more with their words; the retry must use the new call_id.")
             })
         }
     }
@@ -422,6 +493,7 @@ class VoiceCallSession(
                     audio.writePlayback(pcm, block.byteCount)
                     _speakerLevel.value = levelOf(pcm, block.byteCount)
                     lastSpokeNanos = clockNanos()
+                    markActivity(fromMika = true)
                     _turn.value = VoiceCallTurn.Speaking
                 }
             } catch (cancelled: CancellationException) {
@@ -464,11 +536,19 @@ class VoiceCallSession(
         return (sqrt(sum / samples) / LEVEL_FULL_SCALE).coerceIn(0.0, 1.0).toFloat()
     }
 
+    private fun endedFor(reason: EndReason) = VoiceCallState.Ended(
+        reason,
+        idleMinutes = if (reason == EndReason.Idle) idleMs?.let { ((it + 30_000L) / 60_000L).toInt().coerceAtLeast(1) } ?: 0 else 0,
+    )
+
     private class VoiceCallFailure(val error: VoiceCallError) : Exception()
 
     companion object {
-        const val TYPED_CALL_PREFIX = "typed-"
-        const val MAX_CALL_DURATION_MS = 10 * 60_000L
+        /** 默认静了 5 分钟挂断。 */
+        const val DEFAULT_IDLE_MS = 5 * 60_000L
+        /** 挂断前多久先问一句还在不在。 */
+        const val IDLE_WARNING_MS = 30_000L
+        const val IDLE_POLL_MS = 1_000L
         const val RESUMED_TIMEOUT_MS = 3_000L
         const val MIC_CHECK_TIMEOUT_MS = 3_000L
         /** 通话中查系统音频模式的间隔:来电/去电抢走通话音频时尽快收场。 */

@@ -12,6 +12,7 @@ import com.wangzan101.mika.core.agent.TaskState
 import com.wangzan101.mika.task.TaskGate
 import com.wangzan101.mika.core.agent.Turn
 import com.wangzan101.mika.core.run.record.RunEvent
+import com.wangzan101.mika.core.agent.DeskTurn
 import com.wangzan101.mika.task.SteerNote
 import com.wangzan101.mika.task.SteerState
 import kotlinx.coroutines.flow.map
@@ -47,6 +48,20 @@ internal object ChatReduce {
                 StepAction(label, a.target?.let { where(it, appLabel) }, a.effect, a.failed)
             }
         }
+
+    /**
+     * 正在办的一件事此刻要你动手的那张卡片(接管、同意一次、要你先办好一件事),和聊天页一问一答里的同一种;
+     * 不是这几种(包括排队、锁屏自动继续)为 null。主聊天的问题卡用它,按钮直接作用于那一件。
+     */
+    internal fun needStatus(s: TaskState, appLabel: (String) -> String): ExchangeStatus? = when (s) {
+        is TaskState.WaitingTakeover -> ExchangeStatus.NeedsTakeover(s.reason, s.message, s.item, s.amount, s.address)
+        is TaskState.WaitingConfirmation -> ExchangeStatus.NeedsConfirmation(
+            ConfirmationCopy.title(s.request), ConfirmationCopy.detail(s.request, appLabel(s.request.app)),
+            ConfirmationNotifier.requestKey(s),
+        )
+        is TaskState.Held -> if (s.reason == TaskGate.LOCKED || s.reason.queued) null else ExchangeStatus.Paused(s.reason.why, s.reason.resumable)
+        else -> null
+    }
 
     internal fun state(ex: Exchange, s: TaskState, appLabel: (String) -> String): Exchange = when (s) {
         TaskState.Idle -> ex
@@ -141,6 +156,12 @@ internal object ChatReduce {
     }
 
     internal fun fromTurn(t: Turn): Exchange {
+        // 前台写的一轮(聊天、通话里前台回的话,和它的汇报):画成前台的一行,派出的任务各画一张卡片
+        if (DeskTurn.isDesk(t)) {
+            val status = DeskTurn.failure(t)?.let { ExchangeStatus.Failed(it) } ?: ExchangeStatus.Done(t.outcome, null)
+            return Exchange(t.userText, emptyList(), status, live = false, runId = t.runId, deskReply = t.outcome, deskTasks = t.deskTasks,
+                callId = t.callId, atMs = t.atMs)
+        }
         val status = when (t.status) {
             "succeeded" -> answerParts(t.outcome).let { (a, e) -> ExchangeStatus.Done(a, e) }
             "unverified" -> answerParts(t.outcome).let { (a, e) -> ExchangeStatus.Done(a, e, verified = false, note = t.note, unconfirmed = t.unconfirmed) }
@@ -160,7 +181,7 @@ internal object ChatReduce {
             memoryNotes = t.memoryNotes, usedMemory = t.usedMemory, skillNotes = t.skillNotes,
             audios = t.audios,
             photos = t.photos,
-            keptPage = t.keptPage, keptPageClosed = t.keptPageClosed,
+            keptPage = t.keptPage, keptPageClosed = t.keptPageClosed, atMs = t.atMs,
             steers = t.steers.mapIndexed { i, text ->
                 SteerNote("turn-$i", text, SteerState.Joined, t.interruptedReplies.getOrNull(i)?.takeIf(String::isNotEmpty),
                     t.finishedReplies.getOrNull(i)?.takeIf(String::isNotEmpty))

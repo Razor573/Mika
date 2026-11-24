@@ -4,6 +4,9 @@
     <string name="voicecall_task_paused">一時停止中</string>
     <string name="voicecall_task_running">処理中</string>
     <string name="voicecall_task_done">完了</string>
+    <string name="voicecall_task_open">実行の流れを見る</string>
+    <string name="voicecall_task_screen">画面を見る</string>
+    <string name="voicecall_screen_close">画面を閉じる</string>
     <string name="voicecall_task_failed">完了できませんでした</string>
     <string name="voicecall_task_cancelled">キャンセルしました</string>
     <string name="voicecall_notification_channel">音声通話</string>
@@ -18,7 +21,8 @@
     <string name="voicecall_ended_hangup">通話が終了しました</string>
     <string name="voicecall_ended_notification">通知から終了しました</string>
     <string name="voicecall_ended_incoming">電話がかかってきたため通話を終了しました</string>
-    <string name="voicecall_ended_limit">10 分に達したため通話を終了しました</string>
+    <string name="voicecall_ended_idle">%1$d 分間動きがなかったため通話を終了しました</string>
+    <string name="voicecall_idle_line">まだいますか？反応がなければ切りますね。</string>
     <string name="voicecall_ended_background">Mika に戻って続けてください</string>
     <string name="voicecall_error_auth">音声認証情報が拒否されました。設定を確認してください</string>
     <string name="voicecall_error_timeout">接続がタイムアウトしました。もう一度お試しください</string>
@@ -53,4 +57,18 @@
     <string name="voicecall_connected_at">接続 · %1$s</string>
     <string name="voicecall_ended_after">%1$s · %2$s</string>
     <string name="voicecall_back_to_chat">チャットに戻る</string>
+    <string name="voicecall_desk_report">%1$sの件、%2$s</string>
+    <string name="voicecall_log_start">音声通話 · %1$s</string>
+    <string name="voicecall_log_end">通話終了 · %1$s</string>
+    <string name="voicecall_log_end_idle">通話終了 · %1$s · 無言が続いたため</string>
+    <string name="voicecall_log_silent">音声通話 · %1$s · 発言なし</string>
+    <string name="voicecall_log_live">通話中</string>
+    <string name="voicecall_more">その他</string>
+    <string name="voicecall_records">通話履歴</string>
+    <string name="voicecall_records_hint">タップするとチャットのその部分を表示します</string>
+    <string name="voicecall_records_empty">この会話の通話履歴はまだありません</string>
+    <string name="voicecall_records_silent">発言なし</string>
+    <string name="voicecall_settings">通話設定</string>
+    <string name="voicecall_bar">通話中 · 通話に戻る</string>
+    <string name="voicecall_last_call">前回の通話 · %1$s</string>
 </resources>

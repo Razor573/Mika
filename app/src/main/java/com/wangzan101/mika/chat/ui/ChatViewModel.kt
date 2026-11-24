@@ -64,7 +64,7 @@ import com.wangzan101.mika.ui.ToolLabels
 
 /**
  * 聊天界面的状态。步骤列表来自运行事件里实际做过的事(活动);进展那一行是模型这一步的话,
- * 等待模型时仅显示状态。任务在跑时输入框发的话先排队,用户再决定是否改为当前任务的引导。
+ * 等待模型时仅显示状态。输入框发的话交给这条会话的前台(见 [DeskChatOps]),前台派出的任务在各自的子会话里跑。
  * 整个进程只用一个实例,界面关掉再打开时正在跑的任务的步骤还在。
  */
 class ChatViewModel(
@@ -107,6 +107,8 @@ class ChatViewModel(
     internal val runGoal: (String) -> String? = { null },
     /** 该对话正在跑的任务自己的状态(不论服务此刻显示的是谁);切走后靠它接着记那一问一答的步骤。 */
     internal val runState: (String) -> StateFlow<TaskState>? = { null },
+    /** 该对话正在跑的任务自己的接管进度;主聊天的问题卡替正在办的一件事画接管按钮时用。 */
+    internal val runStage: (String) -> StateFlow<Takeover.Stage>? = { null },
     /** 任务结束后补上的记忆与技能提示,按运行编号。 */
     internal val runNotes: StateFlow<Map<String, RunNotes>> = MutableStateFlow(emptyMap()),
     internal val learning: LearningActions? = null,
@@ -130,6 +132,8 @@ class ChatViewModel(
     internal val activities: StateFlow<List<RunEvent.Activity>> = MutableStateFlow(emptyList()),
     /** 显示中的任务收到的插话和去向。 */
     internal val steers: StateFlow<List<SteerNote>> = MutableStateFlow(emptyList()),
+    /** 通话里在等主人回话时,这个对话里发的下一句交给通话(返回 true,不开任务也不插话);没在等就返回 false。 */
+    internal val ownerAnswer: (conversationId: String, text: String) -> Boolean = { _, _ -> false },
     /** 整个进程的排队队列;这里只取当前对话、还没被服务取走的项。 */
     private val followUps: StateFlow<List<QueuedFollowUp>> = MutableStateFlow(emptyList()),
     /** 停止之后正在写交代的那几次运行(运行编号);那一轮下面显示「正在整理已做的事…」。 */
@@ -172,6 +176,8 @@ class ChatViewModel(
     internal val projectDeletionImpact: (String) -> ProjectDeleteImpact = { ProjectDeleteImpact(0, 0, 0) },
     internal val removeProject: suspend (String) -> Unit = {},
     internal val workspaceResolver: WorkspaceResolver? = null,
+    /** 聊天走前台:打的字交给这条会话的前台,派出的任务挂成卡片;没给时(只在测试里)照旧直接开任务。 */
+    desk: DeskChatDeps? = null,
 ) {
     internal val session = ChatSession(this)
     internal val live = ChatLiveFollow(this, session)
@@ -181,6 +187,10 @@ class ChatViewModel(
     internal val drafting = ChatDraftOps(this, session)
     internal val sending = ChatSendOps(this, session)
     internal val noting = ChatNoteOps(this, session)
+    internal val desking: ChatDesk? = desk?.let { ChatDesk(this, session, it) }
+
+    /** 接这条会话的前台;没接前台、或这是前台派出的子任务的对话时为 null(照旧直接对任务说,见 [ChatDesk.handles])。 */
+    internal fun deskFor(conversationId: String?): ChatDesk? = desking?.takeIf { it.handles(conversationId) }
     private var autoReadKey by session::autoReadKey
     private val _ui = session._ui
     private val _jump = session._jump
@@ -295,6 +305,7 @@ class ChatViewModel(
             drafts.update { it + (draft.conversationId to ComposerDraft(input = draft.text,
                 attachments = session.sharedAttachments(draft), sharedDraft = draft)) }
         }
+        desking?.start()
         val current = store.currentChat() as? CurrentChat.Open
         val pending = sharedDrafts?.readPending()?.takeIf { current != null && it.conversationId == current.id }
         if (current != null && (current.id in drafts.value || pending != null)) {
@@ -326,6 +337,13 @@ class ChatViewModel(
     fun openWorkflowConversation(conversationId: String) = chats.openWorkflowConversation(conversationId)
     fun openPersonalTask(conversationId: String) = chats.openPersonalTask(conversationId)
     fun openConversationAt(id: String, target: ChatTarget) = chats.openConversationAt(id, target)
+
+    /** 这个对话的语音通话记录(聊天页画通话起止线用);没有对话为空。 */
+    fun calls(conversationId: String?): kotlinx.coroutines.flow.Flow<List<com.wangzan101.mika.chat.ConversationCall>> =
+        conversationId?.let(store::observeCalls) ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    /** 前台派过的几件事各自会话起好的标题(「这个对话里的事」用);没起好的不在里面。 */
+    suspend fun deskTaskTitles(ids: List<String>): Map<String, String> =
+        kotlinx.coroutines.withContext(io) { ids.mapNotNull { id -> store.title(id)?.let { id to it } }.toMap() }
     fun consumeJump(jump: ChatJump) = chats.consumeJump(jump)
     fun createProject(name: String): Result<Project>? = chats.createProject(name)
     fun renameProject(projectId: String, name: String): Result<Project>? = chats.renameProject(projectId, name)
@@ -356,6 +374,9 @@ class ChatViewModel(
     fun attach(uris: List<String>, conversationId: String? = _ui.value.conversationId) = attaching.attach(uris, conversationId)
     internal fun importDeviceAttachments(conversationId: String, paths: List<String>, copy: suspend (String, String) -> com.wangzan101.mika.core.workspace.DeviceFileImport) = attaching.importDeviceAttachments(conversationId, paths, copy)
     fun libraryTargetConversation(): String = attaching.libraryTargetConversation()
+
+    /** 当前会话的编号;还是空白新对话时占下一条(聊天页停到这条上),给通话这类要落进当前会话的入口用。 */
+    fun claimConversation(): String = session.draftConversation()
     fun planLibraryAttachments(conversationId: String, sources: List<LibraryFileHandle>): LibraryAddPlan? = attaching.planLibraryAttachments(conversationId, sources)
     fun addLibraryAttachments(conversationId: String, items: List<LibraryStaged>, overLimit: Int = 0): LibraryMergeResult = attaching.addLibraryAttachments(conversationId, items, overLimit)
     fun addLibraryAttachment(conversationId: String, item: PendingAttachment, source: LibraryFileHandle? = null, release: () -> Unit = {}): LibraryAttachmentResult = attaching.addLibraryAttachment(conversationId, item, source, release)
@@ -381,10 +402,8 @@ class ChatViewModel(
     fun quote(from: QuoteMessage.From, text: String) = sending.quote(from, text)
     fun clearQuote() = sending.clearQuote()
     fun send(text: String, check: Prerequisites.Check): Boolean = sending.send(text, check)
-    fun setFollowUpMode(mode: FollowUpMode) = sending.setFollowUpMode(mode)
     fun startQueued() = sending.startQueued()
     fun cancelQueued(id: String): Boolean = sending.cancelQueued(id)
-    fun guideQueued(id: String, check: Prerequisites.Check): Boolean = sending.guideQueued(id, check)
     fun editQueued(id: String): String? = sending.editQueued(id)
     fun withdrawSteer(messageId: String): Boolean = sending.withdrawSteer(messageId)
     fun editSteer(messageId: String): String? = sending.editSteer(messageId)
@@ -404,6 +423,29 @@ class ChatViewModel(
     fun closePip() = sending.closePip()
     fun reopenPip() = sending.reopenPip()
     fun togglePipSound() = sending.togglePipSound()
+
+    /** 让服务显示前台派出的那件任务 [taskId](它的对话编号就是任务编号):小窗的画面跟着换,屏上的对话不变。 */
+    fun showDeskScreen(taskId: String) = actions.show(taskId)
+
+    /** 前台派出的那件任务小窗里的声音开关。 */
+    fun togglePipSoundIn(taskId: String) = actions.togglePipSoundIn(taskId)
+
+    // ChatDesk
+    /** 聊天页在不在屏上:在的时候后台的汇报由前台在页面上说一句,不在时交给兜底(写回会话、发通知)。 */
+    fun pageShown(shown: Boolean) { desking?.pageShown(shown) }
+
+    /** 前台派出的一件在问问题,用户在问题卡上点了 [words]。 */
+    fun answerDeskTask(taskId: String, words: String) { desking?.answer(taskId, words) }
+
+    /** 停下前台派出的一件。 */
+    fun cancelDeskTask(taskId: String) { desking?.cancel(taskId) }
+
+    /** 正在办的一件事([taskId] 即它跑的那个对话)要你动手时,问题卡上的按钮:只作用于这一件;停止照样经由 Mika。 */
+    internal fun deskNeedOps(taskId: String) = NeedOps(
+        cancel = { cancelDeskTask(taskId) }, resume = { actions.resumeIn(taskId) }, takeOver = { actions.takeOverIn(taskId) },
+        handBack = { actions.handBackIn(taskId) }, finishedMyself = { actions.finishedMyselfIn(taskId) }, skip = { actions.skipIn(taskId) },
+        approve = { actions.approveIn(taskId, it) }, decline = { actions.declineIn(taskId, it) },
+    )
 
     // ChatNoteOps
     fun noteText(note: MemoryNote): String = noting.noteText(note)
