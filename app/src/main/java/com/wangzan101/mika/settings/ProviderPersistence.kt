@@ -52,8 +52,12 @@ internal fun ProviderStore.prune() {
 internal fun ProviderStore.load() {
     if (configFile.isFile) runCatching {
         val root = json.parseToJsonElement(configFile.readText()).jsonObject
-        _providers.value = root["services"]?.jsonArray?.mapNotNull { runCatching { providerOf(it.jsonObject) }.getOrNull() }.orEmpty()
-        _configs.value = root["providers"]?.jsonArray?.mapNotNull { runCatching { configOf(it.jsonObject) }.getOrNull() }.orEmpty()
+        _providers.value = root["services"]?.jsonArray?.mapNotNull { runCatching { providerOf(it.jsonObject) }.getOrNull() }.orEmpty().map { p ->
+            if (p.kind == ProviderConfig.Kind.Antigravity && p.models != null) p.copy(models = ProviderStore.collapseAntigravityListedModels(p.models)) else p
+        }
+        _configs.value = root["providers"]?.jsonArray?.mapNotNull { runCatching { configOf(it.jsonObject) }.getOrNull() }.orEmpty().map { c ->
+            if (c.kind == ProviderConfig.Kind.Antigravity) c.copy(model = ModelOptions.collapseAntigravityId(c.model)) else c
+        }
         _groups.value = root["groups"]?.jsonArray?.mapNotNull { runCatching { groupOf(it.jsonObject) }.getOrNull() }.orEmpty()
         val uses = root["uses"]?.jsonObject
         _roles.value = if (uses != null) choicesOf(uses) else migrateRoles(root["roles"]?.jsonObject)
