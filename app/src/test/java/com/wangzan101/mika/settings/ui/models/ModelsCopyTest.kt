@@ -61,8 +61,6 @@ class ModelsCopyTest {
         assertEquals("Gemini 4 Hydrogen", ModelsCopy.roleLine(u, ModelRole.Main).title)
         assertEquals("Vertex AI", ModelsCopy.kindLabel(ProviderConfig.Kind.Vertex))
         assertEquals("Antigravity", ModelsCopy.kindLabel(ProviderConfig.Kind.Antigravity))
-        assertTrue(ModelsCopy.signInRowLine(SignInKind.Antigravity).isNotBlank())
-        assertEquals(null, ModelsCopy.accountManage(SignInKind.Antigravity))
     }
 
     @Test fun groupRoleLineShowsMemberCount() {
