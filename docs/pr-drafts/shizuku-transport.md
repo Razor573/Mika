@@ -15,18 +15,18 @@ Upstream Mika's Wireless debugging helper requires active Wi-Fi and Wireless deb
 
 ## Key files
 
-- `core/src/main/kotlin/com/wangzan101/mika/core/shell/ShizukuTransport.kt`
-- `core/src/main/kotlin/com/wangzan101/mika/core/shell/BuiltinShell.kt`
-- `core/src/main/kotlin/com/wangzan101/mika/core/shell/BuiltinShellEngine.kt`
+- `core/src/main/kotlin/com/wangzan101/mika/core/device/shell/ShizukuTransport.kt`
+- `core/src/main/kotlin/com/wangzan101/mika/core/device/shell/BuiltinShell.kt`
+- `core/src/main/kotlin/com/wangzan101/mika/core/device/shell/BuiltinShellEngine.kt`
 - `app/src/main/java/com/wangzan101/mika/cap/phone/shell/ShizukuShellUserService.kt`
 - `app/src/main/java/com/wangzan101/mika/cap/phone/shell/HelperHub.kt`
 - `app/src/main/java/com/wangzan101/mika/cap/phone/setup/ShizukuController.kt`
 - `app/src/main/java/com/wangzan101/mika/cap/phone/setup/BuiltinShellManager.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/SettingsSubPages.kt` (PhoneOpsScreen composable)
-- `app/src/main/java/com/wangzan101/mika/ui/PhoneSetupCopy.kt`
+- `app/src/main/java/com/wangzan101/mika/settings/ui/SettingsSubPages.kt` (PhoneOpsScreen composable)
+- `app/src/main/java/com/wangzan101/mika/settings/ui/PhoneSetupCopy.kt`
 - `app/src/main/AndroidManifest.xml`
 - `gradle/libs.versions.toml`, `app/build.gradle.kts`, `licenses/THIRD_PARTY_NOTICES.md`
-- `core/src/test/kotlin/com/wangzan101/mika/core/shell/BuiltinShellEngineTest.kt`
+- `core/src/test/kotlin/com/wangzan101/mika/core/device/shell/BuiltinShellEngineTest.kt`
 - `app/src/test/java/com/wangzan101/mika/cap/phone/setup/ShizukuTransportTest.kt`
 
 ## How to test on a phone

@@ -15,8 +15,8 @@ Because Mika encrypts stored API keys and private app files with hardware/Keysto
 
 - `app/src/main/java/com/wangzan101/mika/backup/BackupEngine.kt`
 - `app/src/main/java/com/wangzan101/mika/backup/BackupPrefs.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/BackupScreen.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/SettingsScreen.kt`
+- `app/src/main/java/com/wangzan101/mika/backup/ui/BackupScreen.kt`
+- `app/src/main/java/com/wangzan101/mika/settings/ui/SettingsScreen.kt`
 - `app/src/main/res/values/strings_backup.xml`
 - `app/src/test/java/com/wangzan101/mika/backup/BackupEngineTest.kt`
 - `docs/backup-export-import.md`

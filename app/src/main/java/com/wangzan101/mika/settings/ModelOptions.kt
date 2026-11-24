@@ -3,7 +3,7 @@ package com.wangzan101.mika.settings
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelCatalog
-import com.wangzan101.mika.core.oauth.AntigravityAuth
+import com.wangzan101.mika.core.model.oauth.AntigravityAuth
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**

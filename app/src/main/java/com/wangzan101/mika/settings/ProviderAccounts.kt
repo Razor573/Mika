@@ -103,8 +103,8 @@ internal fun ProviderStore.vertexTokenProviderFor(providerId: String): VertexTok
     val fp = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray()).joinToString("") { "%02x".format(it) }
     val cached = vertexTokens[providerId]
     if (cached != null && cached.fingerprint == fp) return cached.provider
-    val sa = requireNotNull(ProviderStore.vertexServiceAccountFromJson(raw)) { "Invalid Vertex AI service account JSON" }
-    val created = VertexTokenProvider(sa, http)
+    requireNotNull(ProviderStore.vertexServiceAccountFromJson(raw)) { "Invalid Vertex AI service account JSON" }
+    val created = VertexTokenProvider(ProviderStore.http, { providerKey(providerId) })
     vertexTokens[providerId] = ProviderStore.CachedVertexTokenProvider(fp, created)
     created
 }

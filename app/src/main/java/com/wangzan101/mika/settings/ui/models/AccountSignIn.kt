@@ -51,12 +51,11 @@ import com.wangzan101.mika.ui.openInBrowser
 enum class SignInKind(val account: AccountProvider?, val label: String, val tag: String) {
     ChatGpt(null, "ChatGPT", "chatgpt"),
     Xai(AccountProvider.Xai, "xAI / Grok", "xai"),
-    OpenRouter(AccountProvider.OpenRouter, "OpenRouter", "openrouter"),
-    Antigravity(AccountProvider.Antigravity, "Antigravity", "antigravity");
+    OpenRouter(AccountProvider.OpenRouter, "OpenRouter", "openrouter");
 
-    /** 「改用 API Key」时选的预设;ChatGPT 与 Antigravity 没有这一项。 */
+    /** 「改用 API Key」时选的预设;ChatGPT 没有这一项。 */
     val keyPreset: String? get() = when (this) {
-        ChatGpt, Antigravity -> null
+        ChatGpt -> null
         Xai -> "xAI"
         OpenRouter -> "OpenRouter"
     }
@@ -73,18 +72,16 @@ internal fun ModelSetupUi.signInState(kind: SignInKind): Triple<String?, Boolean
         chatGptSignIn == ListState.Running,
         (chatGptSignIn as? ListState.Failed)?.message,
     )
-    SignInKind.Xai, SignInKind.OpenRouter, SignInKind.Antigravity -> {
+    SignInKind.Xai, SignInKind.OpenRouter -> {
         val signedIn = when (kind) {
             SignInKind.Xai -> xaiAccount?.signedIn == true
             SignInKind.OpenRouter -> openRouterAccount?.signedIn == true
-            SignInKind.Antigravity -> antigravityAccount?.signedIn == true
             SignInKind.ChatGpt -> false
         }
         val id = providers.firstOrNull {
             when (kind) {
                 SignInKind.Xai -> it.kind == ProviderConfig.Kind.Xai
                 SignInKind.OpenRouter -> it.signIn == ProviderStore.OPENROUTER_SIGN_IN
-                SignInKind.Antigravity -> it.kind == ProviderConfig.Kind.Antigravity
                 SignInKind.ChatGpt -> false
             }
         }?.id

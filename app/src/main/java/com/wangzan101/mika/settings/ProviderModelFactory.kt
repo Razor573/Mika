@@ -246,12 +246,13 @@ internal fun ProviderStore.buildModel(cfg: ProviderConfig, apiKey: String?, endp
             val tokenProvider = if (cfg.providerId.isNotBlank() && providerKey(cfg.providerId) != null) {
                 vertexTokenProviderFor(cfg.providerId)
             } else {
-                VertexTokenProvider(requireNotNull(parsedSa) { "Invalid Vertex AI service account JSON" }, http)
+                requireNotNull(parsedSa) { "Invalid Vertex AI service account JSON" }
+                VertexTokenProvider(http, { rawSa })
             }
             VertexModel(
                 projectId = projectId,
                 location = location,
-                tokenProvider = tokenProvider,
+                token = tokenProvider,
                 model = cfg.model,
                 capabilities = cfg.capabilities,
                 http = http,
@@ -262,7 +263,8 @@ internal fun ProviderStore.buildModel(cfg: ProviderConfig, apiKey: String?, endp
         }
         ProviderConfig.Kind.Antigravity ->
             AntigravityModel(
-                tokens = accountTokensFor(cfg.providerId),
+                token = accountTokensFor(cfg.providerId),
+                projectId = { cfg.projectId.ifBlank { provider(cfg.providerId)?.projectId.orEmpty() } },
                 model = cfg.model,
                 capabilities = cfg.capabilities,
                 http = http,

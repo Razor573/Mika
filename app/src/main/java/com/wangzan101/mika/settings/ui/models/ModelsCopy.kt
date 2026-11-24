@@ -398,6 +398,8 @@ object ModelsCopy {
         ProviderConfig.Kind.OpenAiResponses -> "OpenAI Responses"
         ProviderConfig.Kind.ChatGpt -> "ChatGPT"
         ProviderConfig.Kind.Xai -> "xAI Responses"
+        ProviderConfig.Kind.Vertex -> "Vertex AI"
+        ProviderConfig.Kind.Antigravity -> "Antigravity"
     }
 
     fun shortUrl(url: String) = url.removePrefix("https://").removePrefix("http://")

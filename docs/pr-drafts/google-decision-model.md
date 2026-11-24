@@ -15,13 +15,13 @@ Upstream's Decision model screen currently only speaks the SystemOne API shape (
 
 ## Key files
 
-- `core/src/main/kotlin/com/wangzan101/mika/core/decision/GoogleDecisionModel.kt`
-- `core/src/main/kotlin/com/wangzan101/mika/core/decision/DecisionConfig.kt`
-- `core/src/test/kotlin/com/wangzan101/mika/core/decision/GoogleDecisionModelTest.kt`
-- `core/src/test/kotlin/com/wangzan101/mika/core/decision/DecisionConfigTest.kt`
+- `core/src/main/kotlin/com/wangzan101/mika/core/model/decision/GoogleDecisionModel.kt`
+- `core/src/main/kotlin/com/wangzan101/mika/core/model/decision/DecisionConfig.kt`
+- `core/src/test/kotlin/com/wangzan101/mika/core/model/decision/GoogleDecisionModelTest.kt`
+- `core/src/test/kotlin/com/wangzan101/mika/core/model/decision/DecisionConfigTest.kt`
 - `app/src/main/java/com/wangzan101/mika/settings/DecisionSettings.kt`
 - `app/src/main/java/com/wangzan101/mika/settings/ProviderStore.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/JevSettingsScreen.kt`
+- `app/src/main/java/com/wangzan101/mika/settings/ui/JevSettingsScreen.kt`
 - `app/src/main/res/values/strings_jev.xml`
 - `app/src/test/java/com/wangzan101/mika/settings/DecisionSettingsTest.kt`
 - `app/src/test/java/com/wangzan101/mika/settings/ProviderStoreTest.kt`

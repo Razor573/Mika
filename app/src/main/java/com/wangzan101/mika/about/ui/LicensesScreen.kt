@@ -74,7 +74,7 @@ object Licenses {
         Entry("commonmark-java", "BSD-2-Clause", "Version 0.30.1 (with tables and strikethrough extensions), parses Markdown in replies into structured elements for display. Copyright (c) 2015, Atlassian Pty Ltd. https://github.com/commonmark/commonmark-java"),
         Entry("xterm.js", "MIT", "Version 5.5.0 (and @xterm/addon-fit 0.10.0), terminal emulator for the user terminal view. https://github.com/xtermjs/xterm.js"),
         Entry("Shizuku API", "Apache-2.0", "Version 13.1.5 (api and provider), optionally used when Shizuku is installed, running, and authorized to run the local helper user service. https://github.com/RikkaApps/Shizuku-API"),
-        Entry("MCP service brand logos (mcp/mcp-logos.json)", "CC0 1.0", "Monochrome outline glyphs for the MCP service catalog/list/management screens are CC0 1.0; brand trademarks remain property of their respective owners.")
+        Entry("MCP service brand logos (mcp/mcp-logos.json)", "CC0 1.0", "Monochrome outline glyphs for the MCP service catalog/list/management screens are CC0 1.0; brand trademarks remain property of their respective owners."),
         Entry("MCP service brand logos supplement (mcp/mcp-logos.json)", "MIT", "Lobe Icons v1.106.0 for additional AI/search service monochrome logos. Copyright (c) 2023 LobeHub. https://github.com/lobehub/lobe-icons")
     )
 }

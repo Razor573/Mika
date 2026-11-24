@@ -199,7 +199,7 @@ fun ProviderStore.googleGroundingSearch(session: ModelSession = ModelSession.fre
         is GroundingTarget.Vertex -> GoogleGroundingSearch.forVertex(
             projectId = target.projectId,
             location = target.location,
-            tokenProvider = vertexTokenProviderFor(target.providerId),
+            token = vertexTokenProviderFor(target.providerId),
             model = target.model,
             client = http,
             headers = headers(target.sessionHeader, session),

@@ -9,6 +9,8 @@ import com.wangzan101.mika.core.model.chatgpt.ChatGptTokens
 import com.wangzan101.mika.core.model.Capabilities
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.ClientHeaders
+import com.wangzan101.mika.core.model.ListFailure
+import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.ModelCatalog
 import com.wangzan101.mika.core.model.ModelEndpoint
 import com.wangzan101.mika.core.model.ModelGroup
@@ -250,10 +252,10 @@ class ProviderStore(
                 ProviderConfig.Kind.Gemini -> catalog.gemini(baseUrl, apiKey.orEmpty(), headers)
                 ProviderConfig.Kind.Vertex -> {
                     val sa = vertexServiceAccountFromJson(apiKey.orEmpty())
-                        ?: return ModelListResult.Failed("Invalid Vertex AI service account JSON")
-                    catalog.vertex(sa.projectId, VertexEndpoints.DEFAULT_LOCATION, VertexTokenProvider(sa, http), headers)
+                        ?: return ModelListResult.Failed(ListFailure.Auth, "Invalid Vertex AI service account JSON")
+                    catalog.vertex(token = VertexTokenProvider(http, { apiKey }), location = VertexEndpoints.DEFAULT_LOCATION, projectId = sa.projectId, headers = headers)
                 }
-                ProviderConfig.Kind.Antigravity -> ModelListResult.Listed(emptyList())
+                ProviderConfig.Kind.Antigravity -> ModelListResult.Ok(emptyList())
             }
 
         /**

@@ -92,10 +92,10 @@ class AgentLoopWebKnowledgeTest {
         val groups = { offered: Set<String> -> com.wangzan101.mika.core.capability.PromptEnv(offered, false).gate(SystemPrompt.read("groups")) }
         val phone = SystemPrompt.read("phone").lines().filterNot { "<!-- needs: phone_open_link -->" in it || "<!-- needs: phone_find_visually -->" in it || "<!-- needs: phone_sms_login -->" in it }.joinToString("\n")
         val web = SystemPrompt.read("web").lines().filterNot { "<!-- needs: share_file -->" in it || "<!-- needs: web_run_site_command -->" in it }.joinToString("\n")
-        // 两组都收着:只有入口一段和选渠道一段
+        // 系统提示词与全量工具定义开局一次性冻结
         val collapsed = run("t", KnowledgeStore(emptyList()), finish)
         val entries = groups(setOf("phone_launch_app", "phone_set_alarm", "web_read_page", "web_navigate"))
-        assertEquals("BASE\n\n$entries\n\n" + SystemPrompt.read("channels"), collapsed.system)
+        assertEquals("BASE\n\n$entries\n\n" + SystemPrompt.read("channels") + "\n\n" + SystemPrompt.read("handover") + "\n\n" + phone + "\n\n" + web, collapsed.system)
         // 打开网页、再打开 App:两组都展开,段落按固定的先后
         val withWeb = run("t", KnowledgeStore(emptyList()), go("https://shop.example.com/a"), reply(call("phone_launch_app", """{"package":"com.x"}""")), finish)
         assertEquals("BASE\n\n$entries\n\n" + SystemPrompt.read("channels") + "\n\n" + SystemPrompt.read("handover") + "\n\n" + phone + "\n\n" + web, withWeb.system)

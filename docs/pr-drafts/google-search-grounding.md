@@ -18,9 +18,9 @@ Upstream web search options require separate third-party search accounts/API key
 - `core/src/main/kotlin/com/wangzan101/mika/core/search/WebSearchProvider.kt`
 - `app/src/main/java/com/wangzan101/mika/settings/ProviderStore.kt`
 - `app/src/main/java/com/wangzan101/mika/settings/WebSearchSettings.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/WebSearchSettings.kt`
+- `app/src/main/java/com/wangzan101/mika/settings/ui/WebSearchSettings.kt`
 - `app/src/main/java/com/wangzan101/mika/ui/components/Controls.kt`
-- `app/src/main/java/com/wangzan101/mika/ui/SettingsScreen.kt`
+- `app/src/main/java/com/wangzan101/mika/settings/ui/SettingsScreen.kt`
 - `app/src/main/res/values/strings_web_search.xml`
 - `core/src/test/kotlin/com/wangzan101/mika/core/search/GoogleGroundingSearchTest.kt`
 - `core/src/test/kotlin/com/wangzan101/mika/core/search/ProviderSearchTest.kt`
