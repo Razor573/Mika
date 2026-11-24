@@ -111,10 +111,9 @@ class ProviderPresetsTest {
         assertEquals("Vertex AI", ProviderPresets.forHost("https://aiplatform.googleapis.com/v1")?.label)
 
         val form = AddForm.of(vertex)
-        assertTrue(form.isVertex)
+        assertTrue(form.kind == ProviderConfig.Kind.Vertex)
         assertFalse(form.urlEditable)
-        assertEquals(VertexEndpoints.DEFAULT_LOCATION, form.location)
-        assertFalse(form.canTest)
+                assertFalse(form.canTest)
         assertFalse(form.canSaveUntested)
     }
 

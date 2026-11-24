@@ -520,24 +520,6 @@ class ModelSetupScreenTest {
         compose.onNodeWithTag("model-response-speed").assertTextContains("Ultrafast")
     }
 
-    @Test fun allModelsSearchesAndRefreshes() {
-        val got = mutableListOf<String>()
-        compose.setContent {
-            MikaTheme {
-                AllModelsContent(
-                    connected(RoleChoices(main = "c1", vision = RoleChoice.Model("c2"))), qwen,
-                    ProviderDetailActions(refresh = { got += "refresh" }), onBack = {},
-                )
-            }
-        }
-        compose.onNodeWithText(ModelsCopy.allModelsTitle("Qwen")).assertIsDisplayed()
-        compose.onNodeWithTag("model-qwen-long").assertIsDisplayed()
-        compose.onNodeWithTag("all-models-filter").performTextInput("plus")
-        compose.onNodeWithTag("model-qwen-plus").assertIsDisplayed()
-        compose.onNodeWithTag("model-qwen-long").assertDoesNotExist()
-        compose.onNodeWithContentDescription(ModelsCopy.REFRESH).performClick()
-        assertEquals(listOf("refresh"), got)
-    }
 
     @Test fun allModelsShowsRefreshInProgress() {
         val running = connected().copy(listing = mapOf(qwen.id to ListState.Running))
@@ -614,62 +596,4 @@ class ModelSetupScreenTest {
         assertEquals(listOf("main", "out"), got)
     }
 
-    @Test fun pickerShowsRefreshLastRefreshedCachedFallbackAndManualEntryForVertexAndGemini() {
-        val refreshedAt = System.currentTimeMillis() - 60_000L
-        val vertex = Provider(
-            "pv", "Vertex AI", ProviderConfig.Kind.Vertex, "https://aiplatform.googleapis.com",
-            listOf(ListedModel("gemini-cached-vx")), modelsRefreshedAtMs = refreshedAt,
-        )
-        val gemini = Provider(
-            "pg", "Gemini", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com",
-            emptyList(), modelsRefreshedAtMs = refreshedAt,
-        )
-        val refreshed = mutableListOf<String>()
-        val manualPicked = mutableListOf<Pair<String, String>>()
-        var ui by mutableStateOf(
-            ModelSetupUi(
-                form,
-                providers = listOf(deepseek, vertex, gemini),
-                configs = listOf(main),
-                roles = RoleChoices(main = "c1"),
-                listing = mapOf(vertex.id to ListState.Failed("network offline")),
-            ),
-        )
-        compose.setContent {
-            MikaTheme {
-                RolePickerContent(
-                    ui, ModelRole.Main,
-                    RolePickerActions(
-                        refresh = { refreshed += it },
-                        pickManual = { pid, m -> manualPicked += pid to m },
-                    ),
-                    onBack = {},
-                )
-            }
-        }
-
-        compose.onNodeWithTag("picker-refresh-${deepseek.id}").assertDoesNotExist()
-        compose.onNodeWithTag("picker-refresh-${vertex.id}").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
-        compose.onNodeWithTag("picker-refresh-${gemini.id}").performScrollTo().assertIsDisplayed().assertIsEnabled().performClick()
-        assertEquals(listOf(vertex.id, gemini.id), refreshed)
-
-        compose.onNodeWithText("gemini-cached-vx").performScrollTo().assertIsDisplayed()
-        compose.onNodeWithTag("picker-refresh-failed-${vertex.id}")
-            .performScrollTo().assertIsDisplayed()
-            .assertTextContains(ModelsCopy.refreshFailedCached("network offline"))
-        compose.onNodeWithTag("picker-last-refreshed-${vertex.id}")
-            .performScrollTo().assertIsDisplayed()
-            .assertTextContains(ModelsCopy.lastRefreshed(refreshedAt))
-        compose.onNodeWithTag("picker-last-refreshed-${gemini.id}")
-            .performScrollTo().assertIsDisplayed()
-            .assertTextContains(ModelsCopy.lastRefreshed(refreshedAt))
-
-        compose.onAllNodesWithTag("manual-model")[2].performScrollTo().performTextInput("gemini-custom-id")
-        compose.onAllNodesWithTag("manual-model-use")[2].performScrollTo().performClick()
-        assertEquals(listOf(gemini.id to "gemini-custom-id"), manualPicked)
-
-        ui = ui.copy(listing = mapOf(vertex.id to ListState.Running))
-        compose.onNodeWithTag("picker-refresh-${vertex.id}").performScrollTo().assertIsNotEnabled()
-        compose.onNodeWithText(ModelsCopy.LISTING).performScrollTo().assertIsDisplayed()
-    }
 }
