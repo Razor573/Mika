@@ -200,7 +200,7 @@ fun ProviderStore.googleGroundingSearch(session: ModelSession = ModelSession.fre
         is GroundingTarget.Vertex -> GoogleGroundingSearch.forVertex(
             projectId = target.projectId,
             location = target.location,
-            token = target.staticToken?.let { tok -> com.wangzan101.mika.core.model.BearerToken { tok } } ?: vertexTokenProviderFor(target.providerId),
+            token = target.staticToken?.let { tok -> com.wangzan101.mika.core.model.BearerToken.fixed(tok) } ?: vertexTokenProviderFor(target.providerId),
             model = target.model,
             client = http,
             headers = headers(target.sessionHeader, session),
