@@ -101,18 +101,19 @@ class GeminiModel(
     ): Request {
         val force = forceToolCall || options.forceToolCall
         val effectiveForce = force && tools.isNotEmpty()
-        val effectiveSystem = if (effectiveForce) LightPrompt.ensure(system) else system
+        val effectiveSystem = if (force) LightPrompt.ensure(system) else system
         val effectiveMaxOut = options.maxOutputTokens ?: maxOutputTokens
         val systemText = (listOf(effectiveSystem) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
             .filter { it.isNotBlank() }.joinToString("\n\n")
+        val effectiveEffort = GeminiCodec.resolveEffectiveEffort(reasoningEffort, effectiveForce, model)
         val payload = buildJsonObject {
             if (systemText.isNotBlank()) putJsonObject("systemInstruction") {
                 putJsonArray("parts") { add(buildJsonObject { put("text", systemText) }) }
             }
             if (tools.isNotEmpty()) put("tools", buildJsonArray {
                 add(buildJsonObject {
-                    put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it)) } })
+                    put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it, stripArrayBounds = effectiveForce)) } })
                 })
             })
             if (effectiveForce) putJsonObject("tool_config") {
@@ -121,15 +122,17 @@ class GeminiModel(
                 }
             }
             put("contents", buildContents(messages))
-            if (effectiveMaxOut != null || reasoningEffort != null) putJsonObject("generationConfig") {
+            if (effectiveMaxOut != null || effectiveEffort != null) putJsonObject("generationConfig") {
                 effectiveMaxOut?.let { put("maxOutputTokens", it) }
-                reasoningEffort?.let { effort ->
+                effectiveEffort?.let { effort ->
                     putJsonObject("thinkingConfig") {
-                        if (effort == "none") {
-                            put("thinkingBudget", 0)
-                        } else {
-                            put("includeThoughts", true)
-                            put("thinkingLevel", effort.uppercase())
+                        when {
+                            effort == "none" -> put("thinkingBudget", 0)
+                            effectiveForce -> put("thinkingLevel", effort.uppercase())
+                            else -> {
+                                put("includeThoughts", true)
+                                put("thinkingLevel", effort.uppercase())
+                            }
                         }
                     }
                 }
@@ -144,28 +147,38 @@ class GeminiModel(
 
     private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
         ModelHttp.geminiError(status, retryAfter, body, model)
-            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
+            .withDiagnostics(
+                status = status,
+                code = ModelErrorDiagnostics.extractJsonCode(body),
+                body = body,
+                field = ModelErrorDiagnostics.extractErrorField(body),
+            )
 
     // Gemini 不接受 additionalProperties / $schema / $id 等 OpenAPI 子集之外的键
     private val rejectedKeys = setOf("additionalProperties", "\$schema", "\$id", "\$defs")
+    private val forcedToolRejectedKeys = rejectedKeys + setOf("minItems", "maxItems")
 
     // 只在 schema 位置剔除;properties 是 名称->schema 的映射,名称本身不动
-    private fun sanitize(el: JsonElement): JsonElement = when (el) {
-        is JsonObject -> JsonObject(el.filterKeys { it !in rejectedKeys }.mapValues { (k, v) ->
-            if (k == "properties" && v is JsonObject) JsonObject(v.mapValues { sanitize(it.value) }) else sanitize(v)
-        })
-        is JsonArray -> JsonArray(el.map { sanitize(it) })
-        else -> el
+    private fun sanitize(el: JsonElement, stripArrayBounds: Boolean = false): JsonElement {
+        val drop = if (stripArrayBounds) forcedToolRejectedKeys else rejectedKeys
+        return when (el) {
+            is JsonObject -> JsonObject(el.filterKeys { it !in drop }.mapValues { (k, v) ->
+                if (k == "properties" && v is JsonObject) JsonObject(v.mapValues { sanitize(it.value, stripArrayBounds) })
+                else sanitize(v, stripArrayBounds)
+            })
+            is JsonArray -> JsonArray(el.map { sanitize(it, stripArrayBounds) })
+            else -> el
+        }
     }
 
-    private fun toolJson(t: ToolSpec): JsonObject = buildJsonObject {
+    private fun toolJson(t: ToolSpec, stripArrayBounds: Boolean = false): JsonObject = buildJsonObject {
         put("name", t.name)
         put("description", t.description)
         val schema = try { json.parseToJsonElement(t.parametersJsonSchema) } catch (e: Exception) {
             throw IllegalArgumentException("工具 ${t.name} 的参数 schema 不是合法 JSON", e)
         }
         // 无参数工具:Gemini 拒绝没有 properties 的 object schema,省略 parameters
-        val clean = sanitize(schema)
+        val clean = sanitize(schema, stripArrayBounds)
         val hasProps = (clean as? JsonObject)?.get("properties")?.let { it is JsonObject && it.isNotEmpty() } == true
         if (hasProps) put("parameters", clean)
     }

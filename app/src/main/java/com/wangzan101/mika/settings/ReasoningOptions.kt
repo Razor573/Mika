@@ -30,7 +30,7 @@ data class ReasoningOptions(val levels: List<String>, val fromProvider: Boolean)
                 ProviderConfig.Kind.Antigravity ->
                     ReasoningOptions(listOf("minimal", "low", "medium", "high", "xhigh"), fromProvider = false)
                 ProviderConfig.Kind.Vertex ->
-                    ReasoningOptions(listOf("minimal", "low", "medium", "high"), fromProvider = false)
+                    ReasoningOptions(listOf("low", "medium", "high"), fromProvider = false)
                 // 预设里这家官方文档写明了几档就给几档;对不上预设的 OpenAI 兼容地址(第三方网关)
                 // 也照给通用档位并标「来源不是服务商」,让入口能渲染、由用户显式承担风险;默认仍是「默认」不发字段。
                 ProviderConfig.Kind.OpenAiCompat ->

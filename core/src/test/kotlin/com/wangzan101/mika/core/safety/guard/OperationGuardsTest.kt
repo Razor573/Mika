@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 
 import org.junit.Assert.assertTrue
@@ -302,5 +303,41 @@ class OperationGuardsTest {
         repeat(4) { assertTrue(g.read("phone_observe", g.firstSeen(1L)).isEmpty()) }
         g.pageChanged()
         repeat(4) { assertTrue(g.read("phone_observe", g.firstSeen(1L)).isEmpty()) }
+    }
+
+    @Test fun toolSequenceBreakerCatchesChangingHashScrollsAndOffScreenLoopsAndResetsOnProgress() {
+        val g = OperationGuards()
+        // 3 phone_scroll calls with CHANGING screenHash (no tap/extract progress)
+        repeat(3) { i ->
+            val outcome = g.recordStepOutcome("phone_scroll", screenHash = "h$i", extractedHash = null, itemHashes = emptyList(), writing = true, ok = true)
+            assertEquals(true, outcome.screenChanged)
+        }
+        val firstBlock = g.checkBeforeTool("phone_scroll")
+        assertNotNull(firstBlock)
+        assertEquals("tool_sequence_loop_blocked", firstBlock!!.code)
+        assertEquals(Severity.Warn, firstBlock.severity)
+
+        val secondBlock = g.checkBeforeTool("phone_scroll")
+        assertNotNull(secondBlock)
+        assertEquals("tool_sequence_loop", secondBlock!!.code)
+        assertEquals(Severity.Stop, secondBlock.severity)
+
+        // Multi-step sequence [phone_scroll, phone_observe] x 3, and offScreen tool x 3, plus reset on tap progress
+        val g2 = OperationGuards()
+        repeat(3) { i ->
+            g2.recordStepOutcome("phone_scroll", "s${i * 2}", null, emptyList(), writing = true, ok = true)
+            g2.recordStepOutcome("phone_observe", "s${i * 2 + 1}", null, emptyList(), writing = false, ok = true)
+        }
+        assertEquals("tool_sequence_loop_blocked", g2.checkBeforeTool("phone_scroll")?.code)
+        // Progress resets stalled sequence
+        g2.recordStepOutcome("phone_tap", "s_tapped", null, emptyList(), writing = true, ok = true)
+        assertNull(g2.checkBeforeTool("phone_scroll"))
+
+        val off = OperationGuards()
+        repeat(3) {
+            off.recordStepOutcome("phone_system_command", screenHash = null, extractedHash = null, itemHashes = emptyList(), writing = false, ok = true)
+        }
+        assertEquals("tool_sequence_loop_blocked", off.checkBeforeTool("phone_system_command")?.code)
+        assertEquals("tool_sequence_loop", off.checkBeforeTool("phone_system_command")?.code)
     }
 }

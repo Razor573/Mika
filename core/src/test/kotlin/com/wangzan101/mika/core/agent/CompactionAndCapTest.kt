@@ -264,4 +264,25 @@ class CompactionAndCapTest {
         assertTrue("expected ContextTooLong, got $failed", failed is com.wangzan101.mika.core.model.ModelError.ContextTooLong)
         assertTrue("over-cap request must not be dispatched to model", fake.requests.isEmpty())
     }
+
+    @Test fun doesNotFirePrematureSizeTriggerBelow100kWhenPeriodic15IsActive() {
+        val compressor = ContextCompressor(TOOLS, maxInputTokens = ContextLimits.MAX_INPUT_TOKENS)
+        // Build 10 steps whose calibrated total sits in the old size_trigger zone (87k..100k):
+        // old code fired size_trigger prematurely every few steps; now it must NOT compact before step 15!
+        val mediumPad = "word ".repeat(7_500)
+        val obs = obsRound(1, treePad = mediumPad)
+        val smallRounds = (2..15).map { idx -> obsRound(idx, treePad = "item-$idx") }
+        val at10 = listOf(task) + obs + smallRounds.take(9).flatten()
+        val est10 = TokenEstimate.of(at10) + 75_000
+        assertTrue("fixture should sit in 87k..100k zone (was $est10)", est10 in 88_000..99_500)
+        val out10 = compressor.compress(at10, contextTokens = 1_000_000, currentTokens = est10, fixedOverhead = 5_000)
+        assertFalse("must not fire size_trigger below 100k cap (trigger=${out10.trigger})", out10.rewritten)
+
+        // At step 15, periodic_15 fires cleanly with explicit trigger & reason.
+        val at15 = listOf(task) + obs + smallRounds.take(14).flatten()
+        val out15 = compressor.compress(at15, contextTokens = 1_000_000, currentTokens = 92_000, fixedOverhead = 5_000)
+        assertTrue(out15.rewritten)
+        assertEquals("periodic_15", out15.trigger)
+        assertTrue(out15.reason?.contains("steps_since_compact=15") == true)
+    }
 }

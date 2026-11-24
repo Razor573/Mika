@@ -127,6 +127,10 @@ class ProviderStore(
     /** 服务商 id → 加密后的 Key。 */
     internal var keys: Map<String, String> = emptyMap()
 
+    /** 模型列表刷新完成后的异步回调（如刷新实时定价表）。 */
+    @Volatile
+    internal var onModelsRefreshed: (suspend (Provider) -> Unit)? = null
+
     init {
         dir.mkdirs()
         load()

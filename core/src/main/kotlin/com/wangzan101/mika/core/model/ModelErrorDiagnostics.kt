@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 object ModelErrorDiagnostics {
-    const val MAX_BODY_CHARS = 300
+    const val MAX_BODY_CHARS = 1000
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -23,11 +23,13 @@ object ModelErrorDiagnostics {
         RegexOption.IGNORE_CASE,
     )
     private val NEWLINES = Regex("""[\r\n]+""")
+    private val INVALID_VALUE_AT = Regex("""Invalid value at '([^']+)'""")
 
     data class Extracted(
         val httpStatus: Int?,
         val errorCode: String?,
         val errorBody: String?,
+        val errorField: String? = null,
     )
 
     fun scrubAndClip(raw: String): String {
@@ -58,6 +60,29 @@ object ModelErrorDiagnostics {
             ?: root.prim("status")
     }
 
+    fun extractErrorField(body: String, requestHint: String? = null): String? {
+        val parsed = runCatching { json.parseToJsonElement(body) }.getOrNull()
+        val root = (parsed as? JsonObject) ?: (parsed as? JsonArray)?.firstOrNull() as? JsonObject
+        val err = root?.get("error") as? JsonObject
+        val violationField = (err?.get("details") as? JsonArray)
+            ?.asSequence()
+            ?.mapNotNull { it as? JsonObject }
+            ?.flatMap { (it["fieldViolations"] as? JsonArray).orEmpty().asSequence() }
+            ?.mapNotNull { (it as? JsonObject)?.str("field") }
+            ?.firstOrNull()
+        if (violationField != null) return violationField
+        err?.str("param")?.let { return it }
+        root?.str("param")?.let { return it }
+        val msg = err?.str("message") ?: root?.str("message") ?: body
+        INVALID_VALUE_AT.find(msg)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }?.let { return it }
+        if (msg.contains("Thinking level is unsupported", ignoreCase = true) ||
+            msg.contains("Thinking budget", ignoreCase = true)
+        ) {
+            return "generationConfig.thinkingConfig"
+        }
+        return requestHint?.takeIf { it.isNotBlank() }
+    }
+
     fun extract(e: Throwable): Extracted {
         val target = (e as? ModelError.ChainFailed)?.primary ?: e
         val modelErr = target as? ModelError
@@ -71,7 +96,15 @@ object ModelErrorDiagnostics {
             ?: modelErr?.errorBody
             ?: target.message?.takeIf { it.isNotBlank() }?.let(::scrubAndClip)
             ?: e.message?.takeIf { it.isNotBlank() }?.let(::scrubAndClip)
-        return Extracted(httpStatus = httpStatus, errorCode = errorCode, errorBody = errorBody)
+        val errorField = (e as? ModelError)?.errorField
+            ?: modelErr?.errorField
+            ?: errorBody?.let { extractErrorField(it) }
+        return Extracted(
+            httpStatus = httpStatus,
+            errorCode = errorCode,
+            errorBody = errorBody,
+            errorField = errorField,
+        )
     }
 
     fun shortReason(e: Throwable): String {

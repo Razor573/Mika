@@ -64,7 +64,9 @@ class VertexModel(
             reasoningEffort = reasoningEffort,
             googleSearch = googleSearch && tools.isEmpty(),
             forceToolCall = effectiveForce,
+            model = cleanModel,
         )
+        val errorHint = requestErrorHint(effectiveForce, reasoningEffort, effectiveMaxOut)
         var fresh = false
         while (true) {
             val accessToken = token.get(fresh)?.takeIf { it.isNotBlank() } ?: throw ModelError.Auth()
@@ -74,7 +76,7 @@ class VertexModel(
                 fresh = true
                 continue
             }
-            throw mapError(status, retryAfter, text)
+            throw mapError(status, retryAfter, text, errorHint)
         }
     }
 
@@ -105,7 +107,9 @@ class VertexModel(
             reasoningEffort = reasoningEffort,
             googleSearch = googleSearch && tools.isEmpty(),
             forceToolCall = effectiveForce,
+            model = cleanModel,
         )
+        val errorHint = requestErrorHint(effectiveForce, reasoningEffort, effectiveMaxOut)
         var fresh = false
         while (true) {
             val accessToken = token.get(fresh)?.takeIf { it.isNotBlank() } ?: throw ModelError.Auth()
@@ -118,7 +122,7 @@ class VertexModel(
                 fresh = true
                 continue
             }
-            throw mapError(status, retryAfter, text)
+            throw mapError(status, retryAfter, text, errorHint)
         }
     }
 
@@ -133,7 +137,19 @@ class VertexModel(
             .postInference(InferenceProtocol.Gemini, payload)
             .build()
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+    private fun requestErrorHint(force: Boolean, effort: String?, maxOut: Int?): String? =
+        listOfNotNull(
+            "tool_config.function_calling_config.mode=ANY".takeIf { force },
+            effort?.let { "generationConfig.thinkingConfig=$it" },
+            maxOut?.let { "generationConfig.maxOutputTokens=$it" },
+        ).takeIf { it.isNotEmpty() }?.joinToString(",")
+
+    private fun mapError(status: Int, retryAfter: String?, body: String, requestHint: String? = null): ModelError =
         ModelHttp.geminiError(status, retryAfter, body, cleanModel)
-            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
+            .withDiagnostics(
+                status = status,
+                code = ModelErrorDiagnostics.extractJsonCode(body),
+                body = body,
+                field = ModelErrorDiagnostics.extractErrorField(body, requestHint?.takeIf { status == 400 }),
+            )
 }

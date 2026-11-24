@@ -229,4 +229,41 @@ class PhoneLoopBreakerAndCompactionTest {
         val maxIn = sink.events.filterIsInstance<RunEvent.ModelReply>().maxOf { it.inputTokens ?: 0 }
         assertTrue("Max input must stay <= 100k, was $maxIn", maxIn <= ContextLimits.MAX_INPUT_TOKENS)
     }
+
+    @Test
+    fun toolSequenceBreakerStopsRepeatingChangingHashScrollsAndOffScreenSystemCommands() = runTest {
+        var reads = 0
+        val changingScreen = object : ScreenPort by FakeScreen() {
+            override suspend fun snapshot(): ScreenSnapshot {
+                reads++
+                val node = UiTreeNode("TextView", listOf(0, 0, 900, 200), text = "Laptop row $reads")
+                val win = UiWindowTree(1, "application", 1, "Shop", "com.shop.app", true, true, listOf(node))
+                val el = UiElement("@e1", "button", "Item $reads", 200, 150, listOf(0, 0, 900, 200), null, true, false, false)
+                return ScreenSnapshot("s$reads", "com.shop.app", listOf(el), 1080, 2400, windows = listOf(win))
+            }
+            override suspend fun scroll(ref: String?, snapshotId: String?, down: Boolean) = ActionResult.Ok(changed = true)
+        }
+        // Even with changing screenHash on every phone_scroll, 3 scrolls without opening an item or extracting new items must block the 4th and stop on 5th.
+        val scrollReplies = Array(10) { i ->
+            ModelReply(listOf(call("phone_scroll", """{"direction":"down"}""")), StopReason.ToolUse, Usage(500 + i * 50, 20, 400))
+        }
+        val sinkScroll = RecordingSink()
+        val endScroll = AgentLoop(
+            model = FakeModel(*scrollReplies, contextTokens = 200_000),
+            tools = toolDispatcher(changingScreen, visionEnabled = false),
+            basePrompt = "BASE",
+            maxSteps = 40,
+            sink = sinkScroll,
+        ).run("Browse laptops")
+
+        assertTrue("Expected tool-sequence guard stop, got $endScroll", endScroll is TaskState.Failed)
+        val scrollModelReplies = sinkScroll.events.filterIsInstance<RunEvent.ModelReply>()
+        assertTrue("Must stop early (~5 steps, not 40), got ${scrollModelReplies.size}", scrollModelReplies.size <= 6)
+        assertTrue(scrollModelReplies.any { it.breakerTrigger?.startsWith("tool_sequence_3x") == true })
+        assertTrue(scrollModelReplies.any { !it.toolSequence.isNullOrEmpty() })
+
+        val formatted = com.wangzan101.mika.core.run.record.UsageLogFormatter.formatEvents(sinkScroll.events, "run-seq")
+        assertTrue(formatted.contains("\"toolSequence\""))
+        assertTrue(formatted.contains("\"breakerTrigger\""))
+    }
 }

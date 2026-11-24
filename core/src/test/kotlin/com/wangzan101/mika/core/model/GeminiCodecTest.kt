@@ -154,4 +154,47 @@ class GeminiCodecTest {
         assertTrue(bothTools[0].jsonObject.containsKey("functionDeclarations"))
         assertEquals(JsonObject(emptyMap()), bothTools[1].jsonObject["googleSearch"]!!.jsonObject)
     }
+
+    @Test fun forcedToolCallStripsArrayBoundsAndDisablesThinkingOnGemini3Flash() {
+        val phoneRunSchema = """{"type":"object","properties":{"commands":{"type":"array","minItems":1,"maxItems":30,"items":{"type":"object","properties":{"op":{"type":"string"},"x":{"type":"integer"}},"required":["op"]}},"reason":{"type":"string"}},"required":["commands"],"additionalProperties":false}"""
+        val specs = listOf(ToolSpec("phone_run", "Run commands", phoneRunSchema))
+        val user = listOf(Message(Role.User, listOf(Part.Text("tap 100,200")), Author.User))
+
+        val unforced = GeminiCodec.buildPayload("BASE", user, specs, vision = false, forceToolCall = false, model = "gemini-3.8-flash")
+        val unforcedCommands = unforced["tools"]!!.jsonArray[0].jsonObject["functionDeclarations"]!!.jsonArray[0]
+            .jsonObject["parameters"]!!.jsonObject["properties"]!!.jsonObject["commands"]!!.jsonObject
+        assertEquals("1", unforcedCommands["minItems"]!!.jsonPrimitive.content)
+        assertEquals("30", unforcedCommands["maxItems"]!!.jsonPrimitive.content)
+
+        val forced = GeminiCodec.buildPayload(
+            system = "BASE",
+            messages = user,
+            tools = specs,
+            vision = false,
+            maxOutputTokens = CallOptions.LIGHT_MAX_OUTPUT_TOKENS,
+            reasoningEffort = null,
+            forceToolCall = true,
+            model = "gemini-3.8-flash",
+        )
+        assertEquals("ANY", forced["tool_config"]!!.jsonObject["function_calling_config"]!!.jsonObject["mode"]!!.jsonPrimitive.content)
+        val forcedCommands = forced["tools"]!!.jsonArray[0].jsonObject["functionDeclarations"]!!.jsonArray[0]
+            .jsonObject["parameters"]!!.jsonObject["properties"]!!.jsonObject["commands"]!!.jsonObject
+        assertFalse(forcedCommands.containsKey("minItems"))
+        assertFalse(forcedCommands.containsKey("maxItems"))
+        assertEquals(200, forced["generationConfig"]!!.jsonObject["maxOutputTokens"]!!.jsonPrimitive.content.toInt())
+        assertEquals(0, forced["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingBudget"]!!.jsonPrimitive.content.toInt())
+    }
+
+    @Test fun resolvesMinimalAndModelFamilyThinkingSafely() {
+        val user = listOf(Message(Role.User, listOf(Part.Text("hi")), Author.User))
+        val specs = listOf(ToolSpec("phone_tap", "Tap", """{"type":"object","properties":{"x":{"type":"integer"}}}"""))
+
+        val flashMinimal = GeminiCodec.buildPayload("BASE", user, specs, vision = false, reasoningEffort = "minimal", model = "gemini-3.8-flash")
+        assertEquals("LOW", flashMinimal["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject["thinkingLevel"]!!.jsonPrimitive.content)
+
+        val hydrogenForced = GeminiCodec.buildPayload("BASE", user, specs, vision = false, maxOutputTokens = 200, forceToolCall = true, model = "gemini-4-hydrogen")
+        val hThink = hydrogenForced["generationConfig"]!!.jsonObject["thinkingConfig"]!!.jsonObject
+        assertEquals("LOW", hThink["thinkingLevel"]!!.jsonPrimitive.content)
+        assertFalse(hThink.containsKey("thinkingBudget"))
+    }
 }

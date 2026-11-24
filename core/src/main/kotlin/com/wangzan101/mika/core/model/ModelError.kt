@@ -9,11 +9,14 @@ sealed class ModelError(message: String, cause: Throwable? = null) : Exception(m
         internal set
     var errorBody: String? = null
         internal set
+    var errorField: String? = null
+        internal set
 
-    fun withDiagnostics(status: Int? = null, code: String? = null, body: String? = null): ModelError {
+    fun withDiagnostics(status: Int? = null, code: String? = null, body: String? = null, field: String? = null): ModelError {
         if (status != null && httpStatus == null) httpStatus = status
         if (!code.isNullOrBlank() && errorCode == null) errorCode = code
         if (!body.isNullOrBlank() && errorBody == null) errorBody = ModelErrorDiagnostics.scrubAndClip(body)
+        if (!field.isNullOrBlank() && errorField == null) errorField = field
         return this
     }
 

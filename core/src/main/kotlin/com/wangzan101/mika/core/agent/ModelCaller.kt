@@ -44,6 +44,7 @@ internal data class CallDiagnostics(
     val toolListHash: String? = null,
     val promptTransformEffect: String? = null,
     val compactionTrigger: String? = null,
+    val compactionReason: String? = null,
     val foldedSteps: Int = 0,
     val capCheckResult: String = "ok",
     val estimatedInputTokens: Int = 0,
@@ -259,12 +260,14 @@ internal class ModelCaller(
             ?: 0
         val rejectedTool = rejection.tool ?: "None"
         val diag = attempt.diag
-        val costUsd = UsageCostEstimator.usd(
-            attemptModel.name,
-            ROLE_LIGHT,
-            inTok.toLong(),
-            cacheTok.toLong(),
-            outTok.toLong(),
+        val resolvedProvider = attemptModel.provider ?: diag?.provider
+        val costEstimate = UsageCostEstimator.estimate(
+            model = attemptModel.name,
+            role = ROLE_LIGHT,
+            inputTokens = inTok.toLong(),
+            cachedTokens = cacheTok.toLong(),
+            outputTokens = outTok.toLong(),
+            provider = resolvedProvider,
         )
         emit(RunEvent.ModelReply(
             atMs = attempt.endedAt,
@@ -287,13 +290,14 @@ internal class ModelCaller(
             lightTool = rejectedTool,
             lightOutputTokens = lightOutTokens,
             lightRetried = lightRetried,
-            provider = attemptModel.provider ?: diag?.provider,
+            provider = resolvedProvider,
             accepted = false,
             attempt = attemptNum,
             retryCount = retryCount,
             httpStatus = errInfo?.httpStatus,
             errorCode = errInfo?.errorCode,
             errorBody = errInfo?.errorBody,
+            errorField = errInfo?.errorField,
             usageReported = usageReported,
             hasImages = stepCtx.hasImages,
             vision = picked.capabilities.vision,
@@ -306,10 +310,18 @@ internal class ModelCaller(
             toolListHash = diag?.toolListHash,
             promptTransformEffect = diag?.promptTransformEffect,
             compactionTrigger = diag?.compactionTrigger,
+            compactionReason = diag?.compactionReason,
             foldedSteps = diag?.foldedSteps,
             capCheckResult = diag?.capCheckResult,
             estimatedInputTokens = diag?.estimatedInputTokens,
-            costUsd = costUsd,
+            costUsd = costEstimate.costUsd,
+            priceInputPerM = costEstimate.price.inputPerM,
+            priceOutputPerM = costEstimate.price.outputPerM,
+            priceCachedPerM = costEstimate.price.cachedInputPerM,
+            priceSource = costEstimate.price.source,
+            priceFetchedAt = costEstimate.price.fetchedAt,
+            priceTier = costEstimate.price.tier,
+            priceFallback = costEstimate.price.fallback,
         ))
     }
 
@@ -674,6 +686,7 @@ internal class ModelCaller(
                         toolListHash = toolHash,
                         promptTransformEffect = promptTransformEffect,
                         compactionTrigger = sent.trigger ?: capTrigger ?: pendingTrigger,
+                        compactionReason = sent.reason ?: capTrigger?.let { "estimated=${estimatedTotal(sent.messages)} exceeded cap=$inputTokenCap" },
                         foldedSteps = sent.foldedSteps,
                         capCheckResult = capCheckResult,
                         estimatedInputTokens = estimatedTotal(sent.messages),
@@ -687,6 +700,11 @@ internal class ModelCaller(
                 overflowRewrote -> "overflow"
                 capTrigger != null && (sent.trigger == null || (!compaction.aggressive && sent.trigger == "overflow")) -> capTrigger
                 else -> sent.trigger ?: pendingTrigger
+            }
+            val effectiveCompactionReason = when {
+                overflowRewrote -> "provider reported context too long"
+                effectiveTrigger == "cap_100k" -> sent.reason ?: "estimated=${estimatedTotal(sent.messages)} exceeded cap=$inputTokenCap"
+                else -> sent.reason
             }
             if (effectiveTrigger != null) pendingTrigger = effectiveTrigger
             val estInputTokens = estimatedTotal(sent.messages)
@@ -715,6 +733,7 @@ internal class ModelCaller(
                     toolListHash = toolHash,
                     promptTransformEffect = promptTransformEffect,
                     compactionTrigger = effectiveTrigger,
+                    compactionReason = effectiveCompactionReason,
                     foldedSteps = sent.foldedSteps,
                     capCheckResult = capCheckResult,
                     estimatedInputTokens = estInputTokens,
@@ -753,7 +772,7 @@ internal class ModelCaller(
                 compaction = nextCompaction
                 compactions[role] = compaction
                 if (reportCompressed) {
-                    emit(RunEvent.Compressed(now(), sent.foldedSteps, role = role, trigger = effectiveTrigger))
+                    emit(RunEvent.Compressed(now(), sent.foldedSteps, role = role, trigger = effectiveTrigger, reason = effectiveCompactionReason))
                 }
                 val finalMissReason = computeCacheMissReason(prev, effectiveTrigger, modelProviderKey, sysHash, toolHash, promptTransformEffect, reply.usage)
                 prevPrefixByRole[role] = Triple(sysHash, toolHash, modelProviderKey)

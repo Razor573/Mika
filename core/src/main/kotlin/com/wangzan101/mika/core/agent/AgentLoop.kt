@@ -625,6 +625,26 @@ class AgentLoop(
             // 带调用的回复等执行完再记:要看端口是否报告了密码框
             fun recordReply(argsJson: String?) {
                 val stepTelemetry = executor.lastStepTelemetry
+                val resolvedProvider = diag?.provider ?: used.provider
+                val resolvedModel = used.name.ifBlank { model.name }
+                val resolvedRole = caller.roleOf(used)
+                val costEstimate = reply.usage?.let { u ->
+                    UsageCostEstimator.estimate(
+                        model = resolvedModel,
+                        role = resolvedRole,
+                        inputTokens = u.inputTokens.toLong(),
+                        cachedTokens = u.cachedInputTokens.toLong(),
+                        outputTokens = u.outputTokens.toLong(),
+                        provider = resolvedProvider,
+                    )
+                } ?: UsageCostEstimator.estimate(
+                    model = resolvedModel,
+                    role = resolvedRole,
+                    inputTokens = 0L,
+                    cachedTokens = 0L,
+                    outputTokens = 0L,
+                    provider = resolvedProvider,
+                )
                 emit(RunEvent.ModelReply(
                     atMs = now(),
                     step = step,
@@ -636,12 +656,12 @@ class AgentLoop(
                     cachedTokens = reply.usage?.cachedInputTokens,
                     latencyMs = latencyMs,
                     model = if (caller.recordRoles) used.name else null,
-                    role = if (caller.recordRoles) caller.roleOf(used) else null,
+                    role = if (caller.recordRoles) resolvedRole else null,
                     group = caller.groupOf(used),
                     retryWaitMs = retryWaitMs,
                     repliedAtMs = repliedAtMs,
                     lightRetried = diag?.lightRetried,
-                    provider = diag?.provider ?: used.provider,
+                    provider = resolvedProvider,
                     accepted = true,
                     attempt = diag?.attempt,
                     retryCount = diag?.retryCount,
@@ -657,23 +677,25 @@ class AgentLoop(
                     toolListHash = diag?.toolListHash,
                     promptTransformEffect = diag?.promptTransformEffect,
                     compactionTrigger = diag?.compactionTrigger,
+                    compactionReason = diag?.compactionReason,
                     foldedSteps = diag?.foldedSteps,
                     capCheckResult = diag?.capCheckResult,
                     estimatedInputTokens = diag?.estimatedInputTokens,
-                    costUsd = reply.usage?.let { u ->
-                        UsageCostEstimator.usd(
-                            used.name.ifBlank { model.name },
-                            caller.roleOf(used),
-                            u.inputTokens.toLong(),
-                            u.cachedInputTokens.toLong(),
-                            u.outputTokens.toLong(),
-                        )
-                    },
+                    costUsd = reply.usage?.let { costEstimate.costUsd },
+                    priceInputPerM = costEstimate.price.inputPerM,
+                    priceOutputPerM = costEstimate.price.outputPerM,
+                    priceCachedPerM = costEstimate.price.cachedInputPerM,
+                    priceSource = costEstimate.price.source,
+                    priceFetchedAt = costEstimate.price.fetchedAt,
+                    priceTier = costEstimate.price.tier,
+                    priceFallback = costEstimate.price.fallback,
                     screenHash = stepTelemetry?.screenHash,
                     extractedHash = stepTelemetry?.extractedHash,
                     screenChanged = stepTelemetry?.screenChanged,
                     extractedItemsNew = stepTelemetry?.extractedItemsNew,
                     historyReadReason = stepTelemetry?.historyReadReason,
+                    toolSequence = stepTelemetry?.toolSequence,
+                    breakerTrigger = stepTelemetry?.breakerTrigger,
                 ))
             }
 

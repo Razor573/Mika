@@ -14,13 +14,14 @@ import kotlinx.serialization.json.contentOrNull
 import com.wangzan101.mika.core.tool.ToolIndex
 import com.wangzan101.mika.core.tool.Verb
 
-/** [estimate]:[messages] 的 token 粗估(未校准),发出后和真实用量比对用。[rewritten]:这次是否改写了请求前缀。[trigger]:触发本次压缩的原因。 */
+/** [estimate]:[messages] 的 token 粗估(未校准),发出后和真实用量比对用。[rewritten]:这次是否改写了请求前缀。[trigger]:触发本次压缩的原因。[reason]:触发说明。 */
 data class Compressed(
     val messages: List<Message>,
     val foldedSteps: Int,
     val estimate: Int = TokenEstimate.of(messages),
     val rewritten: Boolean = false,
     val trigger: String? = null,
+    val reason: String? = null,
 )
 
 /**
@@ -136,6 +137,10 @@ class ContextCompressor(
         } ?: limits.trigger
         val prefixInvalidated = last != null && view == null
         val overflowTriggered = aggressive && view?.aggressive != true
+        // When periodic 15-step compaction is active on a >=100k window without an explicit model trigger override,
+        // do not fire premature size_trigger (e.g. 87k) every few steps; compact only on periodic_15, real cap, or overflow.
+        val allowSizeTrigger = triggerOverride != null || compactEverySteps <= 0 || effectiveCap < ContextLimits.MAX_INPUT_TOKENS
+        val sizeTriggered = allowSizeTrigger && size > trigger
         // 轮数触发:只为控历史长度。大小还没超、模型没报超长时,只把最早超出的往返折进摘要(见 [foldEvery]);
         // 大小/超长照旧走下面的阶梯。压缩后历史回到 keepRecent 轮,之后只追加,直到又攒够 foldEvery 轮才再折(锯齿,不每步都压)。
         val roundOver = foldEvery != null && toolRounds(sent) > keepRecent + foldEvery
@@ -143,16 +148,31 @@ class ContextCompressor(
             prefixInvalidated -> "prefix_invalidated"
             overflowTriggered -> "overflow"
             overCap -> "cap_100k"
-            size > trigger -> "size_trigger"
+            sizeTriggered -> "size_trigger"
             periodicCompact -> "periodic_15"
             roundOver -> "round_over"
             else -> null
         }
-        val compact = prefixInvalidated || overflowTriggered || size > trigger || overCap || periodicCompact
+        val triggerDetail = when (triggerReason) {
+            "prefix_invalidated" -> "history prefix diverged from cached compaction view"
+            "overflow" -> "provider reported context too long"
+            "cap_100k" -> "estimated=${maxOf(size, rawSize)} exceeded cap=$effectiveCap"
+            "size_trigger" -> "estimated=$size exceeded trigger=$trigger"
+            "periodic_15" -> "steps_since_compact=$stepsSinceCompact >= interval=$compactEverySteps"
+            "round_over" -> "tool_rounds=${toolRounds(sent)} > keepRecent+foldEvery"
+            else -> null
+        }
+        val compact = prefixInvalidated || overflowTriggered || sizeTriggered || overCap || periodicCompact
         if (!compact && !roundOver) return Compressed(HistoryPruner.limitImages(sent, maxImages), view?.folded ?: 0)
         val next = if (compact) compact(history, limits, fixedOverhead, aggressive, periodicCompact) else foldToRecent(history)
         views[contextTokens] = next
-        return Compressed(HistoryPruner.limitImages(next.base, maxImages), next.folded, rewritten = true, trigger = triggerReason)
+        return Compressed(
+            HistoryPruner.limitImages(next.base, maxImages),
+            next.folded,
+            rewritten = true,
+            trigger = triggerReason,
+            reason = triggerDetail,
+        )
     }
 
     /**

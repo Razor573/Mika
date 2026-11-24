@@ -113,6 +113,7 @@ sealed interface RunEvent {
         val httpStatus: Int? = null,
         val errorCode: String? = null,
         val errorBody: String? = null,
+        val errorField: String? = null,
         val usageReported: Boolean? = null,
         val hasImages: Boolean? = null,
         val vision: Boolean? = null,
@@ -125,15 +126,25 @@ sealed interface RunEvent {
         val toolListHash: String? = null,
         val promptTransformEffect: String? = null,
         val compactionTrigger: String? = null,
+        val compactionReason: String? = null,
         val foldedSteps: Int? = null,
         val capCheckResult: String? = null,
         val estimatedInputTokens: Int? = null,
         val costUsd: Double? = null,
+        val priceInputPerM: Double? = null,
+        val priceOutputPerM: Double? = null,
+        val priceCachedPerM: Double? = null,
+        val priceSource: String? = null,
+        val priceFetchedAt: String? = null,
+        val priceTier: String? = null,
+        val priceFallback: Boolean? = null,
         val screenHash: String? = null,
         val extractedHash: String? = null,
         val screenChanged: Boolean? = null,
         val extractedItemsNew: Boolean? = null,
         val historyReadReason: String? = null,
+        val toolSequence: List<String>? = null,
+        val breakerTrigger: String? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
         val acted: Boolean get() = role != "light_rejected" && accepted != false
@@ -306,6 +317,7 @@ sealed interface RunEvent {
         val foldedSteps: Int,
         val role: String? = null,
         val trigger: String? = null,
+        val reason: String? = null,
     ) : RunEvent
 
     /** [outcome]:succeeded / unverified / failed / cancelled / error;[kind] 是失败的类别(FailKind 的小写名),其余为 null,旧记录没有。 */

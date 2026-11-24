@@ -288,7 +288,7 @@ class ReasoningSettingsTest {
         val vertex = ProviderConfig("v", ProviderConfig.Kind.Vertex, VertexEndpoints.GLOBAL_HOST, "gemini-4-hydrogen", caps, "Vertex AI", "pv")
         val ag = ProviderConfig("a", ProviderConfig.Kind.Antigravity, AntigravityAuth.API_BASE, "gemini-4-hydrogen", caps, "Antigravity", "pa")
         val gem = ProviderConfig("g", ProviderConfig.Kind.Gemini, "https://generativelanguage.googleapis.com", "gemini-2.5-flash", caps, "Gemini", "pg")
-        assertEquals(ReasoningOptions(listOf("minimal", "low", "medium", "high"), fromProvider = false), ReasoningOptions.of(vertex, ListedModel("gemini-4-hydrogen")))
+        assertEquals(ReasoningOptions(listOf("low", "medium", "high"), fromProvider = false), ReasoningOptions.of(vertex, ListedModel("gemini-4-hydrogen")))
         assertEquals(ReasoningOptions(listOf("minimal", "low", "medium", "high", "xhigh"), fromProvider = false), ReasoningOptions.of(ag, ListedModel("gemini-4-hydrogen")))
         assertNull(ReasoningOptions.of(gem, ListedModel("gemini-2.5-flash")))
     }

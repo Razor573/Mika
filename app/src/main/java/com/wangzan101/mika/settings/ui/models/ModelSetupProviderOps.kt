@@ -40,6 +40,9 @@ fun ModelSetupViewModel.refresh(providerId: String) {
             is ModelListResult.Failed -> if (!preserveCacheOnNotSupported && r.reason == ListFailure.NotSupported) emptyList() else null
         }
         if (models != null) withContext(io) { store.rememberModels(p.id, models) }
+        if (p.kind == ProviderConfig.Kind.Vertex || p.kind == ProviderConfig.Kind.Gemini) {
+            runCatching { withContext(io) { store.onModelsRefreshed?.invoke(p) } }
+        }
         val after = if (r is ModelListResult.Failed && models == null) ListState.Failed(listMessage(r)) else ListState.Idle
         _state.update { snapshot(it.copy(listing = it.listing + (providerId to after))) }
     }

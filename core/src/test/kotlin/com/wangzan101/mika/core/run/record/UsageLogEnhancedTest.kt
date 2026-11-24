@@ -167,6 +167,13 @@ class UsageLogEnhancedTest {
         assertEquals("ok", firstMain["capCheckResult"]?.jsonPrimitive?.content)
         assertTrue((firstMain["estimatedInputTokens"]?.jsonPrimitive?.int ?: 0) > 0)
         assertTrue((firstMain["costUsd"]?.jsonPrimitive?.double ?: 0.0) > 0.0)
+        assertNotNull(firstMain["priceInputPerM"])
+        assertNotNull(firstMain["priceOutputPerM"])
+        assertNotNull(firstMain["priceCachedPerM"])
+        assertNotNull(firstMain["priceSource"])
+        assertNotNull(firstMain["priceFetchedAt"])
+        assertEquals("standard", firstMain["priceTier"]?.jsonPrimitive?.content)
+        assertNotNull(firstMain["priceFallback"])
 
         // Summary row reconciles unreported reasons
         val summary = rows.last()

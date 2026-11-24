@@ -37,6 +37,7 @@ import com.wangzan101.mika.core.cap.sandbox.SandboxStatus
 import com.wangzan101.mika.core.run.Outbox
 import com.wangzan101.mika.core.run.RunStore
 import com.wangzan101.mika.core.model.usage.UsageLedger
+import com.wangzan101.mika.core.run.record.PricingCacheStore
 import com.wangzan101.mika.core.workspace.SandboxTree
 import com.wangzan101.mika.i18n.AppLanguage
 import com.wangzan101.mika.i18n.ResourceTexts
@@ -49,7 +50,10 @@ import com.wangzan101.mika.knowledge.FileRouteStore
 import com.wangzan101.mika.settings.ApprovalControl
 import com.wangzan101.mika.settings.ApprovalStore
 import com.wangzan101.mika.settings.FeatureFlags
+import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.providerKey
+import com.wangzan101.mika.settings.vertexTokenProviderFor
 import com.wangzan101.mika.settings.modelFor
 import com.wangzan101.mika.settings.proactiveTarget
 import com.wangzan101.mika.settings.proactiveTargeted
@@ -208,16 +212,42 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
     /** 本机的 token 用量账本:经模型配置建出的每个模型的每次调用都记在这里。 */
     val usage: UsageLedger by lazy { UsageLedger(java.io.File(filesDir, "usage-v1.json")) }
 
+    /** 本地模型价格缓存:启动时加载并按周从 Google 官方账单目录/定价页刷新(不走搜索接地)。 */
+    val pricingCache: PricingCacheStore by lazy {
+        PricingCacheStore(java.io.File(filesDir, PricingCacheStore.FILE)).also { it.loadIntoEstimator() }
+    }
+
     /** 模型配置与 Key;建出的模型都套上计量,记到 [usage]。 */
     override val providers: ProviderStore by lazy {
         ProviderStore.create(this, usage, "Mika/${BuildConfig.VERSION_NAME}", usage::providerTokensToday,
             proactiveUsage = usage::proactiveTokensToday, proactiveLimit = { FeatureFlags.get(this).proactiveDailyTokenBudget() },
             proactiveCalls = usage::proactiveCallsToday).also { store ->
             voiceSettings.reconcileTtsChoice(store)
+            store.onModelsRefreshed = {
+                refreshPricing(force = true)
+            }
             scope.launch(Dispatchers.Main.immediate) {
                 store.providers.collect { voiceSettings.reconcileTtsChoice(store) }
             }
         }
+    }
+
+    internal suspend fun refreshPricing(force: Boolean = false) {
+        val list = providers.providers.value
+        val vertexProvider = list.firstOrNull { it.kind == ProviderConfig.Kind.Vertex }
+        val geminiProvider = list.firstOrNull { it.kind == ProviderConfig.Kind.Gemini }
+        val bearer = vertexProvider?.let { p ->
+            runCatching { providers.vertexTokenProviderFor(p.id).get(false) }.getOrNull()
+        }
+        val project = vertexProvider?.projectId?.takeIf { it.isNotBlank() }
+        val apiKey = geminiProvider?.let { providers.providerKey(it.id) }
+        pricingCache.refreshIfStale(
+            http = ProviderStore.modelHttp,
+            billingBearerToken = bearer,
+            billingApiKey = apiKey,
+            billingProjectId = project,
+            force = force,
+        )
     }
 
     /** 语音转文字的选择:整个进程一份,设置页改了输入框立刻看得到(两份实例互相看不到对方的 set)。 */
@@ -648,6 +678,7 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         // 上次进程在复制或绑定分享草稿途中退出时留下的临时文件;目录至多保留一份有效草稿。
         runCatching { sharedDrafts.cleanup() }
         scope.launch(Dispatchers.IO) {
+            runCatching { pricingCache.loadIntoEstimator(); refreshPricing(force = false) }
             runCatching { updateMirrors.ensureLoaded() }
             runCatching { com.wangzan101.mika.task.AndroidDeviceFiles.cleanupStaging(SandboxDirs(this@MikaApp)) }
                 .onFailure { Log.w("MikaImport", "Could not clean device import staging", it) }

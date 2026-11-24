@@ -466,6 +466,33 @@ class VertexModelTest {
         } catch (_: ModelError.ContentRefused) {
         }
         server.takeRequest()
+
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Invalid value at 'generation_config.thinking_config.thinking_level'","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generation_config.thinking_config.thinking_level","description":"bad"}]}]}}"""),
+        )
+        try {
+            model(modelId = "gemini-3.8-flash").complete("s", user, listOf(ToolSpec("phone_tap", "Tap", """{"type":"object","properties":{"x":{"type":"integer"}}}""")), CallOptions.LIGHT_TOOL_ONLY)
+            fail("expected ModelError")
+        } catch (e: ModelError) {
+            assertEquals(400, e.httpStatus)
+            assertEquals("INVALID_ARGUMENT", e.errorCode)
+            assertEquals("generation_config.thinking_config.thinking_level", e.errorField)
+            server.takeRequest()
+        }
+
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("""{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Request contains an invalid argument."}}"""),
+        )
+        try {
+            model(modelId = "gemini-3.8-flash").complete("s", user, listOf(ToolSpec("phone_tap", "Tap", """{"type":"object","properties":{"x":{"type":"integer"}}}""")), CallOptions.LIGHT_TOOL_ONLY)
+            fail("expected ModelError")
+        } catch (e: ModelError) {
+            assertEquals(400, e.httpStatus)
+            assertTrue(e.errorField?.contains("tool_config.function_calling_config.mode=ANY") == true)
+            server.takeRequest()
+        }
     }
 
     @Test

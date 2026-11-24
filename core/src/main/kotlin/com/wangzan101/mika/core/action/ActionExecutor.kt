@@ -152,6 +152,10 @@ class ActionExecutor(
         if (policy.stopOnGuardWarning && before.isNotEmpty()) return refuse("guard_warning", origin, before)
         if (origin is Origin.Model) {
             guards.checkBeforeTool(call.name)?.let { verdict ->
+                lastStepTelemetry = guards.blockedTelemetry(
+                    call.name,
+                    historyReadReason = if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
                 if (guards.stop != null) return refuse("guard_stopped", origin, before + verdict)
                 return ran(Step(
                     call, args, origin, before + verdict, writing = false, offScreen, verb, null, followUp, reads,
@@ -335,6 +339,7 @@ class ActionExecutor(
     private fun computeStepTelemetry(s: Step, resolved: ToolExecution, elements: JsonArray?): StepHashOutcome? {
         if (s.origin !is Origin.Model) return null
         if (s.preset != null) {
+            if (lastStepTelemetry != null) return lastStepTelemetry
             if (s.call.name != HISTORY_READ) return null
             return StepHashOutcome(
                 screenHash = null,
@@ -343,6 +348,8 @@ class ActionExecutor(
                 extractedItemsNew = null,
                 staleCycleCount = guards.currentStaleCycleCount,
                 historyReadReason = HistoryRead.sanitizedReason(s.args),
+                toolSequence = guards.currentToolSequence.takeIf { it.isNotEmpty() },
+                breakerTrigger = guards.currentBreakerTrigger,
             ).also { lastStepTelemetry = it }
         }
         val session = tools.interfaces.session

@@ -26,6 +26,9 @@ internal object GeminiCodec {
 
     // Gemini 不接受 additionalProperties / $schema / $id 等 OpenAPI 子集之外的键
     private val rejectedKeys = setOf("additionalProperties", "\$schema", "\$id", "\$defs")
+    // Under tool_config.function_calling_config.mode=ANY, Vertex AI compiles tool schemas into a CFG grammar;
+    // large array bounds (e.g. minItems=1, maxItems=30 on phone_run/do_each) exceed Vertex's grammar limit -> HTTP 400.
+    private val forcedToolRejectedKeys = rejectedKeys + setOf("minItems", "maxItems")
 
     fun buildPayload(
         system: String,
@@ -36,37 +39,42 @@ internal object GeminiCodec {
         reasoningEffort: String? = null,
         googleSearch: Boolean = false,
         forceToolCall: Boolean = false,
+        model: String = "",
     ): JsonObject {
         val systemText = (listOf(system) + messages.filter { it.role == Role.System }
             .map { m -> m.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text } })
             .filter { it.isNotBlank() }.joinToString("\n\n")
+        val stripArrayBounds = forceToolCall && tools.isNotEmpty()
+        val effectiveEffort = resolveEffectiveEffort(reasoningEffort, forceToolCall, model)
         return buildJsonObject {
             if (systemText.isNotBlank()) putJsonObject("systemInstruction") {
                 putJsonArray("parts") { add(buildJsonObject { put("text", systemText) }) }
             }
             if (tools.isNotEmpty() || googleSearch) put("tools", buildJsonArray {
                 if (tools.isNotEmpty()) add(buildJsonObject {
-                    put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it)) } })
+                    put("functionDeclarations", buildJsonArray { tools.forEach { add(toolJson(it, stripArrayBounds)) } })
                 })
                 if (googleSearch) add(buildJsonObject {
                     putJsonObject("googleSearch") {}
                 })
             })
-            if (forceToolCall && tools.isNotEmpty()) putJsonObject("tool_config") {
+            if (stripArrayBounds) putJsonObject("tool_config") {
                 putJsonObject("function_calling_config") {
                     put("mode", "ANY")
                 }
             }
             put("contents", buildContents(messages, vision))
-            if (maxOutputTokens != null || reasoningEffort != null) putJsonObject("generationConfig") {
+            if (maxOutputTokens != null || effectiveEffort != null) putJsonObject("generationConfig") {
                 maxOutputTokens?.let { put("maxOutputTokens", it) }
-                reasoningEffort?.let { effort ->
+                effectiveEffort?.let { effort ->
                     putJsonObject("thinkingConfig") {
-                        if (effort == "none") {
-                            put("thinkingBudget", 0)
-                        } else {
-                            put("includeThoughts", true)
-                            put("thinkingLevel", effort.uppercase())
+                        when {
+                            effort == "none" -> put("thinkingBudget", 0)
+                            forceToolCall -> put("thinkingLevel", effort.uppercase())
+                            else -> {
+                                put("includeThoughts", true)
+                                put("thinkingLevel", effort.uppercase())
+                            }
                         }
                     }
                 }
@@ -74,23 +82,48 @@ internal object GeminiCodec {
         }
     }
 
-    // 只在 schema 位置剔除;properties 是 名称->schema 的映射,名称本身不动
-    fun sanitize(el: JsonElement): JsonElement = when (el) {
-        is JsonObject -> JsonObject(el.filterKeys { it !in rejectedKeys }.mapValues { (k, v) ->
-            if (k == "properties" && v is JsonObject) JsonObject(v.mapValues { sanitize(it.value) }) else sanitize(v)
-        })
-        is JsonArray -> JsonArray(el.map { sanitize(it) })
-        else -> el
+    internal fun resolveEffectiveEffort(reasoningEffort: String?, forceToolCall: Boolean, model: String): String? {
+        val lowerModel = model.trim().lowercase()
+        val isGemini4 = lowerModel.contains("gemini-4")
+        val isGemini = lowerModel.contains("gemini-")
+        val normalized = reasoningEffort?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        if (normalized != null) {
+            return when (normalized) {
+                "none" -> if (isGemini4) "low" else "none"
+                // Vertex gemini-3.8-flash and gemini-4-hydrogen reject THINKING_LEVEL_MINIMAL with HTTP 400.
+                "minimal" -> if (forceToolCall && !isGemini4) "none" else "low"
+                else -> normalized
+            }
+        }
+        if (forceToolCall && isGemini) {
+            // gemini-3.8-flash spends ~188+ tokens thinking by default, starving LIGHT_MAX_OUTPUT_TOKENS (200)
+            // before emitting a functionCall; gemini-4-hydrogen supports thinkingLevel=LOW instead of thinkingBudget=0.
+            return if (isGemini4) "low" else "none"
+        }
+        return null
     }
 
-    fun toolJson(t: ToolSpec): JsonObject = buildJsonObject {
+    // 只在 schema 位置剔除;properties 是 名称->schema 的映射,名称本身不动
+    fun sanitize(el: JsonElement, stripArrayBounds: Boolean = false): JsonElement {
+        val drop = if (stripArrayBounds) forcedToolRejectedKeys else rejectedKeys
+        return when (el) {
+            is JsonObject -> JsonObject(el.filterKeys { it !in drop }.mapValues { (k, v) ->
+                if (k == "properties" && v is JsonObject) JsonObject(v.mapValues { sanitize(it.value, stripArrayBounds) })
+                else sanitize(v, stripArrayBounds)
+            })
+            is JsonArray -> JsonArray(el.map { sanitize(it, stripArrayBounds) })
+            else -> el
+        }
+    }
+
+    fun toolJson(t: ToolSpec, stripArrayBounds: Boolean = false): JsonObject = buildJsonObject {
         put("name", t.name)
         put("description", t.description)
         val schema = try { json.parseToJsonElement(t.parametersJsonSchema) } catch (e: Exception) {
             throw IllegalArgumentException("工具 ${t.name} 的参数 schema 不是合法 JSON", e)
         }
         // 无参数工具:Gemini 拒绝没有 properties 的 object schema,省略 parameters
-        val clean = sanitize(schema)
+        val clean = sanitize(schema, stripArrayBounds)
         val hasProps = (clean as? JsonObject)?.get("properties")?.let { it is JsonObject && it.isNotEmpty() } == true
         if (hasProps) put("parameters", clean)
     }

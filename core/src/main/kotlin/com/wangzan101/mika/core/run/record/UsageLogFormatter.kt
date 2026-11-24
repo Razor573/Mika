@@ -4,6 +4,7 @@ import com.wangzan101.mika.core.model.ModelErrorDiagnostics
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -101,6 +102,9 @@ data class UsageRunSummary(
     val lightAcceptedRate: Double,
     val lightRejectedRate: Double,
     val retryWaitTotalMs: Long,
+    val priceSource: String? = null,
+    val priceFetchedAt: String? = null,
+    val priceFallback: Boolean? = null,
 )
 
 object UsageLogFormatter {
@@ -115,14 +119,17 @@ object UsageLogFormatter {
             "step", "model", "role", "group", "tool", "inputTokens", "cachedTokens",
             "outputTokens", "repliedAtMs", "latencyMs", "retryWaitMs",
             "reason", "decisionScore", "validatorReason", "lightTool", "lightOutputTokens", "lightRetried",
-            "provider", "accepted", "attempt", "retryCount", "httpStatus", "errorCode", "errorBody",
+            "provider", "accepted", "attempt", "retryCount", "httpStatus", "errorCode", "errorBody", "errorField",
             "usageReported", "hasImages", "vision", "sameApp", "lastChanged", "forcedMain",
             "cacheMissReason", "systemPromptHash", "promptVersion", "toolListHash",
-            "promptTransformEffect", "compactionTrigger", "foldedSteps", "capCheckResult",
-            "estimatedInputTokens", "costUsd", "screenHash", "extractedHash",
+            "promptTransformEffect", "compactionTrigger", "compactionReason", "foldedSteps", "capCheckResult",
+            "estimatedInputTokens", "costUsd",
+            "priceInputPerM", "priceOutputPerM", "priceCachedPerM", "priceSource", "priceFetchedAt", "priceTier", "priceFallback",
+            "screenHash", "extractedHash",
             "screenChanged", "extractedItemsNew", "historyReadReason",
+            "toolSequence", "breakerTrigger",
         ),
-        "compressed" to setOf("foldedSteps", "role", "trigger"),
+        "compressed" to setOf("foldedSteps", "role", "trigger", "reason"),
         "model_calls" to setOf(
             "calls", "httpCalls", "unreported", "httpUnreported",
             "inputTokens", "cachedTokens", "outputTokens", "deepSeekCost",
@@ -141,6 +148,7 @@ object UsageLogFormatter {
     )
 
     private val OBJECT_FIELDS = setOf("unreportedReasons", "byPurpose", "deepSeekCost")
+    private val ARRAY_FIELDS = setOf("toolSequence")
 
     fun formatLines(
         rawLines: Sequence<String>,
@@ -229,7 +237,18 @@ object UsageLogFormatter {
             else JsonPrimitive(Redactor.text(value.content))
         }
         is JsonObject -> if (key in OBJECT_FIELDS) sanitizeObject(value) else null
-        else -> null
+        is JsonArray -> if (key in ARRAY_FIELDS) sanitizeArray(value) else null
+    }
+
+    private fun sanitizeArray(arr: JsonArray): JsonArray {
+        val out = ArrayList<JsonElement>(arr.size)
+        for (v in arr) {
+            when (v) {
+                is JsonPrimitive -> out += if (v.isString) JsonPrimitive(Redactor.text(v.content)) else v
+                else -> Unit
+            }
+        }
+        return JsonArray(out)
     }
 
     private fun sanitizeObject(obj: JsonObject): JsonObject {
@@ -423,10 +442,12 @@ object UsageLogFormatter {
                 val isAccepted = !isRejected
                 val modelName = r.model?.takeIf { it.isNotBlank() }
                     ?: if (role == "light") (lightModel ?: mainModel ?: "unknown") else (mainModel ?: "unknown")
+                val providerName = r.provider?.takeIf { it.isNotBlank() }
+                    ?: if (role == "light") (lightProvider ?: mainProvider) else mainProvider
                 val inTok = (r.inputTokens ?: 0).coerceAtLeast(0)
                 val outTok = (r.outputTokens ?: 0).coerceAtLeast(0)
                 val cacheTok = (r.cachedTokens ?: 0).coerceAtLeast(0)
-                val cost = replyCostUsd(r, modelName, role)
+                val cost = replyCostUsd(r, modelName, providerName, role)
 
                 if (r.acted) {
                     steps = maxOf(steps, r.step)
@@ -476,7 +497,9 @@ object UsageLogFormatter {
                 sideCached = sideCached,
                 sideOutput = sideOutput,
                 mainModel = mainModel,
+                mainProvider = mainProvider,
                 lightModel = lightModel,
+                lightProvider = lightProvider,
                 byPurpose = mc?.byPurpose,
                 parentMainCalls = parentMainCalls,
                 parentLightCalls = parentLightCalls,
@@ -631,6 +654,9 @@ object UsageLogFormatter {
                 lightAcceptedRate = lightAcceptedRate,
                 lightRejectedRate = lightRejectedRate,
                 retryWaitTotalMs = retryWaitTotalMs,
+                priceSource = replies.firstNotNullOfOrNull { it.priceSource },
+                priceFetchedAt = replies.firstNotNullOfOrNull { it.priceFetchedAt },
+                priceFallback = replies.mapNotNull { it.priceFallback }.takeIf { it.isNotEmpty() }?.any { it },
             )
         }
     }
@@ -667,7 +693,7 @@ object UsageLogFormatter {
             ?: e.errorCode?.takeIf { it.isNotBlank() }
             ?: "usage_omitted_by_provider"
 
-    private fun replyCostUsd(e: RunEvent.ModelReply, model: String?, role: String): Double {
+    private fun replyCostUsd(e: RunEvent.ModelReply, model: String?, provider: String?, role: String): Double {
         e.costUsd?.takeIf { it.isFinite() && it >= 0.0 }?.let { return roundUsd(it) }
         val inTok = e.inputTokens
         val outTok = e.outputTokens
@@ -678,6 +704,7 @@ object UsageLogFormatter {
             inputTokens = (inTok ?: 0).toLong(),
             cachedTokens = (e.cachedTokens ?: 0).toLong(),
             outputTokens = (outTok ?: 0).toLong(),
+            provider = provider,
         )
     }
 
@@ -686,7 +713,9 @@ object UsageLogFormatter {
         sideCached: Long,
         sideOutput: Long,
         mainModel: String?,
+        mainProvider: String?,
         lightModel: String?,
+        lightProvider: String?,
         byPurpose: Map<String, Int>?,
         parentMainCalls: Int,
         parentLightCalls: Int,
@@ -698,15 +727,16 @@ object UsageLogFormatter {
             val extraVision = byPurpose["vision"] ?: 0
             val extraOther = (byPurpose["other"] ?: 0) + (byPurpose["proactive"] ?: 0)
             if (extraMain > 0 && extraLight <= 0 && extraVision <= 0 && extraOther <= 0) {
-                return UsageCostEstimator.usd(mainModel, "main", sideInput, sideCached, sideOutput)
+                return UsageCostEstimator.usd(mainModel, "main", sideInput, sideCached, sideOutput, provider = mainProvider)
             }
             if (extraLight > 0 && extraMain <= 0) {
-                return UsageCostEstimator.usd(lightModel ?: mainModel, "light", sideInput, sideCached, sideOutput)
+                return UsageCostEstimator.usd(lightModel ?: mainModel, "light", sideInput, sideCached, sideOutput, provider = lightProvider ?: mainProvider)
             }
         }
         val fallbackModel = lightModel ?: mainModel
+        val fallbackProvider = if (lightModel != null) (lightProvider ?: mainProvider) else mainProvider
         val fallbackRole = if (lightModel != null) "light" else "main"
-        return UsageCostEstimator.usd(fallbackModel, fallbackRole, sideInput, sideCached, sideOutput)
+        return UsageCostEstimator.usd(fallbackModel, fallbackRole, sideInput, sideCached, sideOutput, provider = fallbackProvider)
     }
 
     private fun finiteNonNegative(value: Double): Double =

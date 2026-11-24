@@ -22,6 +22,8 @@ data class StepHashOutcome(
     val extractedItemsNew: Boolean?,
     val staleCycleCount: Int,
     val historyReadReason: String? = null,
+    val toolSequence: List<String>? = null,
+    val breakerTrigger: String? = null,
 )
 
 /**
@@ -114,8 +116,13 @@ class OperationGuards(private val stepBudget: Int? = null) {
     private var lastToolWasHistoryRead = false
     private var historyReadsSinceScreenChange = 0
     private var phoneSessionActive = false
+    private val stalledToolSeq = ArrayDeque<String>()
+    private var consecutiveSequenceBlocks = 0
+    private var lastBreakerTrigger: String? = null
 
     internal val currentStaleCycleCount: Int get() = staleCycleCount
+    internal val currentToolSequence: List<String> get() = stalledToolSeq.toList()
+    internal val currentBreakerTrigger: String? get() = lastBreakerTrigger
 
     var stop: GuardVerdict? = null
         private set
@@ -144,7 +151,9 @@ class OperationGuards(private val stepBudget: Int? = null) {
 
     /** 执行模型单步前检查是否连续重读历史或陷入无进展循环。 */
     fun checkBeforeTool(tool: String): GuardVerdict? {
+        lastBreakerTrigger = null
         if (tool == "history_read" && (lastToolWasHistoryRead || (phoneSessionActive && historyReadsSinceScreenChange >= 1))) {
+            lastBreakerTrigger = "history_read_consecutive_limit"
             return GuardVerdict(
                 "history_read_consecutive_limit",
                 Severity.Warn,
@@ -158,6 +167,7 @@ class OperationGuards(private val stepBudget: Int? = null) {
         if (staleCycleCount >= 2 && tool in CYCLE_REPEAT_TOOLS) {
             consecutiveCycleBlocks += 1
             if (consecutiveCycleBlocks >= 2) {
+                lastBreakerTrigger = "screen_hash_cycle_stop"
                 stop = GuardVerdict(
                     "no_progress_cycle",
                     Severity.Stop,
@@ -169,6 +179,7 @@ class OperationGuards(private val stepBudget: Int? = null) {
                 )
                 return stop
             }
+            lastBreakerTrigger = "screen_hash_cycle_2x"
             return GuardVerdict(
                 "no_progress_cycle_blocked",
                 Severity.Warn,
@@ -179,8 +190,51 @@ class OperationGuards(private val stepBudget: Int? = null) {
                 "Screen and extracted items have repeated $staleCycleCount times in a row without progress. Do NOT repeat $tool. Force a different action: tap the next unopened item on screen, change the search query/filter, navigate back, or end the task with a clear reason if no new item exists.",
             )
         }
+        val repeating = detectRepeatingSequence(stalledToolSeq.toList())
+            ?.takeIf { pattern -> pattern.any { it !in PURE_OBSERVATION_TOOLS } }
+        if (repeating != null && tool in repeating) {
+            val seqLabel = repeating.joinToString("->")
+            consecutiveSequenceBlocks += 1
+            if (consecutiveSequenceBlocks >= 2) {
+                lastBreakerTrigger = "tool_sequence_3x_stop:$seqLabel"
+                stop = GuardVerdict(
+                    "tool_sequence_loop",
+                    Severity.Stop,
+                    buildJsonObject {
+                        put("pattern", JsonArray(repeating.map(::JsonPrimitive)))
+                        put("repeats", SEQUENCE_MIN_REPEATS)
+                        put("blockedTool", tool)
+                    },
+                    "Stopped: tool sequence '$seqLabel' repeated ${SEQUENCE_MIN_REPEATS}+ times without progress toward the goal.",
+                )
+                return stop
+            }
+            lastBreakerTrigger = "tool_sequence_3x:$seqLabel"
+            return GuardVerdict(
+                "tool_sequence_loop_blocked",
+                Severity.Warn,
+                buildJsonObject {
+                    put("pattern", JsonArray(repeating.map(::JsonPrimitive)))
+                    put("repeats", SEQUENCE_MIN_REPEATS)
+                    put("blockedTool", tool)
+                },
+                "Tool sequence '$seqLabel' repeated $SEQUENCE_MIN_REPEATS times in a row with no progress toward the goal. Do NOT repeat $tool. Force a different action: tap the next unopened item on screen, change the search query/filter, navigate back, or end the task with a clear reason if no new item exists.",
+            )
+        }
         return null
     }
+
+    internal fun blockedTelemetry(tool: String, historyReadReason: String? = null): StepHashOutcome =
+        StepHashOutcome(
+            screenHash = null,
+            extractedHash = null,
+            screenChanged = null,
+            extractedItemsNew = null,
+            staleCycleCount = staleCycleCount,
+            historyReadReason = historyReadReason,
+            toolSequence = (stalledToolSeq.toList() + tool).takeLast(SEQUENCE_WINDOW_LOG),
+            breakerTrigger = lastBreakerTrigger,
+        )
 
     /** 记录工具执行后的屏幕/提取哈希与周期计数变化。 */
     fun recordStepOutcome(
@@ -228,13 +282,37 @@ class OperationGuards(private val stepBudget: Int? = null) {
             }
         }
 
+        val goalProgressed = extractedItemsNew == true ||
+            (tool in GOAL_PROGRESS_TOOLS && ok && screenChanged != false)
+        if (goalProgressed) {
+            stalledToolSeq.clear()
+            consecutiveSequenceBlocks = 0
+            lastBreakerTrigger = null
+        } else {
+            stalledToolSeq.pushCapped(tool, cap = SEQUENCE_TRACK_KEEP)
+            detectRepeatingSequence(stalledToolSeq.toList())
+                ?.takeIf { pattern -> pattern.any { it !in PURE_OBSERVATION_TOOLS } }
+                ?.let { pattern ->
+                    lastBreakerTrigger = "tool_sequence_3x:${pattern.joinToString("->")}"
+                }
+        }
+        val loggedSeq = stalledToolSeq.toList().takeLast(SEQUENCE_WINDOW_LOG).takeIf { it.isNotEmpty() }
+
         lastScreenHash = screenHash ?: lastScreenHash
         lastExtractedHash = extractedHash ?: lastExtractedHash
         lastToolWasHistoryRead = (tool == "history_read")
         if (tool == "history_read" && ok) {
             historyReadsSinceScreenChange += 1
         }
-        return StepHashOutcome(screenHash, extractedHash, screenChanged, extractedItemsNew, staleCycleCount)
+        return StepHashOutcome(
+            screenHash = screenHash,
+            extractedHash = extractedHash,
+            screenChanged = screenChanged,
+            extractedItemsNew = extractedItemsNew,
+            staleCycleCount = staleCycleCount,
+            toolSequence = loggedSeq,
+            breakerTrigger = lastBreakerTrigger,
+        )
     }
 
     /** 一个会改变界面的动作要做了。 */
@@ -409,6 +487,39 @@ class OperationGuards(private val stepBudget: Int? = null) {
         )
         val CYCLE_TRACKED_TOOLS = setOf("phone_scroll", "phone_observe", "phone_extract", "phone_collect")
         val CYCLE_ADVANCE_TOOLS = setOf("phone_extract", "phone_collect")
+        val GOAL_PROGRESS_TOOLS = setOf(
+            "phone_tap", "phone_type", "phone_input", "phone_launch_app", "phone_open_link",
+            "phone_set_wheel", "do_each", "phone_run", "do_steps",
+            "web_click", "web_type", "web_open",
+        )
+        // Standalone screen-read tools already have dedicated read_loop (5/8/12) and screen-hash cycle guards;
+        // sequence breaker focuses on loops with scroll/swipe/extract/offscreen/system/history/memory tools.
+        val PURE_OBSERVATION_TOOLS = setOf(
+            "phone_observe", "phone_list_elements", "phone_query",
+        )
+        const val SEQUENCE_TRACK_KEEP = 16
+        const val SEQUENCE_WINDOW_LOG = 8
+        const val SEQUENCE_MIN_REPEATS = 3
+        const val SEQUENCE_MAX_PERIOD = 4
+
+        internal fun detectRepeatingSequence(seq: List<String>, minRepeats: Int = SEQUENCE_MIN_REPEATS, maxPeriod: Int = SEQUENCE_MAX_PERIOD): List<String>? {
+            for (period in 1..maxPeriod) {
+                val needed = period * minRepeats
+                if (seq.size < needed) continue
+                val start = seq.size - needed
+                val unit = seq.subList(seq.size - period, seq.size)
+                var allMatch = true
+                for (r in 0 until minRepeats - 1) {
+                    val off = start + r * period
+                    if (seq.subList(off, off + period) != unit) {
+                        allMatch = false
+                        break
+                    }
+                }
+                if (allMatch) return unit
+            }
+            return null
+        }
 
         /** 各条提醒开头说卡在哪的那句(prompts/feedback/tools.md)。 */
         val LEADS = mapOf(
