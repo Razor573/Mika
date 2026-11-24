@@ -35,6 +35,7 @@ fun ProviderStore.removeProviderKey(providerId: String, keyToRemove: String) {
 /** 服务商当前活跃可用的密钥 (优先从 KeyPool 中自动轮询、避开限流密钥)。 */
 fun ProviderStore.activeApiKey(providerId: String): String? {
     val raw = providerKey(providerId) ?: return null
+    if (provider(providerId)?.kind == ProviderConfig.Kind.Vertex) return raw
     KeyPoolManager.shared.register(providerId, raw)
     return KeyPoolManager.shared.getActiveKey(providerId) ?: providerKeys(providerId).firstOrNull()
 }

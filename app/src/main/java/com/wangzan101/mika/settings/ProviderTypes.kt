@@ -146,7 +146,7 @@ internal const val TEMP_COMPACTION_EVERY_ROUNDS = 16
 
 /** 留空的窗口沿用所选模型配置，留空的触发点交给核心自动计算，留空的读超时用全局默认(120 秒)。 */
 data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens: Int? = null, val readTimeoutSeconds: Int? = null) {
-    fun limits(modelWindow: Int): ContextLimits = ContextLimits.of(windowTokens ?: modelWindow, triggerTokens)
+    fun limits(modelWindow: Int): ContextLimits = ContextLimits.of(windowTokens ?: modelWindow, triggerTokens, maxInputTokens = ContextLimits.MAX_INPUT_TOKENS)
 
     fun validFor(modelWindow: Int): Boolean = (windowTokens == null || windowTokens > 0) &&
         (triggerTokens == null || (triggerTokens > 0 && triggerTokens == limits(modelWindow).trigger)) &&

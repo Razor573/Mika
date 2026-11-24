@@ -116,13 +116,14 @@ internal fun ProviderStore.vertexTokenProviderFor(providerId: String): VertexTok
 fun ProviderStore.connectAccount(session: AccountSession, models: List<ListedModel>): Provider {
     return synchronized(this) {
         val (name, kind, base) = when (session.provider) {
-            XaiAuth.PROVIDER -> Triple(XAI_NAME, ProviderConfig.Kind.Xai, XaiAuth.API_BASE)
-            AntigravityAuth.PROVIDER -> Triple(ProviderStore.ANTIGRAVITY_NAME, ProviderConfig.Kind.Antigravity, AntigravityAuth.API_BASE)
+            XaiAuth.PROVIDER -> Triple(XAI_NAME, ProviderConfig.Kind.Xai, session.apiBase.ifBlank { XaiAuth.API_BASE })
+            AntigravityAuth.PROVIDER -> Triple(ProviderStore.ANTIGRAVITY_NAME, ProviderConfig.Kind.Antigravity, session.apiBase.ifBlank { AntigravityAuth.API_BASE })
             else -> throw IllegalArgumentException("unknown account provider")
         }
+        val normalized = if (kind == ProviderConfig.Kind.Antigravity) ProviderStore.collapseAntigravityListedModels(models) else models
         val existing = _providers.value.firstOrNull { it.kind == kind }
-        if (existing == null) return connect(name, kind, base, session.toJson(), models)
-        val p = existing.copy(name = name, baseUrl = base, models = models)
+        if (existing == null) return connect(name, kind, base, session.toJson(), normalized, projectId = session.projectId)
+        val p = existing.copy(name = name, baseUrl = base, models = normalized, projectId = session.projectId.ifBlank { existing.projectId })
         _providers.value = _providers.value.map { if (it.id == p.id) p else it }
         _configs.value = _configs.value.map { if (it.providerId == p.id) it.copy(baseUrl = base, name = name) else it }
         setKey(p.id, session.toJson())

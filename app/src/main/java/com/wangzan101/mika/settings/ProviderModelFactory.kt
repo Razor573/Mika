@@ -119,7 +119,7 @@ fun ProviderStore.modelForRoleConfig(role: ModelRole, configId: String, session:
         compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
     )) else adjusted.copy(capabilities = adjusted.capabilities.copy(
         contextTokens = settings.windowTokens ?: adjusted.capabilities.contextTokens,
-        compactionTriggerTokens = settings.triggerTokens,
+        compactionTriggerTokens = settings.triggerTokens?.let { settings.limits(adjusted.capabilities.contextTokens).trigger },
         compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
     ))
     val roleEffort = _roles.value.reasoningEffort(role)
@@ -264,13 +264,14 @@ internal fun ProviderStore.buildModel(cfg: ProviderConfig, apiKey: String?, endp
         ProviderConfig.Kind.Antigravity ->
             AntigravityModel(
                 token = accountTokensFor(cfg.providerId),
-                projectId = { cfg.projectId.ifBlank { provider(cfg.providerId)?.projectId.orEmpty() } },
+                projectId = { cfg.projectId.ifBlank { provider(cfg.providerId)?.projectId.orEmpty() }.ifBlank { accountSession(cfg.providerId)?.projectId.orEmpty() } },
                 model = cfg.model,
                 capabilities = cfg.capabilities,
                 http = http,
                 headers = setup.headers,
                 maxOutputTokens = setup.maxOutputTokens,
                 reasoningEffort = setup.reasoningEffort,
+                baseUrl = cfg.baseUrl.ifBlank { null },
             )
     }
 }

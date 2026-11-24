@@ -253,8 +253,8 @@ suspend fun ProviderStore.probe(
 ): ProbeResult {
     val probeKey = if (kind == ProviderConfig.Kind.Vertex) apiKey else apiKey?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() ?: it }
     val cfg = ProviderConfig(PROBE_ID, kind, baseUrl, model, caps.copy(toolCalls = true), providerId = providerId)
-    val m = modelFactory(cfg, probeKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
     return try {
+        val m = modelFactory(cfg, probeKey, endpoint, ClientSetup(headers(sessionHeader, ModelSession.fresh()), PROBE_MAX_TOKENS))
         val reply = m.complete(PROBE_SYSTEM, listOf(Message(Role.User, listOf(Part.Text(PROBE_TEXT)), Author.Mika)), listOf(PROBE_TOOL))
         if (reply.parts.any { it is Part.ToolCall }) ProbeResult.ToolCalled else ProbeResult.NoToolCall
     } catch (e: ModelError) {

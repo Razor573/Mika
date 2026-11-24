@@ -178,7 +178,6 @@ object ModelOptions {
     fun ofProvider(p: Provider, configs: List<ProviderConfig>, includeTts: Boolean = false): List<ModelOption> {
         return listedOf(p, configs, includeTts).mapNotNull { o ->
             val tts = isTtsOnly(p, o.id)
-            if (tts && !includeTts) return@mapNotNull null
             if (tts) return@mapNotNull o.copy(
                 capabilities = o.capabilities.copy(toolCalls = false, vision = false, reasoning = false),
                 toolCallsKnown = false, visionKnown = false, chat = false, visionByUser = null,

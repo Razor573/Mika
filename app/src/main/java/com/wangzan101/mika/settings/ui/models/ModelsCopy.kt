@@ -346,7 +346,11 @@ object ModelsCopy {
 
     /** 用途卡上写什么:选了模型写模型名和服务商;「用主模型」写主模型是谁;「不用」写只靠文字读屏。 */
     fun roleLine(ui: ModelSetupUi, role: ModelRole): RoleLine {
-        fun modelLine(cfg: ProviderConfig) = RoleLine(cfg.model, ui.providerOf(cfg)?.let(::providerName) ?: cfg.name, isModel = true)
+        fun modelLine(cfg: ProviderConfig): RoleLine {
+            val p = ui.providerOf(cfg)
+            val label = p?.models?.firstOrNull { it.id == cfg.model }?.displayName?.ifBlank { null } ?: cfg.model
+            return RoleLine(label, p?.let(::providerName) ?: cfg.name, isModel = true)
+        }
         val main = ui.configFor(ModelRole.Main)
         return when (val choice = ui.roles[role]) {
             null -> RoleLine(UNSET, if (ui.providers.isEmpty()) MAIN_ADD_FIRST else MAIN_PICK, unset = true)
