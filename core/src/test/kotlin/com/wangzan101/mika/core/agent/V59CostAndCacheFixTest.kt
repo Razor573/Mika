@@ -279,7 +279,7 @@ class V59CostAndCacheFixTest {
         val mainRate = mainCalls.toDouble() / totalCalls
 
         // Write usage JSONL for inspection
-        val jsonlFile = File("/tmp/mika-v60-benchmark-45steps.jsonl")
+        val jsonlFile = File(System.getProperty("java.io.tmpdir"), "mika-v60-benchmark-45steps.jsonl")
         jsonlFile.writeText(
             replies.joinToString("\n") { r ->
                 """{"step":${r.step},"role":"${r.role}","model":"${r.model}","tool":"${r.tool}","inputTokens":${r.inputTokens ?: 0},"cachedTokens":${r.cachedTokens ?: 0},"outputTokens":${r.outputTokens ?: 0}}"""

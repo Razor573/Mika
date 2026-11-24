@@ -8,6 +8,7 @@ import com.wangzan101.mika.core.screen.observation.ObsForm
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -57,7 +58,11 @@ object HistoryPruner {
     /** 模型照着做的参考资料:不按大小裁。 */
     private val REFERENCE_VERBS = setOf(Verb.KnowledgeSearch, Verb.KnowledgeRead, Verb.SkillSearch, Verb.SkillRead, Verb.MemorySearch)
     /** 没带观察的结果:读界面的动作照样按界面状态缩短。 */
-    private val INTERFACE_VERBS = setOf(Verb.Observe, Verb.ListElements, Verb.Diagnose)
+    private val INTERFACE_VERBS = setOf(
+        Verb.Observe, Verb.ListElements, Verb.Diagnose,
+        Verb.PhoneExtract, Verb.Collect, Verb.Query,
+    )
+    private val EXTRACT_VERBS = setOf(Verb.PhoneExtract, Verb.Collect, Verb.Query)
     private const val LONG_TEXT = 300
     /** 全量的界面读取(回看结果里的元素文字同样会过时;回看本身不算一次读取)。 */
     private val FULL_VERBS = setOf(Verb.Observe, Verb.ListElements)
@@ -146,7 +151,7 @@ object HistoryPruner {
         val content = when {
             Shrink.Never in ways || verb in REFERENCE_VERBS -> p.content
             p.callId in screens -> shrinkScreen(p.content)
-            Shrink.Interface in ways || verb in INTERFACE_VERBS -> shrinkInterface(p.content)
+            Shrink.Interface in ways || verb in INTERFACE_VERBS -> shrinkInterface(p.content, verb)
             verb == Verb.ViewPastScreens -> shrinkRecall(p.content)
             TokenEstimate.of(p.content) > BIG_RESULT_TOKENS -> shrinkRead(p.content)
             else -> p.content
@@ -257,7 +262,7 @@ object HistoryPruner {
         val obj = parse(p.content)
         if (obj != null) {
             if (obj[SCREEN] is JsonObject) return true
-            if (INTERFACE_KEYS.any { k -> val v = obj[k]; v != null && v != JsonPrimitive(OMITTED) }) return true
+            if (obj.any { (k, v) -> isUnprunedKey(k, v, verb) }) return true
             if (verb == Verb.ViewPastScreens) {
                 val shots = obj["screenshots"] as? JsonArray
                 if (shots != null && shots.any { (it as? JsonObject)?.get("elementsText")?.let { et -> et != JsonPrimitive(OMITTED) } == true }) return true
@@ -274,15 +279,26 @@ object HistoryPruner {
             content = shrinkScreen(content)
         }
         val afterScreen = parse(content)
-        val hasInterfaceKeys = afterScreen != null && INTERFACE_KEYS.any { k ->
-            val v = afterScreen[k]; v != null && v != JsonPrimitive(OMITTED)
-        }
+        val hasInterfaceKeys = afterScreen != null && afterScreen.any { (k, v) -> isUnprunedKey(k, v, verb) }
         content = when {
             verb == Verb.ViewPastScreens -> shrinkRecall(content)
-            hasInterfaceKeys || verb in INTERFACE_VERBS || p.reads.any { it.form == ObsForm.Interface } -> shrinkInterface(content)
+            hasInterfaceKeys || verb in INTERFACE_VERBS || p.reads.any { it.form == ObsForm.Interface } -> shrinkInterface(content, verb)
             else -> content
         }
         return if (content == p.content) p else withObsIds(p, content)
+    }
+
+    private fun isUnprunedKey(key: String, value: JsonElement, verb: Verb?): Boolean {
+        if (value == JsonPrimitive(OMITTED)) return false
+        if (key in INTERFACE_KEYS) return true
+        if (verb !in EXTRACT_VERBS) return false
+        return when (key) {
+            "matches", "results" -> true
+            // phone_extract outputs items as an array; phone_collect outputs items as an integer count.
+            "items" -> value is JsonArray || value is JsonObject || (value is JsonPrimitive && value.isString)
+            "text" -> verb == Verb.Collect
+            else -> false
+        }
     }
 
     private fun stripNonUserImages(messages: List<Message>): List<Message> {
@@ -491,11 +507,11 @@ object HistoryPruner {
     }
 
     /** 界面状态:元素表、窗口树和长字段换成 [OMITTED],结局字段留着。 */
-    private fun shrinkInterface(content: String): String {
+    private fun shrinkInterface(content: String, verb: Verb? = null): String {
         val obj = parse(content) ?: return content
         val small = obj.mapValues { (k, v) ->
             val long = if (v is JsonPrimitive) v.isString && v.content.length > LONG_TEXT else v.toString().length > LONG_TEXT
-            if (k in INTERFACE_KEYS || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
+            if (isUnprunedKey(k, v, verb) || (long && k !in OUTCOME)) JsonPrimitive(OMITTED) else v
         }
         return JsonObject(small).toString()
     }

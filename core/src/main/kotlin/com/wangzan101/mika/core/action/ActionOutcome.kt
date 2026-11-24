@@ -2,6 +2,7 @@ package com.wangzan101.mika.core.action
 
 import com.wangzan101.mika.core.prompt.Feedback
 import com.wangzan101.mika.core.safety.guard.GuardVerdict
+import com.wangzan101.mika.core.safety.guard.StepHashOutcome
 import com.wangzan101.mika.core.safety.gate.IrrevAction
 import com.wangzan101.mika.core.safety.gate.Irreversible
 import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
@@ -34,6 +35,7 @@ sealed interface ActionOutcome {
     data class Ran(
         val exec: ToolExecution, override val before: List<GuardVerdict>, val after: List<GuardVerdict>, val content: JsonObject,
         val durationMs: Long, val shotId: Int? = null, val picture: ByteArray? = null, val seen: ScreenSnapshot? = null,
+        val telemetry: StepHashOutcome? = null,
     ) : ActionOutcome {
         val verdicts: List<GuardVerdict> get() = before + after
     }

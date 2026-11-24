@@ -28,8 +28,20 @@ sealed interface RunEvent {
     /** [origin] 是谁发起的这次运行(`RunOrigin` 的小写名);手机上发起的不写。两个预算不限制时都为 null。 */
     @Serializable @SerialName("task_started")
     data class TaskStarted(
-        override val atMs: Long, val goal: String, val model: String,
-        val origin: String? = null, val stepLimit: Int? = null, val tokenBudget: Long? = null,
+        override val atMs: Long,
+        val goal: String,
+        val model: String,
+        val origin: String? = null,
+        val stepLimit: Int? = null,
+        val tokenBudget: Long? = null,
+        val versionCode: Int? = null,
+        val versionName: String? = null,
+        val mainProvider: String? = null,
+        val lightModel: String? = null,
+        val lightProvider: String? = null,
+        val parentRunId: String? = null,
+        val childId: String? = null,
+        val parentStep: Int? = null,
     ) : RunEvent
 
     /** 本任务发给模型的系统提示词与工具定义的摘要([com.wangzan101.mika.core.prompt.PromptVersion])。 */
@@ -94,9 +106,37 @@ sealed interface RunEvent {
         val lightOutputTokens: Int? = null,
         /** 轻量模型是否经过了一次 no-tool 提醒重试。 */
         val lightRetried: Boolean? = null,
+        val provider: String? = null,
+        val accepted: Boolean? = null,
+        val attempt: Int? = null,
+        val retryCount: Int? = null,
+        val httpStatus: Int? = null,
+        val errorCode: String? = null,
+        val errorBody: String? = null,
+        val usageReported: Boolean? = null,
+        val hasImages: Boolean? = null,
+        val vision: Boolean? = null,
+        val sameApp: Boolean? = null,
+        val lastChanged: Boolean? = null,
+        val forcedMain: Boolean? = null,
+        val cacheMissReason: String? = null,
+        val systemPromptHash: String? = null,
+        val promptVersion: String? = null,
+        val toolListHash: String? = null,
+        val promptTransformEffect: String? = null,
+        val compactionTrigger: String? = null,
+        val foldedSteps: Int? = null,
+        val capCheckResult: String? = null,
+        val estimatedInputTokens: Int? = null,
+        val costUsd: Double? = null,
+        val screenHash: String? = null,
+        val extractedHash: String? = null,
+        val screenChanged: Boolean? = null,
+        val extractedItemsNew: Boolean? = null,
+        val historyReadReason: String? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
-        val acted: Boolean get() = role != "light_rejected"
+        val acted: Boolean get() = role != "light_rejected" && accepted != false
     }
 
     /** [resultJson] 含守卫结论,整条记下;只有超过 [MAX_RESULT] 字才截短并留标记。 */
@@ -261,7 +301,12 @@ sealed interface RunEvent {
     data class SkillUsed(override val atMs: Long, val name: String, val how: String) : RunEvent
 
     @Serializable @SerialName("compressed")
-    data class Compressed(override val atMs: Long, val foldedSteps: Int) : RunEvent
+    data class Compressed(
+        override val atMs: Long,
+        val foldedSteps: Int,
+        val role: String? = null,
+        val trigger: String? = null,
+    ) : RunEvent
 
     /** [outcome]:succeeded / unverified / failed / cancelled / error;[kind] 是失败的类别(FailKind 的小写名),其余为 null,旧记录没有。 */
     @Serializable @SerialName("task_ended")
@@ -276,9 +321,53 @@ sealed interface RunEvent {
      */
     @Serializable @SerialName("model_calls")
     data class ModelCalls(
-        override val atMs: Long, val calls: Int, val unreported: Int, val inputTokens: Long, val outputTokens: Long, val cachedTokens: Long,
-        val httpCalls: Int? = null, val httpUnreported: Int? = null,
+        override val atMs: Long,
+        val calls: Int,
+        val unreported: Int,
+        val inputTokens: Long,
+        val outputTokens: Long,
+        val cachedTokens: Long,
+        val httpCalls: Int? = null,
+        val httpUnreported: Int? = null,
         val deepSeekCost: DeepSeekCost? = null,
+        val unreportedReasons: Map<String, Int>? = null,
+        val sideCalls: Int? = null,
+        val sideInputTokens: Long? = null,
+        val sideOutputTokens: Long? = null,
+        val sideCachedTokens: Long? = null,
+        val byPurpose: Map<String, Int>? = null,
+    ) : RunEvent
+
+    @Serializable @SerialName("sub_agent_summary")
+    data class SubAgentSummary(
+        override val atMs: Long,
+        val childId: String,
+        val parentStep: Int,
+        val goal: String,
+        val goalHash: String,
+        val steps: Int,
+        val calls: Int,
+        val inputTokens: Long,
+        val outputTokens: Long,
+        val cachedTokens: Long,
+        val costUsd: Double,
+        val mainCalls: Int,
+        val lightCalls: Int,
+        val lightAcceptedCalls: Int,
+        val lightRejectedCalls: Int,
+        val mainInputTokens: Long,
+        val mainOutputTokens: Long,
+        val mainCachedTokens: Long,
+        val mainCostUsd: Double,
+        val lightInputTokens: Long,
+        val lightOutputTokens: Long,
+        val lightCachedTokens: Long,
+        val lightCostUsd: Double,
+        val durationMs: Long,
+        val outcome: String,
+        val logFile: String,
+        val unreportedCalls: Int = 0,
+        val unreportedReasons: Map<String, Int> = emptyMap(),
     ) : RunEvent
 
     /**

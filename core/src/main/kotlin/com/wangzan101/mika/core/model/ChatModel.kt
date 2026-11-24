@@ -37,6 +37,9 @@ interface ChatModel {
     /** 模型名,只用于记录。 */
     val name: String get() = ""
 
+    /** 服务商标识,只用于记录。 */
+    val provider: String? get() = null
+
     /** 失败时抛 [ModelError]。 */
     suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply
 

@@ -27,7 +27,7 @@ object ModelHttp {
      * 备援链接得住);只有 HTTP 200 的内容解析不了才是 [ModelError.BadResponse]。
      */
     fun openAiError(status: Int, retryAfter: String?, body: String, model: String): ModelError =
-        ModelAccessErrors.of(status, body, model) ?: reasoningEffortRejected(status, body) ?: when {
+        (ModelAccessErrors.of(status, body, model) ?: reasoningEffortRejected(status, body) ?: when {
             status == 401 -> ModelError.Auth()
             status == 402 || body.contains("insufficient_quota") -> ModelError.QuotaExceeded()
             status == 429 -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter, body))
@@ -36,7 +36,7 @@ object ModelHttp {
             status in 500..599 -> ModelError.Server(status)
             status == 403 -> ModelError.Auth()
             else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
-        }
+        }).withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     /** HTTP 200 SSE 中的错误帧也按 HTTP 错误的分类交给重试和备援。 */
     fun streamError(root: JsonObject): ModelError? {
@@ -45,12 +45,18 @@ object ModelHttp {
         val type = (errorObject?.get("type") as? JsonPrimitive)?.contentOrNull
             ?: (root["type"] as? JsonPrimitive)?.contentOrNull
         val detail = (errorObject?.get("message") as? JsonPrimitive)?.contentOrNull
-        return when (type) {
+        val body = root.toString()
+        val mapped = when (type) {
             "rate_limit_error" -> ModelError.RateLimited(null)
             "overloaded_error" -> ModelError.Server(529, detail)
             else -> if (saysContextTooLong(error.toString())) ModelError.ContextTooLong()
             else ModelError.BadResponse(error.toString().take(200))
         }
+        return mapped.withDiagnostics(
+            status = (mapped as? ModelError.Server)?.status,
+            code = ModelErrorDiagnostics.extractJsonCode(body),
+            body = body,
+        )
     }
 
     /** HTTP 400 的报错说请求超出了模型的上下文(见 [saysContextTooLong])。OpenAI 兼容、Responses、Anthropic 三种接口共用;本机跑的服务三种接口都可能开。 */
@@ -92,8 +98,7 @@ object ModelHttp {
         val st = (err?.get("status") as? JsonPrimitive)?.contentOrNull.orEmpty()
         val msg = (err?.get("message") as? JsonPrimitive)?.contentOrNull ?: body
         val lower = msg.lowercase()
-        ModelAccessErrors.of(status, body, model)?.let { return it }
-        return when {
+        val mapped = ModelAccessErrors.of(status, body, model) ?: when {
             status == 401 || status == 403 -> ModelError.Auth()
             // 这个模型额度为零的 429 上面已认成用不了;其余 429 按可重试限流处理(其限流与额度文案混用,无法可靠区分)
             status == 429 || st == "RESOURCE_EXHAUSTED" -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter, msg))
@@ -103,5 +108,6 @@ object ModelHttp {
             status in 500..599 -> ModelError.Server(status)
             else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
         }
+        return mapped.withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
     }
 }

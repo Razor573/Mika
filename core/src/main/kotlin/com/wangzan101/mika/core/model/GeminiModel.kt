@@ -45,6 +45,7 @@ class GeminiModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "gemini"
     private val endpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:generateContent"
     private val streamEndpoint = baseUrl.trimEnd('/') + "/v1beta/models/$model:streamGenerateContent?alt=sse"
     private val json = Json { ignoreUnknownKeys = true }
@@ -141,7 +142,9 @@ class GeminiModel(
             .build()
     }
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError = ModelHttp.geminiError(status, retryAfter, body, model)
+    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+        ModelHttp.geminiError(status, retryAfter, body, model)
+            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     // Gemini 不接受 additionalProperties / $schema / $id 等 OpenAPI 子集之外的键
     private val rejectedKeys = setOf("additionalProperties", "\$schema", "\$id", "\$defs")

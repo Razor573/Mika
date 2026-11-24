@@ -111,10 +111,24 @@ internal suspend fun TaskRun.assembleTools(a: RunAssembly, m: RunModels, ph: Run
                 // 子任务跟着询问 / 自主;询问时它也过关卡,子任务里花钱的一步一律不做
                 confirmations = runApproval.gate(), approvals = runApproval, autonomous = runApproval.startedAutonomous,
                 promptTransform = { promptHook.transform(it) },
-                reviewFinalAnswer = false, flags = speed, outwardPacing = OutwardPacing.human(), personaLabel = personaLabel)
+                reviewFinalAnswer = false, flags = speed, outwardPacing = OutwardPacing.human(), personaLabel = personaLabel,
+                versionCode = com.wangzan101.mika.BuildConfig.VERSION_CODE,
+                versionName = com.wangzan101.mika.BuildConfig.VERSION_NAME,
+                mainProvider = model.provider,
+                lightModelName = m.routedLight?.name,
+                lightProvider = m.routedLight?.provider)
         },
         store = (service.application as MikaApp).childRuns,
         ownerAlive = { job?.isActive == true },
+        parentSink = sink,
+        writeChildLog = { _, childId, content ->
+            val parentRunDirId = a.record?.runId ?: runState._runId.value
+            if (parentRunDirId != null) {
+                (a.runStore ?: RunStore(service)).writeChildUsageLog(parentRunDirId, childId, content)
+            }
+        },
+        versionCode = com.wangzan101.mika.BuildConfig.VERSION_CODE,
+        versionName = com.wangzan101.mika.BuildConfig.VERSION_NAME,
     ).also { children = it } else null
     // 自身端口:只给手机上、有用户的 UI 主任务;子任务、条件检查、定时、渠道、MCP 都没有。
     // 状态只读工具一直给;操作类工具等用户打开「允许 Mika 操作自己的界面」。

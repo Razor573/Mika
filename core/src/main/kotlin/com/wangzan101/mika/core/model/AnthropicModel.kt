@@ -51,6 +51,7 @@ class AnthropicModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "anthropic"
     private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"
     /** 实际发出的 `thinking.type`:`adaptive`、`disabled`,或 null(不发)。 */
     private val thinkingType: String? = when (reasoningEffort) {
@@ -207,16 +208,17 @@ class AnthropicModel(
             .build()
     }
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError = ModelAccessErrors.of(status, body, model) ?: when {
-        status == 401 || status == 403 -> ModelError.Auth()
-        status == 402 || body.contains("credit balance is too low") -> ModelError.QuotaExceeded()
-        status == 429 -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter))
-        status == 413 || body.contains("prompt is too long") || ModelHttp.contextTooLong(status, body) -> ModelError.ContextTooLong()
-        status == 404 -> ModelError.ModelNotFound(model, ModelAccessErrors.jsonDetail(body))
-        status == 529 || body.contains("overloaded_error") -> ModelError.Server(529)
-        status in 500..599 -> ModelError.Server(status)
-        else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
-    }
+    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+        (ModelAccessErrors.of(status, body, model) ?: when {
+            status == 401 || status == 403 -> ModelError.Auth()
+            status == 402 || body.contains("credit balance is too low") -> ModelError.QuotaExceeded()
+            status == 429 -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter))
+            status == 413 || body.contains("prompt is too long") || ModelHttp.contextTooLong(status, body) -> ModelError.ContextTooLong()
+            status == 404 -> ModelError.ModelNotFound(model, ModelAccessErrors.jsonDetail(body))
+            status == 529 || body.contains("overloaded_error") -> ModelError.Server(529)
+            status in 500..599 -> ModelError.Server(status)
+            else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
+        }).withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     private fun toolJson(t: ToolSpec, last: Boolean): JsonObject = buildJsonObject {
         put("name", t.name)
@@ -400,7 +402,10 @@ private class AnthropicStream(
                 }
             }
             "message_stop" -> stopped = true
-            "error" -> throw ModelHttp.streamError(root) ?: ModelError.BadResponse(root["error"].toString().take(200))
+            "error" -> throw ModelHttp.streamError(root) ?: ModelError.BadResponse(root["error"].toString().take(200)).let {
+                val raw = root.toString()
+                it.withDiagnostics(null, ModelErrorDiagnostics.extractJsonCode(raw), raw)
+            }
         }
         return stopped
     }

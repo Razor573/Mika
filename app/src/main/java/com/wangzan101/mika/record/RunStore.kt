@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.wangzan101.mika.BuildConfig
 import com.wangzan101.mika.core.run.record.Redactor
 import com.wangzan101.mika.core.run.record.RunMetrics
 import com.wangzan101.mika.core.run.record.RunMetricsStore
@@ -11,6 +12,8 @@ import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.run.record.RunRecords
 import com.wangzan101.mika.core.run.record.RunSink
 import com.wangzan101.mika.core.run.record.RunSummary
+import com.wangzan101.mika.core.run.record.UsageLogFormatter
+import com.wangzan101.mika.core.run.record.UsageRunSummary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -91,30 +94,49 @@ class RunStore internal constructor(
         return f.readLines().filter { it.isNotBlank() }.mapNotNull { runCatching { RunEvent.decode(it) }.getOrNull() }
     }
 
-    /** 从已有 JSONL 按原顺序取用量字段。旧记录的空值、同一步的多次回复和没有步号的压缩事件原样保留。 */
+    /** 从已有 JSONL 按原顺序取用量字段并附带 run_summary。旧记录的空值、同一步的多次回复和没有步号的压缩事件原样保留。 */
     fun usageLog(runId: String): String {
         val dir = dirOf(runId) ?: throw FileNotFoundException("Run is unavailable")
-        return File(dir, EVENTS).useLines { lines ->
-            buildString {
-                for ((index, line) in lines.withIndex()) {
-                    if (line.isBlank()) continue
-                    val event = try {
-                        RunEvent.json.parseToJsonElement(line) as? JsonObject
-                    } catch (_: SerializationException) { null }
-                    val type = event?.get("type") as? JsonPrimitive
-                    if (event == null || type == null) {
-                        // 进程中断可能留下一行没写完的记录。标出缺口，保留其余事件。
-                        appendLine("""{"type":"unreadable_event","line":${index + 1}}""")
-                        continue
-                    }
-                    val fields = USAGE_FIELDS[type.content] ?: continue
-                    val metadata = event.filter { (key, value) ->
-                        value is JsonPrimitive && (key == "type" || key == "atMs" || key in fields)
-                    }
-                    appendLine(JsonObject(metadata).toString())
-                }
-            }.ifEmpty { throw IOException("No run usage events") }
+        val f = File(dir, EVENTS)
+        if (!f.isFile) throw FileNotFoundException("Run events unavailable")
+        return f.useLines { lines ->
+            UsageLogFormatter.formatLines(lines, runId, BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+                .ifEmpty { throw IOException("No run usage events") }
         }
+    }
+
+    fun usageSummary(runId: String): String {
+        val dir = dirOf(runId) ?: throw FileNotFoundException("Run is unavailable")
+        val existing = File(dir, USAGE_SUMMARY_JSON)
+        if (existing.isFile) return existing.readText()
+        val summary = UsageLogFormatter.buildSummary(events(runId), runId, BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+        return RunEvent.json.encodeToString(UsageRunSummary.serializer(), summary)
+    }
+
+    fun writeChildUsageLog(parentRunId: String, childId: String, content: String) {
+        if (!SAFE_CHILD_ID.matches(childId)) return
+        val dir = dirOf(parentRunId) ?: return
+        runCatching {
+            val childDir = File(dir, CHILDREN_DIR).apply { mkdirs() }
+            File(childDir, "mika-usage-child-$childId.jsonl").writeText(content)
+        }.onFailure { runCatching { Log.w(TAG, "could not write child usage log $childId", it) } }
+    }
+
+    fun childUsageLog(parentRunId: String, childId: String): String? {
+        if (!SAFE_CHILD_ID.matches(childId)) return null
+        val dir = dirOf(parentRunId) ?: return null
+        val f = File(File(dir, CHILDREN_DIR), "mika-usage-child-$childId.jsonl")
+        return f.takeIf { it.isFile }?.readText()
+    }
+
+    fun childUsageLogs(parentRunId: String): Map<String, String> {
+        val dir = dirOf(parentRunId) ?: return emptyMap()
+        val childDir = File(dir, CHILDREN_DIR)
+        if (!childDir.isDirectory) return emptyMap()
+        return childDir.listFiles { f -> f.isFile && f.name.startsWith("mika-usage-child-") && f.name.endsWith(".jsonl") }
+            .orEmpty()
+            .sortedBy { it.name }
+            .associate { it.name to it.readText() }
     }
 
     /**
@@ -166,20 +188,12 @@ class RunStore internal constructor(
 
     companion object {
         internal const val RUN_JSON = "run.json"
+        internal const val USAGE_SUMMARY_JSON = "usage-summary.json"
         internal const val EVENTS = "events.jsonl"
-        private val USAGE_FIELDS = mapOf(
-            "task_started" to setOf("model"),
-            "model_reply" to setOf(
-                "step", "model", "role", "tool", "inputTokens", "cachedTokens",
-                "outputTokens", "repliedAtMs", "latencyMs", "retryWaitMs",
-                "reason", "decisionScore", "validatorReason", "lightTool", "lightOutputTokens", "lightRetried",
-            ),
-            "compressed" to setOf("foldedSteps"),
-            "model_calls" to setOf("calls", "httpCalls", "unreported", "httpUnreported", "inputTokens", "cachedTokens", "outputTokens"),
-            "task_ended" to setOf("outcome", "kind"),
-        )
+        internal const val CHILDREN_DIR = "children"
         private const val ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
         private val ID_RE = Regex("""\d{8}-\d{6}-[a-z0-9]{6}""")
+        private val SAFE_CHILD_ID = Regex("""[a-zA-Z0-9._-]+""")
 
         internal fun screenPath(id: Int) = "screens/%04d.jpg".format(Locale.US, id)
     }
@@ -256,6 +270,16 @@ class RunHandle internal constructor(
             if (done) {
                 // 小结在锁外写:写的是另一个文件,不挡着别的线程
                 metrics.build()?.let { m -> safely("metrics") { finished(m) } }
+                safely("usage_summary") {
+                    val eventsFile = File(dir, RunStore.EVENTS)
+                    if (eventsFile.isFile) {
+                        val decoded = eventsFile.readLines().filter { it.isNotBlank() }.mapNotNull { runCatching { RunEvent.decode(it) }.getOrNull() }
+                        val usageSummary = UsageLogFormatter.buildSummary(decoded, runId, BuildConfig.VERSION_CODE, BuildConfig.VERSION_NAME)
+                        val tmp = File(dir, "${RunStore.USAGE_SUMMARY_JSON}.tmp")
+                        tmp.writeText(RunEvent.json.encodeToString(UsageRunSummary.serializer(), usageSummary))
+                        if (!tmp.renameTo(File(dir, RunStore.USAGE_SUMMARY_JSON))) error("rename failed")
+                    }
+                }
                 return
             }
             batch.forEach(::write)

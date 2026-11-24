@@ -121,8 +121,9 @@ class AgentLoopLightTest {
         assertEquals(3, light.requests.size)
         assertEquals(3, main.requests.size)
         val replies = sink.list.filterIsInstance<RunEvent.ModelReply>()
-        assertEquals(listOf("main", "main", "light", "light_rejected", "main"), replies.map { it.role })
-        assertEquals(listOf("main", "main", "light", "light", "main"), replies.map { it.model })
+        assertEquals(listOf("main", "main", "light", "light", "light", "main"), replies.map { it.role })
+        assertEquals(listOf(true, true, true, false, false, true), replies.map { it.acted })
+        assertEquals(listOf("main", "main", "light", "light", "light", "main"), replies.map { it.model })
     }
 
     // 不带调用的回复先用一行提醒在轻量模型上重试一次;仍不带工具才改问主模型
@@ -142,12 +143,16 @@ class AgentLoopLightTest {
         assertEquals(3, main.requests.size)
         assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
         assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_to_main" && it.detail == "no_tool" })
-        val rejected = sink.list.filterIsInstance<RunEvent.ModelReply>().single { it.role == "light_rejected" }
-        assertEquals("no_tool", rejected.reason)
-        assertEquals("no_tool_after_retry", rejected.validatorReason)
-        assertEquals("None", rejected.lightTool)
-        assertEquals(true, rejected.lightRetried)
-        assertEquals(listOf("main", "main", "light_rejected", "main"), sink.list.filterIsInstance<RunEvent.ModelReply>().map { it.role })
+        val rejected = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.role == "light" && it.accepted == false }
+        assertEquals(2, rejected.size)
+        assertEquals("no_tool", rejected[0].reason)
+        assertEquals("no_tool", rejected[0].validatorReason)
+        assertEquals(false, rejected[0].lightRetried)
+        assertEquals("no_tool", rejected[1].reason)
+        assertEquals("no_tool_after_retry", rejected[1].validatorReason)
+        assertEquals("None", rejected[1].lightTool)
+        assertEquals(true, rejected[1].lightRetried)
+        assertEquals(listOf("main", "main", "light", "light", "main"), sink.list.filterIsInstance<RunEvent.ModelReply>().map { it.role })
         // 改派后主模型看到的历史里没有那条没执行的回复,也没有轻量重试提醒
         val asked = main.requests.last()
         assertTrue(asked.flatMap { it.parts }.filterIsInstance<Part.Text>().none { "LIGHT_ANSWER" in it.text })
@@ -170,12 +175,22 @@ class AgentLoopLightTest {
         val r = loop(main, light, sink, SafeActionScreen()).run("点击详情")
         assertTrue(r is TaskState.Succeeded)
         assertTrue(sink.list.any { it is RunEvent.State && it.name == "light_retry" && it.detail == "no_tool" })
-        val step3Reply = sink.list.filterIsInstance<RunEvent.ModelReply>().first { it.step == 3 }
-        assertEquals("light", step3Reply.role)
-        assertEquals("phone_tap", step3Reply.tool)
-        assertEquals(220, step3Reply.inputTokens)
-        assertEquals(35, step3Reply.outputTokens)
-        assertEquals(120, step3Reply.cachedTokens)
+        val step3Replies = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.step == 3 }
+        assertEquals(2, step3Replies.size)
+        assertEquals(false, step3Replies[0].accepted)
+        assertEquals(1, step3Replies[0].attempt)
+        assertEquals(100, step3Replies[0].inputTokens)
+        assertEquals(20, step3Replies[0].outputTokens)
+        assertEquals(40, step3Replies[0].cachedTokens)
+        val step3Accepted = step3Replies[1]
+        assertEquals("light", step3Accepted.role)
+        assertEquals(true, step3Accepted.accepted)
+        assertEquals(2, step3Accepted.attempt)
+        assertEquals(1, step3Accepted.retryCount)
+        assertEquals("phone_tap", step3Accepted.tool)
+        assertEquals(120, step3Accepted.inputTokens)
+        assertEquals(15, step3Accepted.outputTokens)
+        assertEquals(80, step3Accepted.cachedTokens)
 
         val step3Metrics = RunMetrics.of(sink.list.filter { it !is RunEvent.ModelReply || it.step == 3 }, "retry-usage")!!
         assertEquals(220L, step3Metrics.inputTokens)
@@ -257,7 +272,7 @@ class AgentLoopLightTest {
         val sink = Events()
         val r = loop(main, light, sink, SafeActionScreen()).run("滚动并查看下一项")
         assertTrue(r is TaskState.Succeeded)
-        val lightReplies = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.role == "light" }
+        val lightReplies = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.role == "light" && it.acted }
         assertEquals(listOf("phone_scroll", "phone_observe", "phone_tap"), lightReplies.map { it.tool })
     }
 
@@ -285,7 +300,7 @@ class AgentLoopLightTest {
         val sink = Events()
         val r = loop(main, light, sink, SafeActionScreen()).run("测试拒绝")
         assertTrue(r is TaskState.Succeeded)
-        val rejected = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.role == "light_rejected" }
+        val rejected = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.role == "light" && it.accepted == false }
         assertEquals(2, rejected.size)
         assertEquals("missing_target", rejected[0].reason)
         assertEquals("target_not_found:@e99", rejected[0].validatorReason)
@@ -493,10 +508,10 @@ class AgentLoopLightTest {
 
         val metrics = RunMetrics.of(sink.list, "20261119-42steps-light")!!
         assertEquals(42, metrics.steps)
-        assertEquals(37, metrics.lightCalls)
-        assertEquals(1, metrics.lightRejectedCalls)
+        assertEquals(38, metrics.lightCalls)
+        assertEquals(2, metrics.lightRejectedCalls)
         assertEquals(1, metrics.lightRetriedCalls)
-        assertTrue("Expected rejection rate < 5%, got ${metrics.lightRejectionRate}", metrics.lightRejectionRate < 0.05)
+        assertTrue("Expected rejection rate < 6%, got ${metrics.lightRejectionRate}", metrics.lightRejectionRate < 0.06)
 
         val usageFields = mapOf(
             "task_started" to setOf("model"),
@@ -545,7 +560,7 @@ class AgentLoopLightTest {
         val light = Named("light", FakeModel(tools(call("phone_observe")), finish(), finish()))
         val sink = Events()
         loop(main, light, sink, SendScreen("提交订单")).run("t")
-        assertEquals(listOf("main", "main", "main", "main", "light", "light_rejected", "main"),
+        assertEquals(listOf("main", "main", "main", "main", "light", "light", "light", "main"),
             sink.list.filterIsInstance<RunEvent.ModelReply>().map { it.role })
         assertTrue((sink.list.filterIsInstance<RunEvent.ToolResult>().first { it.tool == "phone_tap" }).resultJson.contains("confirmation_required"))
     }
@@ -562,7 +577,7 @@ class AgentLoopLightTest {
             assertTrue("$error: $r", r is TaskState.Succeeded)
             // 轻量模型出错重试一次后进入 2 步冷却，而非整场永久停用
             assertEquals(4, light.requests.size)
-            assertEquals(2, sink.list.filterIsInstance<RunEvent.ModelReply>().count { it.role == "light_rejected" })
+            assertEquals(4, sink.list.filterIsInstance<RunEvent.ModelReply>().count { it.role == "light" && it.accepted == false })
         }
     }
 

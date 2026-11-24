@@ -54,10 +54,31 @@ class RunStoreTest {
         assertEquals("128", replies.last().getValue("cachedTokens").jsonPrimitive.content)
         assertEquals("200", replies.last().getValue("inputTokens").jsonPrimitive.content)
         assertEquals(Json.parseToJsonElement("""{"type":"compressed","atMs":420,"foldedSteps":16}"""), rows[42])
-        assertEquals(Json.parseToJsonElement("""{"type":"compressed","atMs":784,"foldedSteps":20}"""), rows[rows.lastIndex - 1])
+        assertEquals(Json.parseToJsonElement("""{"type":"compressed","atMs":784,"foldedSteps":20}"""), rows[rows.lastIndex - 2])
+        assertEquals("task_ended", rows[rows.lastIndex - 1].getValue("type").jsonPrimitive.content)
+        assertEquals("run_summary", rows.last().getValue("type").jsonPrimitive.content)
         assertFalse(exported.contains("private"))
         assertFalse(exported.contains("screenshotId"))
         assertEquals(log, events.readText())
+    }
+
+    @Test fun usageSummaryAndChildUsageLogsAreStoredAndReadable() {
+        val s = store()
+        val id = s.open("parent goal").also { it.close() }.runId
+        tmp.root.resolve("files/runs/$id/events.jsonl").writeText(
+            """
+            {"type":"task_started","atMs":1,"goal":"g","model":"gemini-4-hydrogen"}
+            {"type":"model_reply","atMs":2,"step":1,"model":"gemini-4-hydrogen","role":"main","tool":"finish","inputTokens":100,"outputTokens":20,"cachedTokens":80}
+            {"type":"task_ended","atMs":3,"outcome":"succeeded","answerOrReason":"ok"}
+            """.trimIndent() + "\n",
+        )
+        s.writeChildUsageLog(id, "child-1", """{"type":"run_summary","runId":"child-1"}""" + "\n")
+        val childText = s.childUsageLog(id, "child-1")
+        assertTrue(childText != null && "child-1" in childText)
+        assertEquals(1, s.childUsageLogs(id).size)
+        val summaryJson = Json.parseToJsonElement(s.usageSummary(id)).jsonObject
+        assertEquals("run_summary", summaryJson.getValue("type").jsonPrimitive.content)
+        assertEquals(id, summaryJson.getValue("runId").jsonPrimitive.content)
     }
 
     @Test fun usageLogExportsLightRejectionTelemetryAndRedactsPrivateFields() {

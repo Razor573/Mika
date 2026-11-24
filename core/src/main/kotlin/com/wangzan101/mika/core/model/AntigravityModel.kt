@@ -51,6 +51,7 @@ class AntigravityModel(
     private val streamEndpoint: String
 
     override val name: String get() = cleanModel
+    override val provider: String get() = "antigravity"
 
     init {
         val base = if (baseUrl == null) {
@@ -165,6 +166,7 @@ class AntigravityModel(
             if (el is JsonArray) (el.firstOrNull() as? JsonObject)?.toString() else null
         }.getOrNull() ?: body
         return ModelHttp.geminiError(status, retryAfter, normalizedBody, cleanModel.ifEmpty { wireModel })
+            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(normalizedBody), normalizedBody)
     }
 
     companion object {

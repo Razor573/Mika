@@ -14,6 +14,16 @@ import kotlin.math.floor
 
 enum class Severity(val wire: String) { Warn("warn"), Stop("stop") }
 
+/** 每步执行后计算出的屏幕/提取哈希与循环计数遥测。 */
+data class StepHashOutcome(
+    val screenHash: String?,
+    val extractedHash: String?,
+    val screenChanged: Boolean?,
+    val extractedItemsNew: Boolean?,
+    val staleCycleCount: Int,
+    val historyReadReason: String? = null,
+)
+
 /**
  * 守卫的一条结论。提醒([Severity.Warn])带 [nudge]:说清卡在哪、给几条出路的一段话(发给模型);叫停的没有。
  */
@@ -94,6 +104,19 @@ class OperationGuards(private val stepBudget: Int? = null) {
     private var unrecoverableFailures = 0
     private val recentFailures = ArrayDeque<JsonObject>()
 
+    private var lastScreenHash: String? = null
+    private var lastExtractedHash: String? = null
+    private val seenExtractedItemHashes = HashSet<String>()
+    private var staleCycleCount = 0
+    private var consecutiveCycleBlocks = 0
+    private var cyclePendingFromScroll = false
+    private var cycleSeenExtract = false
+    private var lastToolWasHistoryRead = false
+    private var historyReadsSinceScreenChange = 0
+    private var phoneSessionActive = false
+
+    internal val currentStaleCycleCount: Int get() = staleCycleCount
+
     var stop: GuardVerdict? = null
         private set
     val unchangedFrames: Int get() = unchanged
@@ -117,6 +140,101 @@ class OperationGuards(private val stepBudget: Int? = null) {
     fun beforeAction(tool: String, args: JsonObject, diagnostic: Boolean = false, scope: GuardScope = reads): List<GuardVerdict> {
         // 相同动作可以逐页读取新内容；仅凭动作签名不能判断任务停滞。
         return emptyList()
+    }
+
+    /** 执行模型单步前检查是否连续重读历史或陷入无进展循环。 */
+    fun checkBeforeTool(tool: String): GuardVerdict? {
+        if (tool == "history_read" && (lastToolWasHistoryRead || (phoneSessionActive && historyReadsSinceScreenChange >= 1))) {
+            return GuardVerdict(
+                "history_read_consecutive_limit",
+                Severity.Warn,
+                buildJsonObject {
+                    put("tool", tool)
+                    put("historyReadsSinceScreenChange", historyReadsSinceScreenChange)
+                },
+                "Do not call history_read again in a row without an intervening phone action that changes the screen. Use the already-read history or take a phone action.",
+            )
+        }
+        if (staleCycleCount >= 2 && tool in CYCLE_REPEAT_TOOLS) {
+            consecutiveCycleBlocks += 1
+            if (consecutiveCycleBlocks >= 2) {
+                stop = GuardVerdict(
+                    "no_progress_cycle",
+                    Severity.Stop,
+                    buildJsonObject {
+                        put("staleCycleCount", staleCycleCount)
+                        put("blockedTool", tool)
+                    },
+                    "Stopped: screen and extracted items repeated without progress; no new item or action succeeded.",
+                )
+                return stop
+            }
+            return GuardVerdict(
+                "no_progress_cycle_blocked",
+                Severity.Warn,
+                buildJsonObject {
+                    put("staleCycleCount", staleCycleCount)
+                    put("blockedTool", tool)
+                },
+                "Screen and extracted items have repeated $staleCycleCount times in a row without progress. Do NOT repeat $tool. Force a different action: tap the next unopened item on screen, change the search query/filter, navigate back, or end the task with a clear reason if no new item exists.",
+            )
+        }
+        return null
+    }
+
+    /** 记录工具执行后的屏幕/提取哈希与周期计数变化。 */
+    fun recordStepOutcome(
+        tool: String,
+        screenHash: String?,
+        extractedHash: String?,
+        itemHashes: List<String>,
+        writing: Boolean,
+        ok: Boolean,
+    ): StepHashOutcome {
+        if (tool.startsWith("phone_")) phoneSessionActive = true
+        val screenChanged = screenHash?.let { h -> lastScreenHash == null || h != lastScreenHash }
+        val extractedItemsNew = if (itemHashes.isNotEmpty()) itemHashes.any { it !in seenExtractedItemHashes } else null
+        seenExtractedItemHashes.addAll(itemHashes)
+
+        if (screenChanged == true || extractedItemsNew == true) {
+            staleCycleCount = 0
+            consecutiveCycleBlocks = 0
+            cyclePendingFromScroll = false
+            cycleSeenExtract = (tool in CYCLE_ADVANCE_TOOLS && extractedItemsNew == true)
+            if (screenChanged == true && lastScreenHash != null) {
+                historyReadsSinceScreenChange = 0
+            }
+        } else if (
+            tool in CYCLE_TRACKED_TOOLS &&
+            screenHash != null &&
+            screenHash == lastScreenHash &&
+            (extractedHash == null || extractedHash == lastExtractedHash || extractedItemsNew == false ||
+                (tool in CYCLE_ADVANCE_TOOLS && lastExtractedHash == null))
+        ) {
+            when (tool) {
+                "phone_scroll" -> {
+                    if (cyclePendingFromScroll || !cycleSeenExtract) {
+                        staleCycleCount += 1
+                    } else {
+                        cyclePendingFromScroll = true
+                        staleCycleCount += 1
+                    }
+                }
+                in CYCLE_ADVANCE_TOOLS -> {
+                    cyclePendingFromScroll = false
+                    cycleSeenExtract = true
+                    staleCycleCount += 1
+                }
+            }
+        }
+
+        lastScreenHash = screenHash ?: lastScreenHash
+        lastExtractedHash = extractedHash ?: lastExtractedHash
+        lastToolWasHistoryRead = (tool == "history_read")
+        if (tool == "history_read" && ok) {
+            historyReadsSinceScreenChange += 1
+        }
+        return StepHashOutcome(screenHash, extractedHash, screenChanged, extractedItemsNew, staleCycleCount)
     }
 
     /** 一个会改变界面的动作要做了。 */
@@ -284,6 +402,13 @@ class OperationGuards(private val stepBudget: Int? = null) {
         const val NO_EFFECT = "no_effect"
         /** 记最近多少个状态(够看出最长的兜圈安全网)。 */
         const val TRAIL_KEEP = 64
+
+        val CYCLE_REPEAT_TOOLS = setOf(
+            "phone_scroll", "phone_observe", "phone_extract", "phone_collect",
+            "phone_list_elements", "phone_query", "history_read",
+        )
+        val CYCLE_TRACKED_TOOLS = setOf("phone_scroll", "phone_observe", "phone_extract", "phone_collect")
+        val CYCLE_ADVANCE_TOOLS = setOf("phone_extract", "phone_collect")
 
         /** 各条提醒开头说卡在哪的那句(prompts/feedback/tools.md)。 */
         val LEADS = mapOf(

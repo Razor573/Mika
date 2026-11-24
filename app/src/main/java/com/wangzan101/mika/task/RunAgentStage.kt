@@ -141,6 +141,11 @@ internal suspend fun TaskRun.assembleAgent(a: RunAssembly, m: RunModels, ph: Run
         // 同一网站、App 里连着联系别人、提交:两次之间隔一段随机的时间
         outwardPacing = OutwardPacing.human(),
         personaLabel = personaLabel,
+        versionCode = com.wangzan101.mika.BuildConfig.VERSION_CODE,
+        versionName = com.wangzan101.mika.BuildConfig.VERSION_NAME,
+        mainProvider = model.provider,
+        lightModelName = routedLight?.name ?: light?.name,
+        lightProvider = routedLight?.provider ?: light?.provider,
     )
     loop = agent
     liveFeed = agent.events.subscribe(liveEvents)

@@ -48,6 +48,7 @@ class OpenAiCompatModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "openai_compat"
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
     private val declaredVia = ReasoningVia.ofField(reasoningField)
     private val json = Json { ignoreUnknownKeys = true }
@@ -239,7 +240,9 @@ class OpenAiCompatModel(
         return JsonObject(m + ("content" to JsonArray(withMark)))
     }
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError = ModelHttp.openAiError(status, retryAfter, body, model)
+    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+        ModelHttp.openAiError(status, retryAfter, body, model)
+            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     private fun toolJson(t: ToolSpec): JsonObject = buildJsonObject {
         put("type", "function")

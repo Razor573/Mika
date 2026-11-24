@@ -1,5 +1,6 @@
 package com.wangzan101.mika.core.general
 
+import com.wangzan101.mika.core.agent.CurrentStep
 import com.wangzan101.mika.core.run.ChildPhase
 import com.wangzan101.mika.core.run.ChildRunHost
 import com.wangzan101.mika.core.screen.observation.ObsKind
@@ -28,6 +29,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -97,10 +99,11 @@ internal object SpawnAgent : AgentTool {
 
     private suspend fun runOne(goal: String, parent: RunSpec, host: ChildRunHost,
                                format: String?, steps: Int, limit: Int, parallelChild: Boolean = false): ToolExecution {
+        val parentStep = currentCoroutineContext()[CurrentStep]?.step ?: 0
         val child = RunSpec(RunId(UUID.randomUUID().toString()), goal, parent.threadId,
             provenance = RunProvenance(RunOrigin.Child, Attendance.Unattended),
             capabilities = setOf("web", "sandbox"), readOnly = true, parent = parent.id, stepBudget = steps,
-            parallelChild = parallelChild)
+            parallelChild = parallelChild, parentStep = parentStep)
         val result = host.spawn(child, format)
         val text = result.text.take(limit)
         return ToolExecution(buildJsonObject {

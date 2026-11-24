@@ -3,6 +3,7 @@ package com.wangzan101.mika.core.model.usage
 import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
+import com.wangzan101.mika.core.model.ModelErrorDiagnostics
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.ModelRole
 import com.wangzan101.mika.core.model.StreamingChatModel
@@ -11,6 +12,13 @@ import com.wangzan101.mika.core.model.Usage
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.withContext
 import java.time.Instant
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+
+/** Marks a model call originating from the primary agent loop (`ModelCaller`) rather than a side call. */
+class LoopCallScope : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<LoopCallScope>
+}
 
 /** 一次调用是为哪个用途发的。存储里记 [key];认不出的 key(以后的版本写的)读成 [Other]。 */
 enum class UsagePurpose(val key: String) {
@@ -70,6 +78,7 @@ private open class MeteredModel(
 ) : ChatModel {
     override val capabilities get() = inner.capabilities
     override val name: String get() = inner.name
+    override val provider: String get() = source.providerName.ifBlank { source.providerId }
 
     override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply =
         counted(system, messages, tools) { inner.complete(system, messages, tools) }
@@ -95,21 +104,30 @@ private open class MeteredModel(
         }
         val attempts = ModelHttpAttempts { started -> beforeRetry(source, started) }
         val startedAt = tally?.deepSeekCost?.let { Instant.now() }
+        val isLoopCall = context[LoopCallScope] != null
         val reply = try {
             withContext(attempts) { call() }
         } catch (e: Throwable) {
             runCatching { conversation?.record(null, attempts.started) }
-            note(null, tally, attempts.started, startedAt)
+            note(null, tally, attempts.started, startedAt, isLoopCall, ModelErrorDiagnostics.shortReason(e))
             throw e
         }
         runCatching { conversation?.record(reply.usage, attempts.started) }
-        note(reply.usage, tally, attempts.started, startedAt)
+        val omittedReason = if (reply.usage == null) "usage_omitted_by_provider" else null
+        note(reply.usage, tally, attempts.started, startedAt, isLoopCall, omittedReason)
         return reply
     }
 
-    private fun note(usage: Usage?, tally: RunUsageTally?, httpAttempts: Int, startedAt: Instant?) {
+    private fun note(
+        usage: Usage?,
+        tally: RunUsageTally?,
+        httpAttempts: Int,
+        startedAt: Instant?,
+        isLoopCall: Boolean,
+        unreportedReason: String?,
+    ) {
         runCatching { sink.record(source, usage, httpAttempts) }
-        tally?.add(usage, httpAttempts)
+        tally?.add(usage, httpAttempts, source.purpose, isLoopCall, unreportedReason)
         if (startedAt != null) tally?.deepSeekCost?.add(source.model.takeIf { source.deepSeekDirect }, startedAt, usage, httpAttempts)
     }
 }
