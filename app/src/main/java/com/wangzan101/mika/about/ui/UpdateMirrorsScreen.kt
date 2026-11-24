@@ -11,7 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -104,7 +104,7 @@ fun UpdateMirrorsScreen(store: UpdateMirrorStore, onBack: () -> Unit) {
             ListRow(
                 MikaIcons.Refresh,
                 stringResource(R.string.about_mirror_download),
-                stringResource(R.string.about_mirror_download_detail),
+                note = stringResource(R.string.about_mirror_download_detail),
                 first = true,
             ) {
                 // 列表读不出来时不能改开关,不显示一个点了没反应的控件。
@@ -158,7 +158,6 @@ fun UpdateMirrorsScreen(store: UpdateMirrorStore, onBack: () -> Unit) {
                 ListRow(
                     MikaIcons.Shield,
                     stringResource(R.string.about_mirrors_official),
-                    stringResource(R.string.about_mirrors_official_sub),
                     first = true,
                 )
             }
@@ -252,14 +251,14 @@ private fun MirrorDialog(store: UpdateMirrorStore, initial: UpdateMirror?, onDis
         title = { Text(stringResource(if (initial == null) R.string.about_mirrors_add else R.string.about_mirrors_edit)) },
         text = {
             Column {
-                OutlinedTextField(
+                MikaTextField(
                     name, { name = it; error = null },
                     label = { Text(stringResource(R.string.about_mirrors_name)) },
                     singleLine = true,
                     enabled = !saving,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
+                MikaTextField(
                     prefix, { prefix = it; error = null; testResult = null },
                     label = { Text(stringResource(R.string.about_mirrors_prefix)) },
                     placeholder = { Text("https://") },

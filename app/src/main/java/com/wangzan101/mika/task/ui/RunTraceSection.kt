@@ -1,5 +1,6 @@
 package com.wangzan101.mika.task.ui
 
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
@@ -139,7 +140,7 @@ private fun TraceExportControls(archive: TraceArchive) {
             result = saveTrace(archive, false) { context.contentResolver.openOutputStream(uri) }
         }
     }
-    ListRow(null, stringResource(R.string.trace_attach), stringResource(R.string.trace_attach_hint),
+    ListRow(null, stringResource(R.string.trace_attach), note = stringResource(R.string.trace_attach_hint),
         onClick = { includeBody = !includeBody }) { MikaSwitch(includeBody, null) }
     ListRow(MikaIcons.Doc, stringResource(R.string.trace_save), onClick = {
         if (includeBody) zip.launch("mika-trace-${archive.runId}.zip") else proto.launch("mika-trace-${archive.runId}.pb")
@@ -168,10 +169,10 @@ internal fun TraceSettingsRows() {
         traceEnabled = traces.enabled
     }
 
-    ListRow(null, stringResource(R.string.trace_switch), stringResource(R.string.trace_switch_detail), first = true, onClick = { onTrace(!traceEnabled) }) {
+    ListRow(null, stringResource(R.string.trace_switch), note = stringResource(R.string.trace_switch_detail), first = true, onClick = { onTrace(!traceEnabled) }) {
         MikaSwitch(traceEnabled, ::onTrace, Modifier.testTag("dev-trace"))
     }
-    ListRow(null, stringResource(R.string.trace_storage_limit), stringResource(R.string.trace_storage_hint), onClick = { editingLimit = true }) {
+    ListRow(null, stringResource(R.string.trace_storage_limit), note = stringResource(R.string.trace_storage_hint), onClick = { editingLimit = true }) {
         RowValue(stringResource(R.string.trace_storage_value, traceLimitMiB))
     }
     if (editingLimit) {
@@ -181,7 +182,7 @@ internal fun TraceSettingsRows() {
             onDismissRequest = { editingLimit = false },
             title = { Text(stringResource(R.string.trace_storage_limit)) },
             text = {
-                OutlinedTextField(text, { text = it }, singleLine = true, label = { Text("MiB") },
+                MikaTextField(text, { text = it }, singleLine = true, label = { Text("MiB") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
             },
             confirmButton = {

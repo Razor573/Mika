@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Slider
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.OutlinedTextField
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -96,13 +96,13 @@ fun CallModeScreen(onBack: () -> Unit, onOpenStt: () -> Unit, onOpenTts: () -> U
             RadioRow(
                 stringResource(R.string.call_mode_standard), engine == CallEngine.Standard,
                 onClick = { catalog.setCallStyle(engine = CallEngine.Standard) },
-                subtitle = stringResource(R.string.call_mode_standard_sub), first = true,
+                note = stringResource(R.string.call_mode_standard_sub), first = true,
                 modifier = Modifier.testTag("call-mode-standard"),
             ) { StatusPill(stringResource(R.string.call_mode_recommended), PillTone.Ok) }
             RadioRow(
                 stringResource(R.string.call_mode_realtime), engine == CallEngine.Realtime,
                 onClick = { catalog.setCallStyle(engine = CallEngine.Realtime) },
-                subtitle = stringResource(R.string.call_mode_realtime_sub),
+                note = stringResource(R.string.call_mode_realtime_sub),
                 modifier = Modifier.testTag("call-mode-realtime"),
             )
         }
@@ -119,7 +119,6 @@ fun CallModeScreen(onBack: () -> Unit, onOpenStt: () -> Unit, onOpenTts: () -> U
                 ) { RowChevron() }
                 ListRow(
                     MikaIcons.Spark, stringResource(R.string.call_mode_think),
-                    stringResource(R.string.call_mode_think_note),
                     detail = thinkFallbackHint(s.think)?.let { stringResource(it) },
                 ) {}
                 SegmentedControl(
@@ -153,7 +152,7 @@ fun CallModeScreen(onBack: () -> Unit, onOpenStt: () -> Unit, onOpenTts: () -> U
                         modifier = Modifier.testTag("call-silence"),
                     )
                 }
-                ListRow(null, stringResource(R.string.call_mode_barge), stringResource(R.string.call_mode_barge_sub)) {
+                ListRow(null, stringResource(R.string.call_mode_barge), note = stringResource(R.string.call_mode_barge_sub)) {
                     MikaSwitch(s.bargeIn, { catalog.setCallStyle(bargeIn = it) }, Modifier.testTag("call-barge-in"))
                 }
             }
@@ -232,7 +231,7 @@ private fun CustomIdleDialog(initial: Int, onDismiss: () -> Unit, onSave: (Int) 
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.call_mode_idle_dialog_title)) },
         text = {
-            OutlinedTextField(
+            MikaTextField(
                 text, { text = it.filter(Char::isDigit).take(3) },
                 modifier = Modifier.fillMaxWidth().testTag("call-idle-custom-input"),
                 singleLine = true,

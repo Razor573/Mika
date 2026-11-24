@@ -144,36 +144,35 @@ fun AboutScreen(
             ListRow(
                 MikaIcons.Refresh,
                 stringResource(R.string.about_auto_update),
-                stringResource(R.string.about_auto_update_detail),
+                note = stringResource(R.string.about_auto_update_detail),
             ) {
                 MikaSwitch(autoUpdate, onAutoUpdate, Modifier.testTag("auto-update-switch"))
             }
             ListRow(
                 MikaIcons.Link,
                 stringResource(R.string.about_mirror_download),
-                stringResource(R.string.about_mirror_download_detail),
+                note = stringResource(R.string.about_mirror_download_detail),
             ) {
                 MikaSwitch(mirrorEnabled, onMirrorEnabled, Modifier.testTag("mirror-download-switch"))
             }
             ListRow(
                 MikaIcons.Shield,
                 stringResource(R.string.about_mirror_sources),
-                stringResource(R.string.about_mirror_sources_detail),
                 onClick = onOpenMirrors,
             ) {
                 RowValue(stringResource(R.string.about_mirrors_count, mirrorCount))
                 RowChevron()
             }
-            ListRow(MikaIcons.Lines, AboutCopy.CHANGELOG, AboutCopy.CHANGELOG_SUB, onClick = { sheet = AboutSheet.Changelog }) { RowChevron() }
+            ListRow(MikaIcons.Lines, AboutCopy.CHANGELOG, onClick = { sheet = AboutSheet.Changelog }) { RowChevron() }
         }
         GroupCard {
-            ListRow(MikaIcons.Chats, AboutCopy.GROUP, AboutCopy.GROUP_SUB, first = true, onClick = { sheet = AboutSheet.Group }) { RowChevron() }
-            ListRow(MikaIcons.XMark, AboutCopy.FOLLOW, AboutCopy.FOLLOW_SUB, onClick = { onOpenUrl(MikaLinks.X) }) { ExternalMark() }
-            ListRow(MikaIcons.Bug, AboutCopy.FEEDBACK, AboutCopy.FEEDBACK_SUB, onClick = { sheet = AboutSheet.Feedback }) { RowChevron() }
+            ListRow(MikaIcons.Chats, AboutCopy.GROUP, first = true, onClick = { sheet = AboutSheet.Group }) { RowChevron() }
+            ListRow(MikaIcons.XMark, AboutCopy.FOLLOW, onClick = { onOpenUrl(MikaLinks.X) }) { RowChevron() }
+            ListRow(MikaIcons.Bug, AboutCopy.FEEDBACK, onClick = { sheet = AboutSheet.Feedback }) { RowChevron() }
         }
         GroupCard {
-            ListRow(MikaIcons.Code, AboutCopy.REPO, AboutCopy.REPO_SUB, first = true, onClick = { onOpenUrl(MikaLinks.REPO) }) { ExternalMark() }
-            ListRow(MikaIcons.Book, AboutCopy.GUIDE, AboutCopy.GUIDE_SUB, onClick = { onOpenUrl(MikaLinks.README) }) { ExternalMark() }
+            ListRow(MikaIcons.Code, AboutCopy.REPO, first = true, onClick = { onOpenUrl(MikaLinks.REPO) }) { RowChevron() }
+            ListRow(MikaIcons.Book, AboutCopy.GUIDE, onClick = { onOpenUrl(MikaLinks.README) }) { RowChevron() }
         }
 
         Row(
@@ -260,10 +259,6 @@ internal fun UpdateDot(modifier: Modifier = Modifier) {
     Box(modifier.size(8.dp).background(MikaTheme.colors.bad, CircleShape).testTag("update-dot"))
 }
 
-@Composable
-private fun ExternalMark() {
-    Icon(MikaIcons.External, null, Modifier.size(15.dp), tint = MikaTheme.colors.ink3)
-}
 
 // ---------- 底部面板 ----------
 

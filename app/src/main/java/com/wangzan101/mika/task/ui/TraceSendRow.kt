@@ -1,5 +1,6 @@
 package com.wangzan101.mika.task.ui
 
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -59,7 +60,7 @@ internal fun TraceSendRow(archive: TraceArchive) {
         ViewModelProvider(owner)["otlp-send:${archive.runId}", TraceSendState::class.java]
     }
     var dialog by remember(archive.runId) { mutableStateOf(false) }
-    ListRow(null, stringResource(R.string.trace_send), stringResource(R.string.trace_network_hint),
+    ListRow(null, stringResource(R.string.trace_send), note = stringResource(R.string.trace_network_hint),
         onClick = if (sender.busy) null else ({ dialog = true })) { RowChevron() }
     val message = when (val r = sender.receipt) {
         OtlpReceipt.Accepted -> stringResource(R.string.trace_sent)
@@ -79,12 +80,12 @@ internal fun TraceSendRow(archive: TraceArchive) {
         MikaDialog(onDismissRequest = { dialog = false }, title = { Text(stringResource(R.string.trace_send)) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    OutlinedTextField(address, { address = it }, Modifier.testTag("trace-endpoint"), singleLine = true, isError = address.isNotBlank() && !validAddress,
+                    MikaTextField(address, { address = it }, Modifier.testTag("trace-endpoint"), singleLine = true, isError = address.isNotBlank() && !validAddress,
                         label = { Text(stringResource(R.string.trace_endpoint)) },
                         supportingText = { Text(stringResource(R.string.trace_endpoint_hint)) })
-                    OutlinedTextField(name, { name = it }, Modifier.testTag("trace-auth-name"), singleLine = true, isError = !validHeader,
+                    MikaTextField(name, { name = it }, Modifier.testTag("trace-auth-name"), singleLine = true, isError = !validHeader,
                         label = { Text(stringResource(R.string.trace_header_name)) })
-                    OutlinedTextField(value, { value = it }, Modifier.testTag("trace-auth-value"), singleLine = true, isError = !validHeader,
+                    MikaTextField(value, { value = it }, Modifier.testTag("trace-auth-value"), singleLine = true, isError = !validHeader,
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false),
                         label = { Text(stringResource(R.string.trace_header_value)) })

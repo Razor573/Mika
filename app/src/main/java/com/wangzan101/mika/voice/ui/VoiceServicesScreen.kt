@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedTextField
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
@@ -213,11 +213,11 @@ private fun ServiceList(
         }
         GroupLabel(stringResource(R.string.voice_add_advanced))
         GroupCard {
-            ListRow(MikaIcons.Key, stringResource(R.string.voice_preset_compat), stringResource(R.string.voice_preset_compat_sub), first = true,
+            ListRow(MikaIcons.Key, stringResource(R.string.voice_preset_compat), subtitle = stringResource(R.string.voice_preset_compat_sub), first = true,
                 onClick = { onPreset(PresetKind.Compatible) }, modifier = Modifier.testTag("preset-compat")) { RowChevron() }
-            ListRow(MikaIcons.Key, stringResource(R.string.voice_preset_selfhosted), stringResource(R.string.voice_preset_selfhosted_sub),
+            ListRow(MikaIcons.Key, stringResource(R.string.voice_preset_selfhosted), subtitle = stringResource(R.string.voice_preset_selfhosted_sub),
                 onClick = { onPreset(PresetKind.SelfHosted) }, modifier = Modifier.testTag("preset-selfhosted")) { RowChevron() }
-            ListRow(null, stringResource(R.string.voice_add_custom), stringResource(R.string.voice_add_custom_sub),
+            ListRow(null, stringResource(R.string.voice_add_custom),
                 onClick = onOpenCustom, modifier = Modifier.testTag("voice-service-add")) { RowChevron() }
         }
         FooterNote(stringResource(R.string.voice_services_footer), Modifier.padding(top = 6.dp))
@@ -307,7 +307,7 @@ private fun VendorDetail(
                 if (others.isNotEmpty()) {
                     val expanded = open[cap] == true
                     ListRow(
-                        null, stringResource(R.string.voice_other_models, others.size), stringResource(R.string.voice_other_models_sub),
+                        null, stringResource(R.string.voice_other_models, others.size), note = stringResource(R.string.voice_other_models_sub),
                         first = known.isEmpty(), onClick = { open[cap] = !expanded },
                         modifier = Modifier.testTag("vendor-others-${cap.name.lowercase()}"),
                     ) { Icon(if (expanded) MikaIcons.Up else MikaIcons.Down, null, tint = c.ink3) }
@@ -379,7 +379,7 @@ internal fun TextEntryDialog(title: String, label: String, onDismiss: () -> Unit
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            OutlinedTextField(
+            MikaTextField(
                 text, { text = it }, Modifier.fillMaxWidth().testTag(tag),
                 singleLine = true, label = { Text(label) },
             )

@@ -9,7 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedTextField
+import com.wangzan101.mika.ui.components.MikaTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,7 +22,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -130,7 +129,7 @@ fun WebSearchDialog(initial: WebSearchConfig, onDismiss: () -> Unit, onSave: (We
     fun shows(why: WebSearchProvider.Problem) = problem == why && (tried || touched[provider to why] == true)
     val endpointFocus = remember { FocusRequester() }
     val keyFocus = remember { FocusRequester() }
-    val uri = LocalUriHandler.current
+    val context = androidx.compose.ui.platform.LocalContext.current
     MikaDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.web_search_title)) },
@@ -223,7 +222,7 @@ fun WebSearchDialog(initial: WebSearchConfig, onDismiss: () -> Unit, onSave: (We
                 }
                 if (provider.needsEndpoint) {
                     val error = shows(WebSearchProvider.Problem.Endpoint)
-                    OutlinedTextField(
+                    MikaTextField(
                         entry.endpoint, { entries[provider] = entry.copy(endpoint = it); touched[provider to WebSearchProvider.Problem.Endpoint] = true },
                         Modifier.fillMaxWidth().padding(top = 8.dp).focusRequester(endpointFocus).testTag("web-search-endpoint"),
                         singleLine = true, isError = error,
@@ -233,7 +232,7 @@ fun WebSearchDialog(initial: WebSearchConfig, onDismiss: () -> Unit, onSave: (We
                 }
                 if (provider.takesKey) {
                     val error = shows(WebSearchProvider.Problem.Key)
-                    OutlinedTextField(
+                    MikaTextField(
                         entry.apiKey, { entries[provider] = entry.copy(apiKey = it); touched[provider to WebSearchProvider.Problem.Key] = true },
                         Modifier.fillMaxWidth().padding(top = 8.dp).focusRequester(keyFocus).testTag("web-search-key"),
                         singleLine = true, visualTransformation = PasswordVisualTransformation(),
@@ -243,7 +242,7 @@ fun WebSearchDialog(initial: WebSearchConfig, onDismiss: () -> Unit, onSave: (We
                     )
                     WebSearchCopy.keyPage(provider)?.let { page ->
                         // 没有能打开网页的应用时 openUri 会抛错:这时什么都不做
-                        TextButton({ runCatching { uri.openUri(page) } }, Modifier.testTag("web-search-get-key")) { Text(stringResource(R.string.web_search_get_key)) }
+                        TextButton({ runCatching { com.wangzan101.mika.ui.openInBrowser(context, page) } }, Modifier.testTag("web-search-get-key")) { Text(stringResource(R.string.web_search_get_key)) }
                     }
                 }
                 // 原来那段说明里要紧的两点:密钥加密存在本机、结果按不可信内容处理
