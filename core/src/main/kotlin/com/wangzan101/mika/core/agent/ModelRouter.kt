@@ -49,6 +49,9 @@ class ModelRouter(
     /** 当前活跃的轻量模型(可能是组)。 */
     val currentLight: ChatModel? get() = lightChain.getOrNull(lightIndex)
     private val currentPool: ModelPool? get() = lightPools.getOrNull(lightIndex)
+    val lightModelName: String? get() = currentLight?.name
+    val lightProviderName: String? get() =
+        currentLight?.provider ?: currentPool?.members?.minByOrNull { it.priority }?.model?.provider
 
     /** 轻量模型能不能接手机步;不能时 lightSteps 不生效。组里只要有一个支持工具的成员就行,具体到每一步再按 need 过滤。 */
     val active: Boolean get() = !disabled && currentPool?.members?.any { it.model.capabilities.toolCalls } == true

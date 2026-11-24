@@ -8,15 +8,22 @@ import com.wangzan101.mika.core.safety.guard.GuardVerdict
 import com.wangzan101.mika.core.safety.guard.OperationGuards
 import com.wangzan101.mika.core.safety.guard.PAGE_READ_VERBS
 import com.wangzan101.mika.core.safety.guard.GuardScope
+import com.wangzan101.mika.core.safety.guard.StepHashOutcome
 import com.wangzan101.mika.core.safety.guard.elementsHash
+import com.wangzan101.mika.core.safety.guard.extractedItemsHash
 import com.wangzan101.mika.core.safety.guard.resultFingerprint
+import com.wangzan101.mika.core.safety.guard.screenContentHash
+import com.wangzan101.mika.core.general.HISTORY_READ
+import com.wangzan101.mika.core.general.HistoryRead
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.run.record.Redactor
 import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.learn.replay.Anchors
 import com.wangzan101.mika.core.learn.replay.effectiveWrite
 import com.wangzan101.mika.core.screen.uistate.Described
+import com.wangzan101.mika.core.screen.uistate.ScreenJson
 import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
+import com.wangzan101.mika.core.screen.uistate.UiTreeJson
 import com.wangzan101.mika.core.screen.uistate.interfaces
 import com.wangzan101.mika.core.tool.ActionPass
 import com.wangzan101.mika.core.tool.ToolDispatcher
@@ -71,11 +78,15 @@ class ActionExecutor(
     /** 不动屏幕的工具的守卫叫停的结论;没叫停为 null。 */
     val offScreenStop: GuardVerdict? get() = offScreen?.stop
 
+    /** 最近一次模型单步调用后的屏幕/提取哈希与循环计数遥测。 */
+    var lastStepTelemetry: StepHashOutcome? = null
+
     suspend fun run(call: Part.ToolCall, origin: Origin, followUp: FollowUp = FollowUp.NONE): ActionOutcome =
         run(call, origin, followUp, reads = null)
 
     /** [reads]:页面脚本一次调用里的读单独计数的范围(来源要求隔离时);那里的动作仍按任务计。 */
     private suspend fun run(call: Part.ToolCall, origin: Origin, followUp: FollowUp, reads: GuardScope?): ActionOutcome {
+        if (origin is Origin.Model) lastStepTelemetry = null
         val control = tools.manualControl ?: return runAutomatic(call, origin, followUp, reads)
         return try { control.plan(tools) { runAutomatic(call, origin, followUp, reads) } }
         catch (e: com.wangzan101.mika.core.run.ManualControl.Interrupted) {
@@ -139,6 +150,19 @@ class ActionExecutor(
         }
         if (guards.stop != null) return refuse("guard_stopped", origin, before)
         if (policy.stopOnGuardWarning && before.isNotEmpty()) return refuse("guard_warning", origin, before)
+        if (origin is Origin.Model) {
+            guards.checkBeforeTool(call.name)?.let { verdict ->
+                if (guards.stop != null) return refuse("guard_stopped", origin, before + verdict)
+                return ran(Step(
+                    call, args, origin, before + verdict, writing = false, offScreen, verb, null, followUp, reads,
+                    preset = ToolExecution(buildJsonObject {
+                        put("ok", false)
+                        put("error", verdict.code)
+                        put("message", verdict.nudge.orEmpty())
+                    }),
+                ))
+            }
+        }
         val writing = tools.writesScreen(call.name)
         if (writing && !policy.gatedByCaller) try {
             gate()
@@ -282,6 +306,7 @@ class ActionExecutor(
                 guards.pageChanged()
             }
         }
+        val telemetry = computeStepTelemetry(s, resolved, elements)
         val (exec, content) = s.followUp.present(resolved, s.before + after)
 
         if (!s.offScreen) onScreenAction?.invoke(s.verb, s.args, exec)
@@ -304,7 +329,61 @@ class ActionExecutor(
         if (policy.frames == Frames.WhenChanged && shotId != null) recorder.event(RunEvent.Media(recorder.now(), shotId, n, RunEvent.placeLabel(exec.place)))
         val seen = if (policy.routeTargets) routeTarget(call, s.verb, s.origin, exec) else null
         s.traced?.let { recorder.event(RunEvent.State(recorder.now(), "gate_unresolved", "${call.name} $it")) }
-        return ActionOutcome.Ran(exec, s.before, after, content, durationMs, shotId.takeIf { picture != null }, picture, seen)
+        return ActionOutcome.Ran(exec, s.before, after, content, durationMs, shotId.takeIf { picture != null }, picture, seen, telemetry)
+    }
+
+    private fun computeStepTelemetry(s: Step, resolved: ToolExecution, elements: JsonArray?): StepHashOutcome? {
+        if (s.origin !is Origin.Model) return null
+        if (s.preset != null) {
+            if (s.call.name != HISTORY_READ) return null
+            return StepHashOutcome(
+                screenHash = null,
+                extractedHash = null,
+                screenChanged = null,
+                extractedItemsNew = null,
+                staleCycleCount = guards.currentStaleCycleCount,
+                historyReadReason = HistoryRead.sanitizedReason(s.args),
+            ).also { lastStepTelemetry = it }
+        }
+        val session = tools.interfaces.session
+        val screenObj = resolved.content["screen"] as? JsonObject
+        val hasScreenPayload = elements != null ||
+            "elements" in resolved.content || "tree" in resolved.content || "windows" in resolved.content ||
+            screenObj?.let { "elements" in it || "tree" in it || "windows" in it } == true
+        val isDiffWithoutTree = screenObj?.let {
+            it["full"] == JsonPrimitive(false) && "tree" !in it && "windows" !in it
+        } == true
+        val screenHash = when {
+            s.offScreen -> null
+            hasScreenPayload && !isDiffWithoutTree -> screenContentHash(elements, resolved.content)
+                ?: session.lastSnapshot?.takeUnless { session.stale }?.let(::snapshotHash)
+            !session.stale -> session.lastSnapshot?.let(::snapshotHash)
+                ?: screenContentHash(elements, resolved.content)
+            else -> null
+        }
+        val extracted = if (!s.offScreen && s.call.name in EXTRACT_HASH_TOOLS) extractedItemsHash(resolved.content) else null
+        val ok = resolved.content["ok"] == JsonPrimitive(true)
+        val outcome = guards.recordStepOutcome(
+            tool = s.call.name,
+            screenHash = screenHash,
+            extractedHash = extracted?.hash,
+            itemHashes = extracted?.itemHashes.orEmpty(),
+            writing = s.writing,
+            ok = ok,
+        )
+        return (if (s.call.name == HISTORY_READ) outcome.copy(historyReadReason = HistoryRead.sanitizedReason(s.args)) else outcome).also {
+            lastStepTelemetry = it
+        }
+    }
+
+    private fun snapshotHash(snap: ScreenSnapshot): String? {
+        val snapContent = buildJsonObject {
+            (snap.packageName ?: snap.unreadableApp)?.let { put("currentApp", it) }
+            snap.web?.title?.let { put("title", it) }
+            if (snap.windows.isNotEmpty()) put("tree", UiTreeJson.windows(snap))
+        }
+        val (snapElements, _) = ScreenJson.elements(snap, Int.MAX_VALUE)
+        return screenContentHash(snapElements, snapContent)
     }
 
     private suspend fun execute(s: Step, sub: SubActions?): ToolExecution {
@@ -391,5 +470,9 @@ class ActionExecutor(
             recorder.result(origin.step, call.name, tools.verb(call.name), content, tools.portRecord(call.name, args), null, null, 0, origin.policy.source, call.id)
         }
         return ActionOutcome.Refused(code, content, before, hit)
+    }
+
+    private companion object {
+        val EXTRACT_HASH_TOOLS = setOf("phone_extract", "phone_collect", "phone_query")
     }
 }

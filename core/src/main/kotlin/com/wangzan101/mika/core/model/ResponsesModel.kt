@@ -70,6 +70,7 @@ class ResponsesModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "openai_responses"
     private val endpoint = baseUrl.trim().trimEnd('/') + "/responses"
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -257,7 +258,7 @@ class ResponsesModel(
     }
 
     private fun httpError(status: Int, retryAfter: String?, body: String, err: ErrorBody?): ModelError =
-        err?.let { errorOf(it.code, it.message, it.param) }
+        (err?.let { errorOf(it.code, it.message, it.param) }
             // 账号登录已经核对过身份:没有认得出的错误代码的 403 是档位不够,不当成 Key 不对或某个模型没开通
             ?: (if (status == 403 && accountLogin != null) ModelError.AccountPlanNotAllowed(accountLogin, err?.message.orEmpty().take(200)) else null)
             ?: ModelHttp.reasoningEffortRejected(status, body)
@@ -270,7 +271,7 @@ class ResponsesModel(
             status == 404 -> ModelError.ModelNotFound(model, ModelAccessErrors.jsonDetail(body))
             status in 500..599 -> ModelError.Server(status)
             else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
-        }
+        }).withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body) ?: err?.code, body)
 
     private companion object {
         const val ENCRYPTED_REASONING = "reasoning.encrypted_content"
@@ -318,7 +319,14 @@ private class ResponsesStream(
     private fun failure(e: JsonObject?): ModelError {
         val code = e?.str("code")
         val message = e?.str("message").orEmpty()
-        return errorOf(code, message, e?.str("param")) ?: ModelError.BadResponse(listOfNotNull(code, message.take(200)).joinToString(" "))
+        val body = e?.toString()
+        val mapped = errorOf(code, message, e?.str("param"))
+            ?: ModelError.BadResponse(listOfNotNull(code, message.take(200)).joinToString(" "))
+        return mapped.withDiagnostics(
+            status = (mapped as? ModelError.Server)?.status,
+            code = code ?: body?.let(ModelErrorDiagnostics::extractJsonCode),
+            body = body,
+        )
     }
 
     /** 服务端没按流式回、直接给了整个 response 对象。 */

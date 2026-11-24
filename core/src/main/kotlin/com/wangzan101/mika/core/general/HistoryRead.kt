@@ -8,6 +8,7 @@ import com.wangzan101.mika.core.screen.observation.Trust
 import com.wangzan101.mika.core.screen.observation.Untrusted
 import com.wangzan101.mika.core.prompt.Feedback
 import com.wangzan101.mika.core.prompt.Prompts
+import com.wangzan101.mika.core.run.record.Redactor
 import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.run.record.RunRecords
 import com.wangzan101.mika.core.tool.AgentTool
@@ -18,11 +19,15 @@ import com.wangzan101.mika.core.tool.ToolContext
 import com.wangzan101.mika.core.tool.ToolDef
 import com.wangzan101.mika.core.tool.ToolExecution
 import com.wangzan101.mika.core.tool.Verb
+import com.wangzan101.mika.core.tool.argStr
 import com.wangzan101.mika.core.tool.fail
 import com.wangzan101.mika.core.tool.int
 import com.wangzan101.mika.core.tool.okObj
+import com.wangzan101.mika.core.tool.str
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -62,7 +67,17 @@ internal object HistoryRead : AgentTool {
         mapOf(
             "turn" to int("Which earlier turn to read: 1 = the turn just before this one, 2 = the one before that, and so on. Leave out to list the earlier turns.", 1),
             "offset" to int("Item to start from, from nextOffset of the previous call (default 0).", 0),
+            "reason" to str("Brief reason why earlier turn history is needed now."),
         ), emptyList())
+
+    /** 提取并脱敏原因说明,最长 80 字;未提供时回退到请求类型。 */
+    fun sanitizedReason(args: JsonObject): String {
+        val reason = args.argStr("reason")?.trim()?.takeIf { it.isNotEmpty() }
+        if (reason != null) return Redactor.text(reason).take(80)
+        val turn = args["turn"]?.takeUnless { it is JsonNull }
+        val offset = args["offset"]?.takeUnless { it is JsonNull } ?: 0
+        return if (turn == null) "list_turns" else "read_turn=$turn,offset=$offset"
+    }
 
     override fun available(ctx: ToolContext): Boolean =
         ctx.config.runRecords != null && ctx.config.runSpec?.priorTurns.orEmpty().any { it.runId != null }

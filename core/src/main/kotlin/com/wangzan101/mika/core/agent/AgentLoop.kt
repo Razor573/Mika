@@ -38,6 +38,8 @@ import com.wangzan101.mika.core.proactive.ObservedContext
 import com.wangzan101.mika.core.run.record.Redactor
 import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.run.record.RunSink
+import com.wangzan101.mika.core.run.record.UsageCostEstimator
+import com.wangzan101.mika.core.run.ChildRunSink
 import com.wangzan101.mika.core.run.RunEventBus
 import com.wangzan101.mika.core.run.RunInbox
 import com.wangzan101.mika.core.run.RunSpec
@@ -57,6 +59,8 @@ import com.wangzan101.mika.core.tool.Verb
 import com.wangzan101.mika.core.learn.replay.RouteMatcher
 import com.wangzan101.mika.core.screen.map.ScreenMapStore
 import com.wangzan101.mika.core.safety.verify.Verifier
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -76,6 +80,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.time.ZoneId
 import com.wangzan101.mika.core.screen.user.UserScreenSource
+
+/** 当前正在执行工具调用的主循环步号；供 `spawn_agent` 记录 `parentStep`。 */
+class CurrentStep(val step: Int) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<CurrentStep>
+}
 
 /** 批做完后另看的一眼:内容和画面同一时刻。 */
 internal fun batchViewNote(content: String) = Feedback.format("batch_view_note", "screen" to content)
@@ -145,7 +154,7 @@ class AgentLoop(
     /** 事件时间与耗时用的钟;测试里换成假时钟。 */
     internal val clock: () -> Long = System::currentTimeMillis,
     /** 大小模型分工;只在 flags.lightSteps 打开时用。 */
-    router: ModelRouter? = null,
+    internal val router: ModelRouter? = null,
     /** UI 对话第一次要用工具时的独立意图判断；null 保留评测与其他入口的原行为。 */
     internal val intentJudge: ChatModel? = null,
     /** 可选的类型化意图判断;不确定或失败时仍问 intentJudge,不替代主模型与执行关卡。 */
@@ -168,6 +177,8 @@ class AgentLoop(
     internal val autonomous: Boolean = false,
     /** 主动能力从通知里攒下、够格带进这次任务的那一段(见 [com.wangzan101.mika.core.proactive.ObservedContext]);没有为 null。 */
     internal val observed: String? = null,
+    /** 前台派活时附的补充说明(背景和整理);以 Mika 的说明进上下文,不进用户原话([utterances])。没有为 null。 */
+    internal val deskNote: String? = null,
     /** 交互界面开启可见文字流；评测和后台调用保持原请求格式。 */
     internal val streamReplies: Boolean = false,
     /** 这个对话里用户发来的屏幕(见 [UserScreenTurns]);没有时带屏幕的那一行原样给模型。 */
@@ -185,6 +196,11 @@ class AgentLoop(
     /** 这一轮用的人格(名字 · 修订号);只写进运行记录,不参与提示词拼装。没有人格为 null。 */
     internal val personaLabel: String? = null,
     internal val stages: TaskStages? = null,
+    internal val versionCode: Int? = null,
+    internal val versionName: String? = null,
+    internal val mainProvider: String? = null,
+    internal val lightModelName: String? = null,
+    internal val lightProvider: String? = null,
 ) {
     init {
         require(maxSteps > 0) { "maxSteps must be positive" }
@@ -192,6 +208,8 @@ class AgentLoop(
         tools.captureTargets = flags.replay
         tools.observeMcpCalls(::showMcpCall)
     }
+
+    private val initialSink = sink
 
     /** 运行记录:按因果先后写(见 [RecordOrder])。 */
     val events = RunEventBus().also { bus ->
@@ -267,7 +285,7 @@ class AgentLoop(
 
     /** 新入口:同一对话里的插话和控制经 [inbox] 进入;旧入口继续使用相同的执行路径。 */
     suspend fun run(spec: RunSpec, inbox: RunInbox): TaskState {
-        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget)
+        suspend fun start() = runInternal(spec.goal, spec.priorTurns, inbox, spec.provenance, spec.threadId, spec.tokenBudget, spec)
         // App 在整个运行外层装好共享 tally,子任务也沿用;直接走核心入口时由这里保证 RunSpec 的预算生效。
         if (spec.tokenBudget == null || currentCoroutineContext()[RunUsageTally] != null) return start()
         return withContext(RunUsageTally(spec.tokenBudget)) { start() }
@@ -279,6 +297,7 @@ class AgentLoop(
     internal suspend fun runInternal(
         task: String, priorTurns: List<Turn>, inbox: RunInbox?, runProvenance: RunProvenance, threadId: String,
         tokenBudget: Long? = null,
+        runSpec: RunSpec? = null,
     ): TaskState {
         cancelRequested = false
         provenance = runProvenance
@@ -294,24 +313,44 @@ class AgentLoop(
         // 同意只在一次任务内有效
         confirmations?.reset()
         utterances?.clear()
-        emit(RunEvent.TaskStarted(now(), Redactor.text(task), model.name,
-            origin = runProvenance.origin.takeIf { it != RunOrigin.Ui }?.name?.lowercase(),
-            stepLimit = maxSteps.takeIf { it != Int.MAX_VALUE }, tokenBudget = tokenBudget))
-        // 人格在 TaskStarted 之后记,时间线按「开始时用了谁」读;没有人格不写
-        personaLabel?.let { emit(RunEvent.State(now(), "persona", it)) }
-        var end: TaskState? = null
-        replay?.reset()
-        lastEnd = null
+        val childSinkSub = currentCoroutineContext()[ChildRunSink]?.sink
+            ?.takeIf { it !== initialSink && it !== RunSink.NONE }
+            ?.let { events.subscribe(it) }
         try {
-            end = runLoop(task, priorTurns, inbox)
-            lastEnd = end
-            return end
-        } catch (e: CancellationException) {
-            end = TaskState.Cancelled
-            throw e
+            emit(RunEvent.TaskStarted(
+                atMs = now(),
+                goal = Redactor.text(task),
+                model = model.name,
+                origin = runProvenance.origin.takeIf { it != RunOrigin.Ui }?.name?.lowercase(),
+                stepLimit = maxSteps.takeIf { it != Int.MAX_VALUE },
+                tokenBudget = tokenBudget,
+                versionCode = versionCode,
+                versionName = versionName,
+                mainProvider = mainProvider ?: model.provider,
+                lightModel = lightModelName ?: router?.lightModelName,
+                lightProvider = lightProvider ?: router?.lightProviderName,
+                parentRunId = runSpec?.parent?.value,
+                childId = if (runSpec?.parent != null) runSpec.id.value else null,
+                parentStep = runSpec?.parentStep,
+            ))
+            // 人格在 TaskStarted 之后记,时间线按「开始时用了谁」读;没有人格不写
+            personaLabel?.let { emit(RunEvent.State(now(), "persona", it)) }
+            var end: TaskState? = null
+            replay?.reset()
+            lastEnd = null
+            try {
+                end = runLoop(task, priorTurns, inbox)
+                lastEnd = end
+                return end
+            } catch (e: CancellationException) {
+                end = TaskState.Cancelled
+                throw e
+            } finally {
+                emit(ended(end))
+                inbox?.close()
+            }
         } finally {
-            emit(ended(end))
-            inbox?.close()
+            childSinkSub?.close()
         }
     }
 
@@ -403,7 +442,9 @@ class AgentLoop(
         fun recordPromptVersion(): List<String> {
             // 提示词版本按每组都展开的样子算:同一版提示词不因这次展开了哪几组而不同
             val everything = tools.offeredNow(extra, all = true).filter(::keep)
-            emit(RunEvent.PromptVersion(now(), PromptVersion.of(SystemPrompt.assemble(basePrompt, tools.promptSections(everything, all = true)), everything)))
+            val hash = PromptVersion.of(SystemPrompt.assemble(basePrompt, tools.promptSections(everything, all = true)), everything)
+            caller.lastPromptVersion = hash
+            emit(RunEvent.PromptVersion(now(), hash))
             return everything.map { it.name }
         }
 
@@ -576,24 +617,74 @@ class AgentLoop(
             val retryWaitMs = caller.lastRetryWaitMs
             val repliedAtMs = now()
             val latencyMs = repliedAtMs - asked - retryWaitMs
+            val diag = caller.lastCallDiagnostics
             // 随调用写的字是进度说明,界面上的实时那一行先用它
             val narration = text.takeIf { !calls.isEmpty && it.isNotEmpty() }
             _state.value = TaskState.Running(step, note, tool, progress = progress.state(step), reason = reason, narration = narration,
                 preview = text.takeIf { streamReplies && calls.isEmpty && it.isNotEmpty() })
             // 带调用的回复等执行完再记:要看端口是否报告了密码框
-            fun recordReply(argsJson: String?) = emit(RunEvent.ModelReply(
-                now(), step, RunEvent.clip(Redactor.text(text)), tool, argsJson,
-                reply.usage?.inputTokens, reply.usage?.outputTokens, reply.usage?.cachedInputTokens, latencyMs,
-                if (caller.recordRoles) used.name else null, if (caller.recordRoles) caller.roleOf(used) else null, retryWaitMs = retryWaitMs,
-                group = caller.groupOf(used),
-                repliedAtMs = repliedAtMs,
-            ))
+            fun recordReply(argsJson: String?) {
+                val stepTelemetry = executor.lastStepTelemetry
+                emit(RunEvent.ModelReply(
+                    atMs = now(),
+                    step = step,
+                    text = RunEvent.clip(Redactor.text(text)),
+                    tool = tool,
+                    argsJson = argsJson,
+                    inputTokens = reply.usage?.inputTokens,
+                    outputTokens = reply.usage?.outputTokens,
+                    cachedTokens = reply.usage?.cachedInputTokens,
+                    latencyMs = latencyMs,
+                    model = if (caller.recordRoles) used.name else null,
+                    role = if (caller.recordRoles) caller.roleOf(used) else null,
+                    group = caller.groupOf(used),
+                    retryWaitMs = retryWaitMs,
+                    repliedAtMs = repliedAtMs,
+                    lightRetried = diag?.lightRetried,
+                    provider = diag?.provider ?: used.provider,
+                    accepted = true,
+                    attempt = diag?.attempt,
+                    retryCount = diag?.retryCount,
+                    usageReported = reply.usage != null,
+                    hasImages = diag?.hasImages,
+                    vision = diag?.vision,
+                    sameApp = diag?.sameApp,
+                    lastChanged = diag?.lastChanged,
+                    forcedMain = diag?.forcedMain,
+                    cacheMissReason = diag?.cacheMissReason,
+                    systemPromptHash = diag?.systemPromptHash,
+                    promptVersion = diag?.promptVersion ?: caller.lastPromptVersion,
+                    toolListHash = diag?.toolListHash,
+                    promptTransformEffect = diag?.promptTransformEffect,
+                    compactionTrigger = diag?.compactionTrigger,
+                    foldedSteps = diag?.foldedSteps,
+                    capCheckResult = diag?.capCheckResult,
+                    estimatedInputTokens = diag?.estimatedInputTokens,
+                    costUsd = reply.usage?.let { u ->
+                        UsageCostEstimator.usd(
+                            used.name.ifBlank { model.name },
+                            caller.roleOf(used),
+                            u.inputTokens.toLong(),
+                            u.cachedInputTokens.toLong(),
+                            u.outputTokens.toLong(),
+                        )
+                    },
+                    screenHash = stepTelemetry?.screenHash,
+                    extractedHash = stepTelemetry?.extractedHash,
+                    screenChanged = stepTelemetry?.screenChanged,
+                    extractedItemsNew = stepTelemetry?.extractedItemsNew,
+                    historyReadReason = stepTelemetry?.historyReadReason,
+                ))
+            }
 
+            executor.lastStepTelemetry = null
             val first = calls.action
             return if (first == null) {
                 handleAnswer(step, calls, text, reply.stopReason, ::recordReply)
             } else {
-                handleTool(step, calls, first, reason, narration, ::recordReply)
+                withContext(CurrentStep(step)) {
+                    handleTool(step, calls, first, reason, narration, ::recordReply)
+                }
             }
         }
 

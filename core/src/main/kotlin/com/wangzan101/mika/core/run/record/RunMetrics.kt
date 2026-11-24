@@ -105,9 +105,10 @@ data class RunMetrics(
                 is RunEvent.TaskStarted -> if (started == null) { started = e.atMs; goal = e.goal.take(GOAL_MAX) }
                 is RunEvent.ModelReply -> {
                     calls++
-                    if (e.role == ROLE_LIGHT || !e.acted) light++
-                    if (!e.acted) lightRejected++
-                    if (e.inputTokens == null && e.outputTokens == null) noUsage++
+                    val isLightRejected = e.role == ROLE_LIGHT_REJECTED || (e.role == ROLE_LIGHT && e.accepted == false)
+                    if (e.role == ROLE_LIGHT || isLightRejected) light++
+                    if (isLightRejected) lightRejected++
+                    if (e.usageReported == false || (e.inputTokens == null && e.outputTokens == null)) noUsage++
                     input += e.inputTokens ?: 0
                     output += e.outputTokens ?: 0
                     cached += e.cachedTokens ?: 0
@@ -199,6 +200,7 @@ data class RunMetrics(
         private const val OBSERVE = "observe"
         private const val ACT = "act"
         private const val ROLE_LIGHT = "light"
+        private const val ROLE_LIGHT_REJECTED = "light_rejected"
         /** 包在外层调用里的子步:一批动作里的一步、页面脚本里的一个动作。 */
         private val NESTED = setOf("batch", "script")
         private val SUCCESS = setOf("succeeded", "unverified")

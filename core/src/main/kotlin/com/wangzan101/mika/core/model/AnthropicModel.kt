@@ -51,6 +51,7 @@ class AnthropicModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "anthropic"
     private val endpoint = baseUrl.trimEnd('/') + "/v1/messages"
     /** 实际发出的 `thinking.type`:`adaptive`、`disabled`,或 null(不发)。 */
     private val thinkingType: String? = when (reasoningEffort) {
@@ -207,16 +208,17 @@ class AnthropicModel(
             .build()
     }
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError = ModelAccessErrors.of(status, body, model) ?: when {
-        status == 401 || status == 403 -> ModelError.Auth()
-        status == 402 || body.contains("credit balance is too low") -> ModelError.QuotaExceeded()
-        status == 429 -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter))
-        status == 413 || body.contains("prompt is too long") || ModelHttp.contextTooLong(status, body) -> ModelError.ContextTooLong()
-        status == 404 -> ModelError.ModelNotFound(model, ModelAccessErrors.jsonDetail(body))
-        status == 529 || body.contains("overloaded_error") -> ModelError.Server(529)
-        status in 500..599 -> ModelError.Server(status)
-        else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
-    }
+    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+        (ModelAccessErrors.of(status, body, model) ?: when {
+            status == 401 || status == 403 -> ModelError.Auth()
+            status == 402 || body.contains("credit balance is too low") -> ModelError.QuotaExceeded()
+            status == 429 -> ModelError.RateLimited(HttpSupport.retryAfterMs(retryAfter))
+            status == 413 || body.contains("prompt is too long") || ModelHttp.contextTooLong(status, body) -> ModelError.ContextTooLong()
+            status == 404 -> ModelError.ModelNotFound(model, ModelAccessErrors.jsonDetail(body))
+            status == 529 || body.contains("overloaded_error") -> ModelError.Server(529)
+            status in 500..599 -> ModelError.Server(status)
+            else -> if (status >= 400) ModelError.Server(status, ModelAccessErrors.detail(body)) else ModelError.BadResponse("HTTP $status ${body.take(200)}")
+        }).withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     private fun toolJson(t: ToolSpec, last: Boolean): JsonObject = buildJsonObject {
         put("name", t.name)
@@ -230,18 +232,23 @@ class AnthropicModel(
     private fun buildMessages(messages: List<Message>): JsonArray {
         // (role, blocks) 先按相邻同角色合并,再输出
         val merged = mutableListOf<Pair<String, MutableList<JsonObject>>>()
-        for (m in messages) {
-            if (m.role == Role.System) continue
+        // 对话缓存到最后一条 user 消息的最后一块为止,下一步的开头与它相同就从缓存取;助手消息可能以思考块结尾,不标。
+        // 末尾每次都变的 uncached 消息不算:标在它们前面,它们的块照常合进去、跟在标记后面。
+        val stable = messages.size - messages.takeLastWhile { it.uncached }.size
+        var mark: Pair<Int, Int>? = null
+        messages.forEachIndexed { index, m ->
+            if (m.role == Role.System) return@forEachIndexed
             val role = if (m.role == Role.Assistant) "assistant" else "user"
             val blocks = if (role == "assistant") assistantBlocks(m) else userBlocks(m)
-            if (blocks.isEmpty()) continue
+            if (blocks.isEmpty()) return@forEachIndexed
             if (merged.lastOrNull()?.first == role) merged.last().second += blocks else merged += role to blocks.toMutableList()
+            if (role == "user" && index < stable) mark = merged.lastIndex to merged.last().second.lastIndex
         }
-        // 对话缓存到最后一条 user 消息为止,下一步的开头与它相同就从缓存取;助手消息可能以思考块结尾,不标
-        val lastUser = merged.indexOfLast { it.first == "user" }
         return buildJsonArray {
             merged.forEachIndexed { i, (role, blocks) ->
-                val content = if (i == lastUser) blocks.dropLast(1) + JsonObject(blocks.last() + ("cache_control" to ephemeral)) else blocks
+                val content = mark?.takeIf { it.first == i }?.let { (_, at) ->
+                    blocks.mapIndexed { j, b -> if (j == at) JsonObject(b + ("cache_control" to ephemeral)) else b }
+                } ?: blocks
                 add(buildJsonObject { put("role", role); put("content", JsonArray(content)) })
             }
         }
@@ -395,7 +402,10 @@ private class AnthropicStream(
                 }
             }
             "message_stop" -> stopped = true
-            "error" -> throw ModelHttp.streamError(root) ?: ModelError.BadResponse(root["error"].toString().take(200))
+            "error" -> throw ModelHttp.streamError(root) ?: ModelError.BadResponse(root["error"].toString().take(200)).let {
+                val raw = root.toString()
+                it.withDiagnostics(null, ModelErrorDiagnostics.extractJsonCode(raw), raw)
+            }
         }
         return stopped
     }

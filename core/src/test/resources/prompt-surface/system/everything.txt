@@ -530,7 +530,7 @@ skill_save #4be36fd50323
 memory_search #a4abef6e59d3
 memory_save #d0db4dde2bd3
 memory_edit #dc33f1f00285
-history_read #bd4e240c8793
+history_read #c1df77dfcd1a
 spawn_agent #e13f3bdbb1a2
 view_past_screens #2d409bae0381
 hand_to_user #26582d67eb46

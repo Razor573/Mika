@@ -3,6 +3,20 @@ package com.wangzan101.mika.core.model
 import com.wangzan101.mika.core.net.ProxyFailure
 
 sealed class ModelError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    var httpStatus: Int? = null
+        internal set
+    var errorCode: String? = null
+        internal set
+    var errorBody: String? = null
+        internal set
+
+    fun withDiagnostics(status: Int? = null, code: String? = null, body: String? = null): ModelError {
+        if (status != null && httpStatus == null) httpStatus = status
+        if (!code.isNullOrBlank() && errorCode == null) errorCode = code
+        if (!body.isNullOrBlank() && errorBody == null) errorBody = ModelErrorDiagnostics.scrubAndClip(body)
+        return this
+    }
+
     class Auth : ModelError("API key is invalid or lacks permission")
     /**
      * 请求头的值含有 OkHttp 拒绝的字符(换行、其它控制字符、非 ASCII)。在调用 `header()` 之前抛出,

@@ -48,6 +48,7 @@ class OpenAiCompatModel(
     private val forceToolCall: Boolean = false,
 ) : StreamingChatModel {
     override val name: String get() = model
+    override val provider: String get() = "openai_compat"
     private val endpoint = baseUrl.trimEnd('/') + "/chat/completions"
     private val declaredVia = ReasoningVia.ofField(reasoningField)
     private val json = Json { ignoreUnknownKeys = true }
@@ -191,9 +192,12 @@ class OpenAiCompatModel(
             reasoningEffort?.let { put("reasoning_effort", it) }
             // 思考只在带工具的请求里回传(工具调用一步接一步时要接着想);不带工具的旁路调用不需要
             val replayReasoning = tools.isNotEmpty()
+            // 末尾每次都变的 uncached 消息不参与标记:移动的缓存标记落在它们前面
+            val stable = messages.size - messages.takeLastWhile { it.uncached }.size
             val wire = listOf(buildJsonObject { put("role", "system"); put("content", system) }) +
-                messages.flatMap { serialize(it, replayReasoning) }
-            put("messages", JsonArray(if (capabilities.promptCaching == PromptCaching.Explicit) withCacheMarks(wire) else wire))
+                messages.take(stable).flatMap { serialize(it, replayReasoning) }
+            val tail = messages.drop(stable).flatMap { serialize(it, replayReasoning) }
+            put("messages", JsonArray((if (capabilities.promptCaching == PromptCaching.Explicit) withCacheMarks(wire) else wire) + tail))
             if (tools.isNotEmpty()) {
                 putJsonArray("tools") { tools.forEach { add(toolJson(it)) } }
                 if (forceToolChoice) put("tool_choice", "required")
@@ -236,7 +240,9 @@ class OpenAiCompatModel(
         return JsonObject(m + ("content" to JsonArray(withMark)))
     }
 
-    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError = ModelHttp.openAiError(status, retryAfter, body, model)
+    private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
+        ModelHttp.openAiError(status, retryAfter, body, model)
+            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 
     private fun toolJson(t: ToolSpec): JsonObject = buildJsonObject {
         put("type", "function")

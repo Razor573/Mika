@@ -14,12 +14,13 @@ import kotlinx.serialization.json.contentOrNull
 import com.wangzan101.mika.core.tool.ToolIndex
 import com.wangzan101.mika.core.tool.Verb
 
-/** [estimate]:[messages] 的 token 粗估(未校准),发出后和真实用量比对用。[rewritten]:这次是否改写了请求前缀。 */
+/** [estimate]:[messages] 的 token 粗估(未校准),发出后和真实用量比对用。[rewritten]:这次是否改写了请求前缀。[trigger]:触发本次压缩的原因。 */
 data class Compressed(
     val messages: List<Message>,
     val foldedSteps: Int,
     val estimate: Int = TokenEstimate.of(messages),
     val rewritten: Boolean = false,
+    val trigger: String? = null,
 )
 
 /**
@@ -62,12 +63,30 @@ class ContextCompressor(
     /** 上一次压缩:它覆盖的完整历史开头 [covered],压成的 [base](粗估 [estimate]);[aggressive]:按模型报超长那一档压的。 */
     private class View(val covered: List<Message>, val base: List<Message>, val folded: Int, val aggressive: Boolean) {
         val estimate = TokenEstimate.of(base)
+        var actualPostCompactTokens: Int? = null
     }
     private val views = HashMap<Int, View>()
 
     /** 一次请求发出后:[estimated] 是这次请求的粗估(含固定开销),[actual] 是服务商报的输入 token。 */
     fun calibrate(estimated: Int, actual: Int) {
-        observed = TokenEstimate.calibrated(observed, estimated, actual)
+        val prev = observed
+        observed = if (prev != null && estimated > 0 && actual > estimated * 1.1) {
+            maxOf(
+                TokenEstimate.calibrated(prev, estimated, actual),
+                actual.toDouble() / estimated * 0.7 + prev * 0.3,
+            ).coerceIn(TokenEstimate.MIN_SCALE, TokenEstimate.MAX_SCALE)
+        } else {
+            TokenEstimate.calibrated(prev, estimated, actual)
+        }
+    }
+
+    /** 记录本次压缩后首次真实请求返回的服务商输入 token，避免低估触发连续重压。 */
+    fun noteActual(contextTokens: Int, actualInputTokens: Int) {
+        if (actualInputTokens <= 0) return
+        val v = views[contextTokens] ?: return
+        if (v.actualPostCompactTokens == null) {
+            v.actualPostCompactTokens = actualInputTokens
+        }
     }
 
     /** 新任务:压缩状态清空(校准比值留着,同一个模型)。 */
@@ -112,16 +131,28 @@ class ContextCompressor(
         val overCap = size > effectiveCap || rawSize > effectiveCap || (maxInputTokens != null && (TokenEstimate.of(sent) + fixedOverhead) > maxInputTokens)
         // 回差:压缩之后至少再长一个 margin 才再压,压不到触发点以下的历史也不会每步都压;但不越过可用窗口,越过了每步都得压
         val trigger = view?.let {
-            maxOf(limits.trigger, UsageMeter.estimate(it.estimate + fixedOverhead, scale) + limits.margin).coerceAtMost(effectiveCap)
+            val baseAfter = maxOf(UsageMeter.estimate(it.estimate + fixedOverhead, scale), it.actualPostCompactTokens ?: 0)
+            maxOf(limits.trigger, baseAfter + limits.margin).coerceAtMost(effectiveCap)
         } ?: limits.trigger
-        val compact = (last != null && view == null) || (aggressive && view?.aggressive != true) || size > trigger || overCap || periodicCompact
+        val prefixInvalidated = last != null && view == null
+        val overflowTriggered = aggressive && view?.aggressive != true
         // 轮数触发:只为控历史长度。大小还没超、模型没报超长时,只把最早超出的往返折进摘要(见 [foldEvery]);
         // 大小/超长照旧走下面的阶梯。压缩后历史回到 keepRecent 轮,之后只追加,直到又攒够 foldEvery 轮才再折(锯齿,不每步都压)。
         val roundOver = foldEvery != null && toolRounds(sent) > keepRecent + foldEvery
+        val triggerReason = when {
+            prefixInvalidated -> "prefix_invalidated"
+            overflowTriggered -> "overflow"
+            overCap -> "cap_100k"
+            size > trigger -> "size_trigger"
+            periodicCompact -> "periodic_15"
+            roundOver -> "round_over"
+            else -> null
+        }
+        val compact = prefixInvalidated || overflowTriggered || size > trigger || overCap || periodicCompact
         if (!compact && !roundOver) return Compressed(HistoryPruner.limitImages(sent, maxImages), view?.folded ?: 0)
         val next = if (compact) compact(history, limits, fixedOverhead, aggressive, periodicCompact) else foldToRecent(history)
         views[contextTokens] = next
-        return Compressed(HistoryPruner.limitImages(next.base, maxImages), next.folded, rewritten = true)
+        return Compressed(HistoryPruner.limitImages(next.base, maxImages), next.folded, rewritten = true, trigger = triggerReason)
     }
 
     /**
@@ -194,7 +225,10 @@ class ContextCompressor(
         var chosen = pruneObs(Compressed(history, 0))
         for (c in ladder) {
             chosen = c
-            if (tokens(c.messages) <= target && (maxInputTokens == null || (TokenEstimate.of(c.messages) + fixedOverhead) <= maxInputTokens)) break
+            if (tokens(c.messages) <= target &&
+                tokens(c.messages) + overhead <= effectiveCap - limits.margin &&
+                (maxInputTokens == null || (TokenEstimate.of(c.messages) + fixedOverhead) <= maxInputTokens)
+            ) break
         }
         chosen = chosen.let {
             val capped = HistoryPruner.enforceCap(it.messages, tools) { ms ->

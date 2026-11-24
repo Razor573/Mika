@@ -25,6 +25,7 @@ data class RunSpec(
     val tokenBudget: Long? = null,
     /** 由同一批次并行派发的子任务，宿主为它单独分配有状态的资源。 */
     val parallelChild: Boolean = false,
+    val parentStep: Int? = null,
 ) {
     init {
         require(goal.isNotBlank() && threadId.isNotBlank())

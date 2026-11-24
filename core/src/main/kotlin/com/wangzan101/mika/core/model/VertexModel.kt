@@ -24,6 +24,7 @@ class VertexModel(
     private val cleanModel = VertexEndpoints.validateModelId(model)
 
     override val name: String get() = cleanModel
+    override val provider: String get() = "vertex"
 
     private val endpoint: String
     private val streamEndpoint: String
@@ -134,4 +135,5 @@ class VertexModel(
 
     private fun mapError(status: Int, retryAfter: String?, body: String): ModelError =
         ModelHttp.geminiError(status, retryAfter, body, cleanModel)
+            .withDiagnostics(status, ModelErrorDiagnostics.extractJsonCode(body), body)
 }
