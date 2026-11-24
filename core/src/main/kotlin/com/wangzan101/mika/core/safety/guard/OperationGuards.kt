@@ -284,7 +284,7 @@ class OperationGuards(private val stepBudget: Int? = null) {
 
         val goalProgressed = extractedItemsNew == true ||
             (tool in GOAL_PROGRESS_TOOLS && ok && screenChanged != false)
-        if (goalProgressed) {
+        if (goalProgressed || tool !in SEQUENCE_TRACKED_TOOLS) {
             stalledToolSeq.clear()
             consecutiveSequenceBlocks = 0
             lastBreakerTrigger = null
@@ -496,6 +496,14 @@ class OperationGuards(private val stepBudget: Int? = null) {
         // sequence breaker focuses on loops with scroll/swipe/extract/offscreen/system/history/memory tools.
         val PURE_OBSERVATION_TOOLS = setOf(
             "phone_observe", "phone_list_elements", "phone_query",
+        )
+        val SEQUENCE_TRACKED_TOOLS = setOf(
+            "phone_scroll", "phone_swipe", "phone_find",
+            "phone_observe", "phone_extract", "phone_collect",
+            "phone_list_elements", "phone_query", "phone_read_text", "phone_screenshot",
+            "phone_system_command",
+            "history_read",
+            "task_memory_search", "task_memory_timeline", "task_memory_step",
         )
         const val SEQUENCE_TRACK_KEEP = 16
         const val SEQUENCE_WINDOW_LOG = 8
