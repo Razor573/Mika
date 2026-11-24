@@ -2,6 +2,7 @@ package com.wangzan101.mika.settings.ui.models
 
 import com.wangzan101.mika.settings.ChatGptSignIns
 import com.wangzan101.mika.settings.ProviderPresets
+import com.wangzan101.mika.settings.ProviderConfig
 import com.wangzan101.mika.settings.ProviderStore
 import com.wangzan101.mika.settings.vertexAccountSummary
 import com.wangzan101.mika.settings.SignInTarget
