@@ -29,6 +29,9 @@ import com.wangzan101.mika.core.learn.memory.ProfileEntry
 import com.wangzan101.mika.core.learn.memory.MemoryStore
 import com.wangzan101.mika.core.model.ChatModel
 import com.wangzan101.mika.core.model.Message
+import com.wangzan101.mika.core.model.ModelError
+import com.wangzan101.mika.core.model.ModelErrorDiagnostics
+import com.wangzan101.mika.core.model.ModelErrors
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.Part
 import com.wangzan101.mika.core.model.Role
@@ -576,6 +579,7 @@ class AgentLoop(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                emitFailedMainReply(step, asked, e)
                 return StopRules.modelFailed(e)
             }
             if (routed == null) {
@@ -598,7 +602,10 @@ class AgentLoop(
                         "The user is discussing or reviewing this time. Answer this question directly, without reading or operating apps, websites or other outside content.")
                     val direct = try { caller.askRouted(discussion, emptyList(), step, onText = previewFor(step)) }
                     catch (e: CancellationException) { throw e }
-                    catch (e: Exception) { return StopRules.modelFailed(e) }
+                    catch (e: Exception) {
+                        emitFailedMainReply(step, asked, e)
+                        return StopRules.modelFailed(e)
+                    }
                     reply = direct.first
                     used = direct.second
                 }
@@ -698,6 +705,10 @@ class AgentLoop(
                     breakerTrigger = stepTelemetry?.breakerTrigger,
                     escalatedFromLight = diag?.escalatedFromLight,
                     lightRejectionReason = diag?.lightRejectionReason,
+                    timedOut = diag?.timedOut,
+                    timeoutRetries = diag?.timeoutRetries,
+                    timeoutMs = diag?.timeoutMs,
+                    retryReason = diag?.retryReason,
                 ))
             }
 
@@ -710,6 +721,66 @@ class AgentLoop(
                     handleTool(step, calls, first, reason, narration, ::recordReply)
                 }
             }
+        }
+
+        private fun emitFailedMainReply(step: Int, askedAtMs: Long, e: Throwable) {
+            val failedAtMs = now()
+            val diag = caller.lastCallDiagnostics
+            val errInfo = ModelErrorDiagnostics.extract(e)
+            val isTimeout = ModelErrors.isTimeout(e) || diag?.timedOut == true
+            val retryWaitMs = caller.lastRetryWaitMs
+            val latencyMs = (failedAtMs - askedAtMs - retryWaitMs).coerceAtLeast(0L)
+            val resolvedModel = caller.lastMainUsed
+            val resolvedProvider = diag?.provider ?: resolvedModel.provider
+            val primaryErr = (e as? ModelError.ChainFailed)?.primary ?: e
+            val timeoutMs = diag?.timeoutMs ?: (primaryErr as? ModelError.Network)?.timeoutMs
+            val retryReason = diag?.retryReason ?: if (isTimeout) RetryPolicy.label(primaryErr) else null
+            emit(RunEvent.ModelReply(
+                atMs = failedAtMs,
+                step = step,
+                text = "",
+                tool = null,
+                argsJson = null,
+                inputTokens = 0,
+                outputTokens = 0,
+                cachedTokens = 0,
+                latencyMs = latencyMs,
+                model = if (caller.recordRoles) resolvedModel.name else null,
+                role = if (caller.recordRoles) ModelCaller.ROLE_MAIN else null,
+                group = caller.groupOf(resolvedModel),
+                retryWaitMs = retryWaitMs,
+                repliedAtMs = null,
+                provider = resolvedProvider,
+                accepted = false,
+                attempt = diag?.attempt,
+                retryCount = diag?.retryCount,
+                httpStatus = errInfo.httpStatus,
+                errorCode = errInfo.errorCode,
+                errorBody = errInfo.errorBody,
+                errorField = errInfo.errorField,
+                usageReported = false,
+                hasImages = diag?.hasImages,
+                vision = diag?.vision ?: resolvedModel.capabilities.vision,
+                sameApp = diag?.sameApp,
+                lastChanged = diag?.lastChanged,
+                forcedMain = diag?.forcedMain,
+                cacheMissReason = diag?.cacheMissReason,
+                systemPromptHash = diag?.systemPromptHash,
+                promptVersion = diag?.promptVersion ?: caller.lastPromptVersion,
+                toolListHash = diag?.toolListHash,
+                promptTransformEffect = diag?.promptTransformEffect,
+                compactionTrigger = diag?.compactionTrigger,
+                compactionReason = diag?.compactionReason,
+                foldedSteps = diag?.foldedSteps,
+                capCheckResult = diag?.capCheckResult,
+                estimatedInputTokens = diag?.estimatedInputTokens,
+                escalatedFromLight = diag?.escalatedFromLight,
+                lightRejectionReason = diag?.lightRejectionReason,
+                timedOut = if (isTimeout) true else diag?.timedOut,
+                timeoutRetries = diag?.timeoutRetries,
+                timeoutMs = timeoutMs,
+                retryReason = retryReason,
+            ))
         }
 
         /** 不带调用的回复:进度说明、最终回答,和交出去之前的各道核对。 */

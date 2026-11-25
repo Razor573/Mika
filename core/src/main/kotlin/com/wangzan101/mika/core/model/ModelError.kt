@@ -1,6 +1,9 @@
 package com.wangzan101.mika.core.model
 
 import com.wangzan101.mika.core.net.ProxyFailure
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeoutException
 
 sealed class ModelError(message: String, cause: Throwable? = null) : Exception(message, cause) {
     var httpStatus: Int? = null
@@ -58,7 +61,11 @@ sealed class ModelError(message: String, cause: Throwable? = null) : Exception(m
     /** 服务端明说这个模型不支持调用工具(带工具的请求被拒)。Mika 干活靠工具,它当不了主模型。 */
     class ToolsUnsupported(val model: String = "") :
         ModelError(if (model.isEmpty()) "This model does not support tool calling" else "Model \"$model\" does not support tool calling")
-    class Network(cause: Throwable? = null) : ModelError("Network connection failed", cause)
+    class Network(
+        cause: Throwable? = null,
+        val isTimeout: Boolean = ModelErrors.isTimeoutCause(cause),
+        val timeoutMs: Long? = null,
+    ) : ModelError(if (isTimeout) "Network request timed out" else "Network connection failed", cause)
     /**
      * 走网络代理时代理那一段出的错(连不上代理,或代理拒了账号密码),不是服务商的问题。见 [com.wangzan101.mika.core.net.NetProxy]。
      */
@@ -120,5 +127,23 @@ object ModelErrors {
         is ModelError.Server -> e.status in 500..599
         is ModelError.Proxy -> e.failure == ProxyFailure.Unreachable
         else -> false
+    }
+
+    fun isTimeoutCause(t: Throwable?): Boolean {
+        var cur: Throwable? = t
+        var depth = 0
+        while (cur != null && depth < 8) {
+            if (cur is SocketTimeoutException || cur is TimeoutException) return true
+            if (cur is InterruptedIOException && cur.message?.contains("timeout", ignoreCase = true) == true) return true
+            cur = cur.cause
+            depth++
+        }
+        return false
+    }
+
+    fun isTimeout(e: Throwable): Boolean = when (e) {
+        is ModelError.Network -> e.isTimeout || isTimeoutCause(e.cause)
+        is ModelError.Proxy -> e.failure == ProxyFailure.Unreachable && isTimeoutCause(e.cause)
+        else -> isTimeoutCause(e)
     }
 }

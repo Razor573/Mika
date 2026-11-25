@@ -99,7 +99,7 @@ internal fun ModelContextDialog(
                         limits.trigger.toString(), keyboard = KeyboardType.Number,
                         labelWidth = 150.dp, modifier = Modifier.testTag("$tagPrefix-trigger"))
                     InputRow(stringResource(R.string.model_context_read_timeout), readTimeout, { readTimeout = it; saveFailed = false },
-                        "120", keyboard = KeyboardType.Number,
+                        "30", keyboard = KeyboardType.Number,
                         labelWidth = 150.dp, modifier = Modifier.testTag("context-read-timeout"))
                 }
                 val problem = when {

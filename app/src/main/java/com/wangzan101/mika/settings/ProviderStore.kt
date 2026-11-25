@@ -211,11 +211,27 @@ class ProviderStore(
         internal const val USE_MAIN = "main"
         internal const val USE_NONE = "none"
 
-        // 连服务商的客户端都经 NetProxy 建:走设置 › 网络代理,本机、局域网地址(本地模型)直连
-        internal val http by lazy { NetProxy.shared.client(OkHttpClient.Builder().readTimeout(120, TimeUnit.SECONDS)) }
+        internal const val DEFAULT_CONNECT_TIMEOUT_SECONDS = 10L
+        internal const val DEFAULT_READ_TIMEOUT_SECONDS = 30L
+        internal const val DEFAULT_WRITE_TIMEOUT_SECONDS = 30L
 
-        /** 和对话模型共用的连接池;同一服务商的其他请求(如语音转写)也用它。 */
+        // 连服务商的客户端都经 NetProxy 建:走设置 › 网络代理,本机、局域网地址(本地模型)直连
+        internal val http by lazy {
+            NetProxy.shared.client(
+                OkHttpClient.Builder()
+                    .connectTimeout(DEFAULT_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .readTimeout(DEFAULT_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .writeTimeout(DEFAULT_WRITE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            )
+        }
+
+        /** 和对话模型共用的连接池;同一服务商的其他请求也用它。 */
         val modelHttp: OkHttpClient get() = http
+
+        /** 语音转写可能上传较大音频，读超时保留 120 秒，仍与对话模型共用连接池。 */
+        val transcribeHttp: OkHttpClient by lazy {
+            http.newBuilder().readTimeout(120, TimeUnit.SECONDS).build()
+        }
 
         /** 列模型、账号登录换令牌用的:读超时短一些,同样走网络代理。 */
         internal val shortHttp by lazy { NetProxy.shared.client(OkHttpClient.Builder().readTimeout(30, TimeUnit.SECONDS)) }

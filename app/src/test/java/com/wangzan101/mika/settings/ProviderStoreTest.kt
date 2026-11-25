@@ -401,8 +401,16 @@ class ProviderStoreTest {
         assertNull(store().provider(first.id)!!.contextSettings["m1"])
     }
 
+    @Test fun defaultHttpTimeoutsUseFailFastLlmDefaults() {
+        assertEquals(10_000, ProviderStore.http.connectTimeoutMillis)
+        assertEquals(30_000, ProviderStore.http.readTimeoutMillis)
+        assertEquals(30_000, ProviderStore.http.writeTimeoutMillis)
+        assertEquals(0, ProviderStore.http.callTimeoutMillis)
+        assertEquals(120_000, ProviderStore.transcribeHttp.readTimeoutMillis)
+    }
+
     @Test fun perModelReadTimeoutFlowsIntoTheClientSetupAndPersists() {
-        // #295:慢速本地推理服务(例如经隧道访问)一次生成可以超过全局默认的 120 秒读超时;
+        // #295:慢速本地推理服务(例如经隧道访问)一次生成可以超过全局默认的 30 秒读超时;
         // 每模型配置的读超时随 ModelContextSettings 存取,并进到建模型用的 ClientSetup 里。
         val s = store()
         val first = connected(s)

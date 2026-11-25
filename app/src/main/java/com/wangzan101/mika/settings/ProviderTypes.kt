@@ -144,7 +144,7 @@ internal const val MAX_FALLBACKS = 8
  */
 internal const val TEMP_COMPACTION_EVERY_ROUNDS = 16
 
-/** 留空的窗口沿用所选模型配置，留空的触发点交给核心自动计算，留空的读超时用全局默认(120 秒)。 */
+/** 留空的窗口沿用所选模型配置，留空的触发点交给核心自动计算，留空的读超时用全局默认(30 秒)。 */
 data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens: Int? = null, val readTimeoutSeconds: Int? = null) {
     fun limits(modelWindow: Int): ContextLimits = ContextLimits.of(windowTokens ?: modelWindow, triggerTokens, maxInputTokens = ContextLimits.MAX_INPUT_TOKENS)
 
@@ -286,7 +286,7 @@ data class RoleChoices(
  * 建一个模型客户端时额外给的:[headers] 每个请求都带(客户端标识、会话号,见 [ClientHeaders]);
  * [maxOutputTokens] 限制回复长度(连接测试用),null 按适配器默认;[reasoningEffort] 是这个用途选的思考强度;
  * [thinkingTypes] 是模型列表写明这个模型接受的思考方式(见 [ListedModel.thinkingTypes]),没说为 null;
- * [readTimeoutSeconds] 是这条配置单独的读超时,慢速本地推理(#295)可调大,null 用全局默认(120 秒)。
+ * [readTimeoutSeconds] 是这条配置单独的读超时,慢速本地推理(#295)可调大,null 用全局默认(30 秒)。
  */
 data class ClientSetup(
     val headers: Map<String, String> = emptyMap(),

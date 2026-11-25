@@ -233,7 +233,7 @@ private val defaultProviderSession: SttSessionFactory = { _, model, tag, hooks -
     val spec = model.speechSpec<SpeechEngineSpec.Provider>()
     val headers = (model.account as? ResolvedAccount.ExistingProvider)?.headers.orEmpty()
     val key = model.account.credentials.apiKey.ifBlank { null }
-    val transcriber = Transcriber(ProviderStore.modelHttp, headers)
+    val transcriber = Transcriber(ProviderStore.transcribeHttp, headers)
     ProviderSpeech(hooks.recorder ?: PcmRecorder(), { wav ->
         transcriber.transcribe(
             spec.provider,

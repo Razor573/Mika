@@ -129,6 +129,7 @@ object UsageLogFormatter {
             "screenChanged", "extractedItemsNew", "historyReadReason",
             "toolSequence", "breakerTrigger",
             "escalatedFromLight", "lightRejectionReason",
+            "timedOut", "timeoutRetries", "timeoutMs", "retryReason",
         ),
         "compressed" to setOf("foldedSteps", "role", "trigger", "reason"),
         "model_calls" to setOf(

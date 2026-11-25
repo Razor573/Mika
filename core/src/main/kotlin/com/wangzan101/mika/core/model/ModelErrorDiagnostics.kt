@@ -113,6 +113,9 @@ object ModelErrorDiagnostics {
             ?: (target as? ModelError)?.httpStatus
             ?: (target as? ModelError.Server)?.status
         if (status != null) return "http_$status"
+        if (ModelErrors.isTimeout(target)) {
+            return if (target is ModelError.Proxy) "proxy_timeout" else "network_timeout"
+        }
         return target::class.simpleName ?: e::class.simpleName ?: "UnknownError"
     }
 
@@ -134,8 +137,8 @@ object ModelErrorDiagnostics {
         is ModelError.ModelNotFound -> "model_not_found"
         is ModelError.ModelNotAvailable -> "model_not_available"
         is ModelError.ToolsUnsupported -> "tools_unsupported"
-        is ModelError.Network -> "network"
-        is ModelError.Proxy -> "proxy"
+        is ModelError.Network -> if (ModelErrors.isTimeout(e)) "network_timeout" else "network"
+        is ModelError.Proxy -> if (ModelErrors.isTimeout(e)) "proxy_timeout" else "proxy"
         is ModelError.StreamCut -> "stream_cut"
         is ModelError.Server -> "server_error"
         is ModelError.ContentRefused -> "content_refused"

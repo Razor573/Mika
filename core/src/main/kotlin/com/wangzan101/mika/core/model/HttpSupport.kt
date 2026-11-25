@@ -12,8 +12,20 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+internal class InferenceTimeoutOverride(
+    val connectTimeoutMs: Long? = null,
+    val readTimeoutMs: Long? = null,
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<InferenceTimeoutOverride>
+}
 
 internal data class RawResponse(val status: Int, val retryAfter: String?, val body: String, private val onPacket: ((String) -> Unit)? = null) {
     /** Some chat endpoints send a buffered SSE body even when streaming was not requested. */
@@ -37,7 +49,58 @@ internal object HttpSupport {
 
     /** 连接失败:走了代理且错在代理那一段的说成代理的问题,别的照旧算网络失败。 */
     fun networkError(http: OkHttpClient, req: Request, e: IOException): ModelError =
-        NetProxy.failure(http, req.url, e)?.let { ModelError.Proxy(it, e) } ?: ModelError.Network(e)
+        NetProxy.failure(http, req.url, e)?.let { ModelError.Proxy(it, e) } ?: timeoutAwareNetworkError(http, e)
+
+    private fun timeoutAwareNetworkError(http: OkHttpClient, e: IOException): ModelError.Network {
+        val isTimeout = ModelErrors.isTimeoutCause(e)
+        return ModelError.Network(
+            cause = e,
+            isTimeout = isTimeout,
+            timeoutMs = if (isTimeout) configuredTimeoutMs(http, e) else null,
+        )
+    }
+
+    private fun configuredTimeoutMs(http: OkHttpClient, e: IOException): Long? {
+        if (!ModelErrors.isTimeoutCause(e)) return null
+        val chain = generateSequence(e as Throwable) { it.cause }.take(8).toList()
+        val msg = chain.mapNotNull { it.message }.joinToString(" ").lowercase()
+        return when {
+            "connect" in msg && http.connectTimeoutMillis > 0 -> http.connectTimeoutMillis.toLong()
+            chain.any { it is InterruptedIOException && it !is SocketTimeoutException } && http.callTimeoutMillis > 0 ->
+                http.callTimeoutMillis.toLong()
+            http.readTimeoutMillis > 0 -> http.readTimeoutMillis.toLong()
+            http.callTimeoutMillis > 0 -> http.callTimeoutMillis.toLong()
+            else -> null
+        }
+    }
+
+    private suspend fun effectiveClient(http: OkHttpClient): OkHttpClient {
+        val override = currentCoroutineContext()[InferenceTimeoutOverride] ?: return http
+        val targetConnect = override.connectTimeoutMs?.takeIf { it > 0L }
+        val targetRead = override.readTimeoutMs?.takeIf { it > 0L }
+        if (targetConnect == null && targetRead == null) return http
+        val existingConnect = http.connectTimeoutMillis.toLong()
+        val existingRead = http.readTimeoutMillis.toLong()
+        val existingCall = http.callTimeoutMillis.toLong()
+        val nextConnect = targetConnect?.let { target ->
+            if (existingConnect > 0L) minOf(existingConnect, target) else target
+        }
+        val nextRead = targetRead?.let { target ->
+            if (existingRead > 0L) minOf(existingRead, target) else target
+        }
+        val nextCall = targetRead?.let { target ->
+            if (existingCall > 0L) minOf(existingCall, target) else null
+        }
+        val changed = (nextConnect != null && nextConnect != existingConnect) ||
+            (nextRead != null && nextRead != existingRead) ||
+            (nextCall != null && nextCall != existingCall)
+        if (!changed) return http
+        val builder = http.newBuilder()
+        if (nextConnect != null) builder.connectTimeout(nextConnect, TimeUnit.MILLISECONDS)
+        if (nextRead != null) builder.readTimeout(nextRead, TimeUnit.MILLISECONDS)
+        if (nextCall != null) builder.callTimeout(nextCall, TimeUnit.MILLISECONDS)
+        return builder.build()
+    }
 
     private suspend inline fun observe(req: Request, send: (TraceCall.Attempt?) -> RawResponse): RawResponse {
         val wire = req.tag(InferenceRequest::class.java) ?: return send(null)
@@ -60,13 +123,14 @@ internal object HttpSupport {
     }
 
     private suspend fun executeRaw(http: OkHttpClient, req: Request, attempt: TraceCall.Attempt?): RawResponse {
+        val client = effectiveClient(http)
         countAttempt(req)
         return suspendCancellableCoroutine { cont ->
-            val call = http.newCall(req)
+            val call = client.newCall(req)
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    if (cont.isActive) cont.resumeWithException(networkError(http, req, e))
+                    if (cont.isActive) cont.resumeWithException(networkError(client, req, e))
                 }
 
                 override fun onResponse(call: Call, response: Response) {
@@ -76,7 +140,7 @@ internal object HttpSupport {
                             val raw = RawResponse(it.code, it.header("retry-after"), it.body?.string().orEmpty())
                             if (cont.isActive) cont.resume(raw)
                         } catch (e: IOException) {
-                            if (cont.isActive) cont.resumeWithException(ModelError.Network(e))
+                            if (cont.isActive) cont.resumeWithException(timeoutAwareNetworkError(client, e))
                         }
                     }
                 }
@@ -95,13 +159,14 @@ internal object HttpSupport {
         observe(req) { attempt -> streamRaw(http, req, attempt, onEvent) }.also(::requireProxyAccepted)
 
     private suspend fun streamRaw(http: OkHttpClient, req: Request, attempt: TraceCall.Attempt?, onEvent: (String) -> Boolean): RawResponse {
+        val client = effectiveClient(http)
         countAttempt(req)
         return suspendCancellableCoroutine { cont ->
-            val call = http.newCall(req)
+            val call = client.newCall(req)
             cont.invokeOnCancellation { call.cancel() }
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    if (cont.isActive) cont.resumeWithException(networkError(http, req, e))
+                    if (cont.isActive) cont.resumeWithException(networkError(client, req, e))
                 }
 
                 override fun onResponse(call: Call, response: Response) {
@@ -144,7 +209,7 @@ internal object HttpSupport {
                                 cont.resume(RawResponse(it.code, it.header("retry-after"), ""))
                             }
                         } catch (e: Exception) {
-                            if (cont.isActive) cont.resumeWithException(if (e is IOException) ModelError.Network(e) else e)
+                            if (cont.isActive) cont.resumeWithException(if (e is IOException) timeoutAwareNetworkError(client, e) else e)
                         }
                     }
                 }

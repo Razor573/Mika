@@ -619,4 +619,121 @@ class UsageLogEnhancedTest {
         assertTrue(formattedFromLines.contains(""""escalatedFromLight":true"""))
         assertTrue(formattedFromLines.contains(""""lightRejectionReason":"unsafe_tool:irreversible_target:phone_tap""""))
     }
+
+    @Test
+    fun usageLogRecordsRecoveredTimeoutRetryTelemetry() = runTest {
+        val timeoutErr = ModelError.Network(java.net.SocketTimeoutException("Read timed out"), isTimeout = true, timeoutMs = 30_000L)
+        val mainModel = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { callNum ->
+                when (callNum) {
+                    1 -> throw timeoutErr
+                    else -> ModelReply(listOf(Part.Text("Recovered after timeout")), StopReason.EndTurn, Usage(1500, 40, 0))
+                }
+            },
+        )
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = mainModel.metered(UsageSource("p-main", "vertex", mainModel.name, UsagePurpose.Main), UsageSink { _, _ -> })
+
+        val outcome = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(FakeScreen(), visionEnabled = false),
+                basePrompt = "BASE",
+                flags = SpeedFlags.OFF,
+                retry = com.wangzan101.mika.core.agent.RetryPolicy(
+                    maxRetries = 3,
+                    baseMs = 20L,
+                    maxBackoffMs = 40L,
+                    timeoutRetryMs = 15_000L,
+                    jitter = { 0.0 },
+                ),
+                sink = sink,
+                versionCode = 62,
+                versionName = "0.1.57",
+            ).run("Recover from timeout")
+        }
+        assertTrue("$outcome", outcome is TaskState.Succeeded)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261125-071500-r5rec", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRow = rows.single { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals(true, replyRow["accepted"]?.jsonPrimitive?.boolean)
+        assertEquals(2, replyRow["attempt"]?.jsonPrimitive?.int)
+        assertEquals(1, replyRow["retryCount"]?.jsonPrimitive?.int)
+        assertEquals(true, replyRow["timedOut"]?.jsonPrimitive?.boolean)
+        assertEquals(1, replyRow["timeoutRetries"]?.jsonPrimitive?.int)
+        assertEquals(15_000L, replyRow["timeoutMs"]?.jsonPrimitive?.long)
+        assertEquals("network_timeout", replyRow["retryReason"]?.jsonPrimitive?.content)
+
+        val roundTrip = UsageLogFormatter.formatLines(
+            sink.list.asSequence().map { RunEvent.encode(it) },
+            runId = "20261125-071500-r5rec",
+            versionCode = 62,
+            versionName = "0.1.57",
+        )
+        assertTrue(roundTrip.contains(""""timedOut":true"""))
+        assertTrue(roundTrip.contains(""""timeoutRetries":1"""))
+        assertTrue(roundTrip.contains(""""timeoutMs":15000"""))
+        assertTrue(roundTrip.contains(""""retryReason":"network_timeout""""))
+    }
+
+    @Test
+    fun usageLogRecordsFatalMainTimeoutTelemetryAndUnreportedReason() = runTest {
+        val mainModel = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { callNum ->
+                val ms = if (callNum == 1) 30_000L else 15_000L
+                throw ModelError.Network(java.net.SocketTimeoutException("Read timed out"), isTimeout = true, timeoutMs = ms)
+            },
+        )
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = mainModel.metered(UsageSource("p-main", "vertex", mainModel.name, UsagePurpose.Main), UsageSink { _, _ -> })
+
+        val outcome = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(FakeScreen(), visionEnabled = false),
+                basePrompt = "BASE",
+                flags = SpeedFlags.OFF,
+                retry = com.wangzan101.mika.core.agent.RetryPolicy(
+                    maxRetries = 3,
+                    baseMs = 20L,
+                    maxBackoffMs = 40L,
+                    timeoutRetryMs = 15_000L,
+                    jitter = { 0.0 },
+                ),
+                sink = sink,
+                versionCode = 62,
+                versionName = "0.1.57",
+            ).run("Fail after timeout retry")
+        }
+        assertTrue("$outcome", outcome is TaskState.Failed && outcome.kind == com.wangzan101.mika.core.agent.FailKind.Model)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261125-071501-r5fail", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRow = rows.single { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals(false, replyRow["accepted"]?.jsonPrimitive?.boolean)
+        assertEquals(2, replyRow["attempt"]?.jsonPrimitive?.int)
+        assertEquals(1, replyRow["retryCount"]?.jsonPrimitive?.int)
+        assertEquals("network_timeout", replyRow["errorCode"]?.jsonPrimitive?.content)
+        assertEquals(true, replyRow["timedOut"]?.jsonPrimitive?.boolean)
+        assertEquals(1, replyRow["timeoutRetries"]?.jsonPrimitive?.int)
+        assertEquals(15_000L, replyRow["timeoutMs"]?.jsonPrimitive?.long)
+        assertEquals("network_timeout", replyRow["retryReason"]?.jsonPrimitive?.content)
+        assertEquals(false, replyRow["usageReported"]?.jsonPrimitive?.boolean)
+
+        val summary = rows.last()
+        assertEquals("run_summary", summary["type"]?.jsonPrimitive?.content)
+        assertEquals(0, summary["steps"]?.jsonPrimitive?.int)
+        assertEquals("failed", summary["outcome"]?.jsonPrimitive?.content)
+        assertEquals(2, summary["unreportedCalls"]?.jsonPrimitive?.int)
+        assertEquals(2, summary["unreportedReasons"]?.jsonObject?.get("network_timeout")?.jsonPrimitive?.int)
+    }
 }

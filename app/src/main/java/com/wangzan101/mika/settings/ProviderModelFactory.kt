@@ -191,7 +191,7 @@ fun ProviderStore.clientHeaders(p: Provider): Map<String, String> = headers(p.se
  * Chat Completions 不给(有的模型只认 `max_tokens`、有的只认 `max_completion_tokens`,给错了整个请求被拒,
  * 连接测试就会误报),Responses 也不给(ChatGPT 套餐那条路不收 `max_output_tokens`)。
  * 读超时([ClientSetup.readTimeoutSeconds])配置了的按它派生 client(共享连接池与代理),慢速本地推理可调大(#295);
- * 没配置用全局默认(120 秒)。派生只在建模型时发生一次,不影响别的模型。
+ * 没配置用全局默认(30 秒)。派生只在建模型时发生一次,不影响别的模型。
  */
 internal fun ProviderStore.buildModel(cfg: ProviderConfig, apiKey: String?, endpoint: ModelEndpoint?, setup: ClientSetup): ChatModel {
     val (kind, adapterBase) = adapterFor(cfg, endpoint)

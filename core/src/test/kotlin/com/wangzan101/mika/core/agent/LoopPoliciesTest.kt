@@ -6,9 +6,14 @@ import com.wangzan101.mika.core.safety.guard.GuardVerdict
 import com.wangzan101.mika.core.safety.guard.Severity
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ToolSpec
+import com.wangzan101.mika.core.net.ProxyFailure
 import com.wangzan101.mika.core.prompt.Feedback
 import com.wangzan101.mika.core.tool.Outcome
 import com.wangzan101.mika.core.tool.Verb
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -224,5 +229,38 @@ class LoopPoliciesTest {
         assertEquals(1_000L, fixed.delayFor(ModelError.RateLimited(0), 0))
         assertEquals(30_000L, fixed.delayFor(ModelError.RateLimited(600_000), 0))
         assertNull(fixed.delayFor(ModelError.RateLimited(5000), 3))
+    }
+
+    @Test fun timeoutRetriesAtMostOnceWithShortBackoffWhileOtherTransientsKeepThreeRetries() {
+        val readTimeout = ModelError.Network(SocketTimeoutException("Read timed out"))
+        val interruptedTimeout = ModelError.Network(InterruptedIOException("timeout"))
+        val proxyTimeout = ModelError.Proxy(ProxyFailure.Unreachable, SocketTimeoutException("connect timed out"))
+
+        assertEquals(1_000L, fixed.delayFor(readTimeout, retriesSoFar = 0, timeoutRetriesSoFar = 0))
+        assertEquals(1_000L, fixed.delayFor(readTimeout, retriesSoFar = 2, timeoutRetriesSoFar = 0))
+        assertNull(fixed.delayFor(readTimeout, retriesSoFar = 1, timeoutRetriesSoFar = 1))
+        assertEquals(1_000L, fixed.delayFor(interruptedTimeout, retriesSoFar = 0, timeoutRetriesSoFar = 0))
+        assertNull(fixed.delayFor(interruptedTimeout, retriesSoFar = 1, timeoutRetriesSoFar = 1))
+        assertEquals(1_000L, fixed.delayFor(proxyTimeout, retriesSoFar = 0, timeoutRetriesSoFar = 0))
+        assertNull(fixed.delayFor(proxyTimeout, retriesSoFar = 1, timeoutRetriesSoFar = 1))
+
+        assertEquals("network_timeout", RetryPolicy.label(readTimeout))
+        assertEquals("proxy_timeout", RetryPolicy.label(proxyTimeout))
+        assertEquals("network", RetryPolicy.label(ModelError.Network()))
+        assertEquals("proxy_unreachable", RetryPolicy.label(ModelError.Proxy(ProxyFailure.Unreachable, ConnectException("refused"))))
+
+        val nonTimeoutErrors = listOf(
+            ModelError.Network(),
+            ModelError.Network(IOException("Connection reset by peer")),
+            ModelError.Proxy(ProxyFailure.Unreachable, ConnectException("refused")),
+            ModelError.Server(503),
+            ModelError.RateLimited(1_000L),
+            ModelError.StreamCut(),
+        )
+        for (err in nonTimeoutErrors) {
+            assertEquals("$err retry 0", 1_000L, fixed.delayFor(err, retriesSoFar = 0, timeoutRetriesSoFar = 1))
+            assertTrue("$err retry 2", fixed.delayFor(err, retriesSoFar = 2, timeoutRetriesSoFar = 1) != null)
+            assertNull("$err retry 3", fixed.delayFor(err, retriesSoFar = 3, timeoutRetriesSoFar = 0))
+        }
     }
 }

@@ -32,7 +32,7 @@ class VoiceInput(
     context: Context,
     private val settings: SpeechSettings,
     private val providers: ProviderStore,
-    private val transcriber: (Provider) -> Transcriber = { p -> Transcriber(ProviderStore.modelHttp, providers.clientHeaders(p)) },
+    private val transcriber: (Provider) -> Transcriber = { p -> Transcriber(ProviderStore.transcribeHttp, providers.clientHeaders(p)) },
     private val voiceModels: VoiceModelEnvironment = VoiceModelEnvironment.get(context),
     private val systemCapability: () -> SystemCapability = {
         SystemSpeech.capability(context, settings.systemSilent.value)

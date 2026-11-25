@@ -21,28 +21,53 @@ class RetryPolicy(
     /** 一个任务里所有重试等待加起来的上限。 */
     val taskWaitBudgetMs: Long = 5 * 60_000,
     private val jitter: () -> Double = { Random.nextDouble() },
+    val maxTimeoutRetries: Int = 1,
+    val timeoutRetryConnectMs: Long = DEFAULT_TIMEOUT_RETRY_CONNECT_MS,
+    val timeoutRetryMs: Long = DEFAULT_TIMEOUT_RETRY_MS,
 ) {
     init {
-        require(maxRetries >= 0 && baseMs > 0 && maxBackoffMs >= baseMs && retryAfterCapMs >= MIN_RETRY_AFTER_MS && taskWaitBudgetMs >= 0)
+        require(
+            maxRetries >= 0 &&
+                baseMs > 0 &&
+                maxBackoffMs >= baseMs &&
+                retryAfterCapMs >= MIN_RETRY_AFTER_MS &&
+                taskWaitBudgetMs >= 0 &&
+                maxTimeoutRetries >= 0 &&
+                timeoutRetryConnectMs > 0 &&
+                timeoutRetryMs > 0
+        )
     }
 
     /**
      * 这次调用已重试 [retriesSoFar] 次后又遇到 [e],本任务已为重试等了 [waitedInTaskMs]:返回再试前要等的毫秒数;
      * 不该再试(不是一时的故障、次数到了、等这一次会超出任务的等待上限)为 null。
      * [maxRetries] 可以在这一次调用里临时压低(组里有下一个成员时,同一成员只试一次)。
+     * 网络超时只允许在 [maxTimeoutRetries] 内短超时重试一次;其余一时的故障仍保持 [maxRetries] 次重试。
      */
-    fun delayFor(e: Throwable, retriesSoFar: Int, waitedInTaskMs: Long = 0, maxRetries: Int = this.maxRetries): Long? {
+    fun delayFor(
+        e: Throwable,
+        retriesSoFar: Int,
+        waitedInTaskMs: Long = 0,
+        maxRetries: Int = this.maxRetries,
+        timeoutRetriesSoFar: Int = 0,
+    ): Long? {
         if (retriesSoFar >= maxRetries || !transient(e)) return null
+        val isTimeout = ModelErrors.isTimeout(e)
+        if (isTimeout && timeoutRetriesSoFar >= maxTimeoutRetries) return null
         val wait = (e as? ModelError.RateLimited)?.retryAfterMs?.coerceIn(MIN_RETRY_AFTER_MS, retryAfterCapMs) ?: run {
             val ceiling = minOf(maxBackoffMs, baseMs shl minOf(retriesSoFar, 20))
             // 一半固定、一半随机:同时出错的几个任务不会在同一刻再撞上去
-            ceiling / 2 + (ceiling / 2 * jitter().coerceIn(0.0, 1.0)).toLong()
+            val raw = ceiling / 2 + (ceiling / 2 * jitter().coerceIn(0.0, 1.0)).toLong()
+            if (isTimeout) minOf(raw, MAX_TIMEOUT_BACKOFF_MS) else raw
         }
         return wait.takeIf { waitedInTaskMs + it <= taskWaitBudgetMs }
     }
 
     companion object {
         private const val MIN_RETRY_AFTER_MS = 1_000L
+        const val DEFAULT_TIMEOUT_RETRY_CONNECT_MS = 5_000L
+        const val DEFAULT_TIMEOUT_RETRY_MS = 15_000L
+        private const val MAX_TIMEOUT_BACKOFF_MS = 1_000L
 
         /** 不重试:出错就交出(轻量模型出错时这一步直接改问主模型)。 */
         val NONE = RetryPolicy(maxRetries = 0)
@@ -53,10 +78,14 @@ class RetryPolicy(
         /** 运行记录里这次故障的名字。 */
         fun label(e: Throwable): String = when (e) {
             is ModelError.RateLimited -> "rate_limited"
-            is ModelError.Network -> "network"
+            is ModelError.Network -> if (ModelErrors.isTimeout(e)) "network_timeout" else "network"
             is ModelError.StreamCut -> "stream_cut"
             is ModelError.Server -> "server_${e.status}"
-            is ModelError.Proxy -> if (e.failure == ProxyFailure.Unreachable) "proxy_unreachable" else "proxy_auth"
+            is ModelError.Proxy -> when {
+                e.failure == ProxyFailure.AuthFailed -> "proxy_auth"
+                ModelErrors.isTimeout(e) -> "proxy_timeout"
+                else -> "proxy_unreachable"
+            }
             else -> e::class.simpleName.orEmpty()
         }
     }

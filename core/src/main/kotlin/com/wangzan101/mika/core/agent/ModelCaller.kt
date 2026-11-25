@@ -4,10 +4,12 @@ import com.wangzan101.mika.core.run.trace.RunTrace
 import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.ChatModel
+import com.wangzan101.mika.core.model.InferenceTimeoutOverride
 import com.wangzan101.mika.core.model.LightPrompt
 import com.wangzan101.mika.core.model.Message
 import com.wangzan101.mika.core.model.ModelError
 import com.wangzan101.mika.core.model.ModelErrorDiagnostics
+import com.wangzan101.mika.core.model.ModelErrors
 import com.wangzan101.mika.core.model.ModelNeed
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.Part
@@ -56,6 +58,10 @@ internal data class CallDiagnostics(
     val lightRetried: Boolean? = null,
     val escalatedFromLight: Boolean? = null,
     val lightRejectionReason: String? = null,
+    val timedOut: Boolean? = null,
+    val timeoutRetries: Int? = null,
+    val timeoutMs: Long? = null,
+    val retryReason: String? = null,
 )
 
 /**
@@ -247,6 +253,10 @@ internal class ModelCaller(
         retryCount: Int,
         retryWaitMs: Long,
         lightRetried: Boolean,
+        timedOut: Boolean? = null,
+        timeoutRetries: Int? = null,
+        timeoutMs: Long? = null,
+        retryReason: String? = null,
     ) {
         val attemptReply = attempt.reply
         val attemptModel = attempt.model
@@ -324,6 +334,10 @@ internal class ModelCaller(
             priceFetchedAt = costEstimate.price.fetchedAt,
             priceTier = costEstimate.price.tier,
             priceFallback = costEstimate.price.fallback,
+            timedOut = timedOut,
+            timeoutRetries = timeoutRetries,
+            timeoutMs = timeoutMs,
+            retryReason = retryReason,
         ))
     }
 
@@ -374,7 +388,19 @@ internal class ModelCaller(
             lightRejectionReason: String? = null,
             ephemeralTail: Message? = null,
         ): Pair<ModelReply, ChatModel> {
-            val (reply, used) = askRouted(history, specs, step, onText = onText, ephemeralTail = ephemeralTail)
+            val (reply, used) = try {
+                askRouted(history, specs, step, onText = onText, ephemeralTail = ephemeralTail)
+            } catch (e: Throwable) {
+                lastCallDiagnostics = lastCallDiagnostics?.copy(
+                    hasImages = stepCtx.hasImages,
+                    sameApp = stepCtx.sameAppAsLast,
+                    lastChanged = stepCtx.lastChanged,
+                    forcedMain = forcedMain,
+                    escalatedFromLight = escalatedFromLight,
+                    lightRejectionReason = lightRejectionReason,
+                )
+                throw e
+            }
             lastCallDiagnostics = (lastCallDiagnostics ?: CallDiagnostics(provider = used.provider)).copy(
                 hasImages = stepCtx.hasImages,
                 sameApp = stepCtx.sameAppAsLast,
@@ -414,6 +440,13 @@ internal class ModelCaller(
                 return v1.reply to attempt1.model
             }
             is LightValidation.Rejected -> {
+                val attempt1IsTimeout = attempt1.error?.let(ModelErrors::isTimeout) == true
+                val attempt1TimeoutMs = if (attempt1IsTimeout) {
+                    attempt1.diag?.timeoutMs ?: (attempt1.error as? ModelError.Network)?.timeoutMs
+                } else null
+                val attempt1RetryReason = if (attempt1IsTimeout) {
+                    attempt1.diag?.retryReason ?: RetryPolicy.label(attempt1.error!!)
+                } else null
                 emitRejectedLightReply(
                     attempt = attempt1,
                     rejection = v1,
@@ -425,6 +458,10 @@ internal class ModelCaller(
                     retryCount = 0,
                     retryWaitMs = 0L,
                     lightRetried = false,
+                    timedOut = if (attempt1IsTimeout) true else null,
+                    timeoutRetries = if (attempt1IsTimeout) 0 else null,
+                    timeoutMs = attempt1TimeoutMs,
+                    retryReason = attempt1RetryReason,
                 )
                 val firstReply = attempt1.reply
                 val shouldRetryError = firstReply == null
@@ -454,7 +491,18 @@ internal class ModelCaller(
                 }
                 val attempt2Start = now()
                 val retryWaitMs = (attempt2Start - asked).coerceAtLeast(0L)
-                val attempt2 = runLightAttempt(retryHistory, specs, picked, step, onText, attempt2Start)
+                val attempt2 = if (attempt1IsTimeout) {
+                    withContext(
+                        InferenceTimeoutOverride(
+                            connectTimeoutMs = retry.timeoutRetryConnectMs,
+                            readTimeoutMs = retry.timeoutRetryMs,
+                        )
+                    ) {
+                        runLightAttempt(retryHistory, specs, picked, step, onText, attempt2Start)
+                    }
+                } else {
+                    runLightAttempt(retryHistory, specs, picked, step, onText, attempt2Start)
+                }
                 when (val v2 = LightCallValidator.validate(attempt2.reply, specs, tools, autonomous, retried = true)) {
                     is LightValidation.Accepted -> {
                         r.noteLightAccepted()
@@ -469,10 +517,28 @@ internal class ModelCaller(
                             lastChanged = stepCtx.lastChanged,
                             forcedMain = false,
                             lightRetried = true,
+                            timedOut = if (attempt1IsTimeout) true else attempt2.diag?.timedOut,
+                            timeoutRetries = if (attempt1IsTimeout) 1 else attempt2.diag?.timeoutRetries,
+                            timeoutMs = if (attempt1IsTimeout) retry.timeoutRetryMs else attempt2.diag?.timeoutMs,
+                            retryReason = if (attempt1IsTimeout) attempt1RetryReason else attempt2.diag?.retryReason,
                         )
                         return v2.reply to attempt2.model
                     }
                     is LightValidation.Rejected -> {
+                        val attempt2IsTimeout = attempt2.error?.let(ModelErrors::isTimeout) == true
+                        val anyLightTimeout = attempt1IsTimeout || attempt2IsTimeout
+                        val attempt2TimeoutMs = when {
+                            attempt2IsTimeout -> attempt2.diag?.timeoutMs
+                                ?: (attempt2.error as? ModelError.Network)?.timeoutMs
+                                ?: if (attempt1IsTimeout) retry.timeoutRetryMs else null
+                            attempt1IsTimeout -> retry.timeoutRetryMs
+                            else -> null
+                        }
+                        val attempt2RetryReason = when {
+                            attempt2IsTimeout -> attempt2.diag?.retryReason ?: RetryPolicy.label(attempt2.error!!)
+                            attempt1IsTimeout -> attempt1RetryReason
+                            else -> null
+                        }
                         emitRejectedLightReply(
                             attempt = attempt2,
                             rejection = v2,
@@ -484,6 +550,10 @@ internal class ModelCaller(
                             retryCount = 1,
                             retryWaitMs = retryWaitMs,
                             lightRetried = true,
+                            timedOut = if (anyLightTimeout) true else null,
+                            timeoutRetries = if (anyLightTimeout) (if (attempt1IsTimeout) 1 else 0) else null,
+                            timeoutMs = attempt2TimeoutMs,
+                            retryReason = attempt2RetryReason,
                         )
                         if (v2.reason == "unsafe_tool") r.noteUnsafeEscalation() else r.noteTrouble()
                         if (attempt2.reply == null && attempt2.error != null) {
@@ -582,6 +652,10 @@ internal class ModelCaller(
     private class AttemptClock {
         var firstAttemptAt: Long? = null
         var attempts: Int = 0
+        var timedOut: Boolean = false
+        var timeoutRetries: Int = 0
+        var lastTimeoutMs: Long? = null
+        var lastRetryReason: String? = null
     }
 
     /**
@@ -663,6 +737,8 @@ internal class ModelCaller(
         ephemeralTail: Message? = null,
     ): ModelReply {
         var retries = 0
+        var timeoutRetries = 0
+        var useShortTimeout = false
         val effectivePrompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
         val promptTransformEffect = when {
             promptTransform == null -> "none"
@@ -793,6 +869,10 @@ internal class ModelCaller(
                     estimatedInputTokens = estInputTokens,
                     hasImages = hasImages,
                     vision = using.capabilities.vision,
+                    timedOut = if (clock.timedOut) true else null,
+                    timeoutRetries = clock.timeoutRetries.takeIf { clock.timedOut || it > 0 },
+                    timeoutMs = if (useShortTimeout) policy.timeoutRetryMs else clock.lastTimeoutMs,
+                    retryReason = clock.lastRetryReason,
                 )
                 suspend fun invokeModel(): ModelReply = withContext(LoopCallScope()) {
                     if (onText == null) {
@@ -814,13 +894,24 @@ internal class ModelCaller(
                     if (currentCoroutineContext()[ConversationMeter] != null && roleOf(using) == ROLE_MAIN)
                         withContext(ConversationMeter.MainRequest(step)) { invokeModel() }
                     else invokeModel()
-                val reply = if (trace == null) send() else {
+                suspend fun sendWithTimeout(): ModelReply =
+                    if (useShortTimeout) {
+                        withContext(
+                            InferenceTimeoutOverride(
+                                connectTimeoutMs = policy.timeoutRetryConnectMs,
+                                readTimeoutMs = policy.timeoutRetryMs,
+                            )
+                        ) { send() }
+                    } else {
+                        send()
+                    }
+                val reply = if (trace == null) sendWithTimeout() else {
                     val change = when {
                         overflowRewrote -> "overflow_compaction folded=" + sent.foldedSteps
                         sent.rewritten && current != sent.messages -> "history_rewritten folded=" + sent.foldedSteps
                         else -> null
                     }
-                    trace.modelCall(step, using, tools::verb, change, finalMessages) { send() }
+                    trace.modelCall(step, using, tools::verb, change, finalMessages) { sendWithTimeout() }
                 }
                 overflowRewrote = false
                 compaction = nextCompaction
@@ -850,11 +941,46 @@ internal class ModelCaller(
                 if (!again) throw e
             } catch (e: ModelError) {
                 onText?.invoke("")
-                if (e is ModelError.RateLimited && chainIndex < chain.lastIndex && (e.retryAfterMs ?: 0L) > RATE_LIMIT_FAILOVER_WAIT_BUDGET_MS) throw e
-                val wait = policy.delayFor(e, retries, taskRetryWaitMs, maxRetries) ?: throw e
+                val isTimeout = ModelErrors.isTimeout(e)
+                val errorTimeoutMs = (e as? ModelError.Network)?.timeoutMs
+                val label = RetryPolicy.label(e)
+                if (isTimeout) {
+                    clock.timedOut = true
+                    if (useShortTimeout) {
+                        clock.lastTimeoutMs = errorTimeoutMs ?: policy.timeoutRetryMs
+                    } else if (errorTimeoutMs != null) {
+                        clock.lastTimeoutMs = errorTimeoutMs
+                    }
+                    clock.lastRetryReason = label
+                }
+                fun updateDiagnosticsOnFailure() {
+                    lastCallDiagnostics = lastCallDiagnostics?.copy(
+                        timedOut = if (clock.timedOut) true else null,
+                        timeoutRetries = clock.timeoutRetries.takeIf { clock.timedOut || it > 0 },
+                        timeoutMs = if (useShortTimeout) (errorTimeoutMs ?: policy.timeoutRetryMs) else clock.lastTimeoutMs,
+                        retryReason = clock.lastRetryReason,
+                    )
+                }
+                if (e is ModelError.RateLimited && chainIndex < chain.lastIndex && (e.retryAfterMs ?: 0L) > RATE_LIMIT_FAILOVER_WAIT_BUDGET_MS) {
+                    updateDiagnosticsOnFailure()
+                    throw e
+                }
+                val wait = policy.delayFor(e, retries, taskRetryWaitMs, maxRetries, timeoutRetriesSoFar = timeoutRetries) ?: run {
+                    updateDiagnosticsOnFailure()
+                    throw e
+                }
                 retries += 1
                 taskRetryWaitMs += wait
-                emit(RunEvent.State(now(), "model_retry", "${roleOf(using)} ${RetryPolicy.label(e)} #$retries ${wait}ms"))
+                clock.lastRetryReason = label
+                if (isTimeout) {
+                    timeoutRetries += 1
+                    clock.timeoutRetries += 1
+                    useShortTimeout = true
+                    clock.lastTimeoutMs = policy.timeoutRetryMs
+                } else {
+                    useShortTimeout = false
+                }
+                emit(RunEvent.State(now(), "model_retry", "${roleOf(using)} $label #$retries ${wait}ms"))
                 // 等待中取消任务就此结束
                 delay(wait)
             }

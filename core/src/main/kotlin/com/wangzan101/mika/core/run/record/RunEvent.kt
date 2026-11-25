@@ -147,6 +147,10 @@ sealed interface RunEvent {
         val breakerTrigger: String? = null,
         val escalatedFromLight: Boolean? = null,
         val lightRejectionReason: String? = null,
+        val timedOut: Boolean? = null,
+        val timeoutRetries: Int? = null,
+        val timeoutMs: Long? = null,
+        val retryReason: String? = null,
     ) : RunEvent {
         /** 这次回复真的驱动了这一步(改派掉的轻量模型回复不算)。 */
         val acted: Boolean get() = role != "light_rejected" && accepted != false
