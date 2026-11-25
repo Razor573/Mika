@@ -245,12 +245,29 @@ class LoopScenarioTest {
 
     // (i) 上下文超长:狠压缩后重发,同一步接着做
     @Test fun contextOverflowCompressesAndContinues() = runTest {
+        var ver = 0
+        val screen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private fun snap() = com.wangzan101.mika.core.screen.uistate.ScreenSnapshot(
+                "so$ver", "com.x",
+                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "button", "v$ver", 10, 10, listOf(0, 0, 50, 50), null, true, false, false)),
+                1080, 2400,
+            )
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
         val main = fakeModel("main") {
-            for (i in 1..8) call("wait", "seconds" to 1 + i / 10.0)
+            for (i in 1..8) {
+                if (i % 3 == 0) call("phone_tap", "x" to 100, "y" to 200)
+                else call("wait", "seconds" to 1 + i / 10.0)
+            }
             contextOverflow()
             answer("等完了")
         }
-        val end = loop(main, toolDispatcher(FakeScreen())).run("等一会儿")
+        val end = loop(main, toolDispatcher(screen)).run("等一会儿")
         assertTrue("$end", end is TaskState.Succeeded)
         assertTrue(main.requests[9].messages.size < main.requests[8].messages.size)
         snapshot("i_context_overflow", end, "main" to main)

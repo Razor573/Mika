@@ -117,12 +117,23 @@ class OperationGuards(private val stepBudget: Int? = null) {
     private var historyReadsSinceScreenChange = 0
     private var phoneSessionActive = false
     private val stalledToolSeq = ArrayDeque<String>()
+    private val stalledToolOkSeq = ArrayDeque<Boolean>()
+    private val stalledToolEpochSeq = ArrayDeque<Int>()
+    private var screenEpoch = 0
     private var consecutiveSequenceBlocks = 0
     private var lastBreakerTrigger: String? = null
+    private var consecutiveUnchangedScreen = 0
+    private var triedTapOnStuckScreen = false
+    private var consecutiveStuckBlocks = 0
+    private var consecutiveGiveUpBlocks = 0
+    private var consecutiveStuckWarnBlocks = 0
+    private var consecutiveAllowedStuckBlocks = 0
 
     internal val currentStaleCycleCount: Int get() = staleCycleCount
     internal val currentToolSequence: List<String> get() = stalledToolSeq.toList()
     internal val currentBreakerTrigger: String? get() = lastBreakerTrigger
+    internal val currentConsecutiveUnchangedScreen: Int get() = consecutiveUnchangedScreen
+    internal val currentLastScreenHash: String? get() = lastScreenHash
 
     var stop: GuardVerdict? = null
         private set
@@ -137,7 +148,10 @@ class OperationGuards(private val stepBudget: Int? = null) {
             Feedback["guard.ways_out"].takeIf { waysOut },
         ).joinToString(" ") else null
         val v = GuardVerdict(code, severity, evidence, nudge)
-        if (severity == Severity.Stop) stop = v
+        if (severity == Severity.Stop) {
+            stop = v
+            lastBreakerTrigger = code
+        }
         return listOf(v)
     }
 
@@ -152,7 +166,55 @@ class OperationGuards(private val stepBudget: Int? = null) {
     /** 执行模型单步前检查是否连续重读历史或陷入无进展循环。 */
     fun checkBeforeTool(tool: String): GuardVerdict? {
         lastBreakerTrigger = null
-        if (tool == "history_read" && (lastToolWasHistoryRead || (phoneSessionActive && historyReadsSinceScreenChange >= 1))) {
+        val stuckActive = consecutiveUnchangedScreen >= STUCK_SCREEN_THRESHOLD
+        val repeating = detectRepeatingSequence(stalledToolSeq.toList())
+        val repeatingHadSucceededTapOrSwipe = if (repeating != null) {
+            val start = stalledToolSeq.size - repeating.size * SEQUENCE_MIN_REPEATS
+            (start until stalledToolSeq.size).any { idx ->
+                idx in stalledToolOkSeq.indices &&
+                    idx in stalledToolEpochSeq.indices &&
+                    stalledToolSeq[idx] in STUCK_SCREEN_TAP_OR_SWIPE &&
+                    stalledToolOkSeq[idx] &&
+                    stalledToolEpochSeq[idx] == screenEpoch
+            }
+        } else {
+            false
+        }
+        val tapAlreadyTried = triedTapOnStuckScreen || repeatingHadSucceededTapOrSwipe
+        if (tool == "end_not_done") {
+            if (stuckActive && !tapAlreadyTried) {
+                consecutiveGiveUpBlocks += 1
+                consecutiveStuckWarnBlocks += 1
+                if (consecutiveGiveUpBlocks >= 3 || consecutiveStuckWarnBlocks >= 4) {
+                    lastBreakerTrigger = "stuck_screen_giveup_stop"
+                    stop = GuardVerdict(
+                        "stuck_screen_giveup_stop",
+                        Severity.Stop,
+                        buildJsonObject {
+                            put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                            put("blockedTool", tool)
+                            put("tapAlreadyTried", false)
+                            put("consecutiveGiveUpBlocks", consecutiveGiveUpBlocks)
+                            put("consecutiveStuckWarnBlocks", consecutiveStuckWarnBlocks)
+                        },
+                        "Stopped: screen remained unchanged for $consecutiveUnchangedScreen steps and repeated give-up attempts ignored the requirement to try phone_tap or phone_swipe first.",
+                    )
+                    return stop
+                }
+                lastBreakerTrigger = "stuck_screen_giveup_blocked"
+                return GuardVerdict(
+                    "stuck_screen_giveup_blocked",
+                    Severity.Warn,
+                    buildJsonObject {
+                        put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                        put("blockedTool", tool)
+                    },
+                    "Screen has not changed for $consecutiveUnchangedScreen steps, and no tap or swipe has been tried on the stuck screen yet. Do NOT give up yet: call phone_tap on the next unopened item or phone_swipe to a new area first.",
+                )
+            }
+            return null
+        }
+        if (!stuckActive && tool == "history_read" && (lastToolWasHistoryRead || (phoneSessionActive && historyReadsSinceScreenChange >= 1))) {
             lastBreakerTrigger = "history_read_consecutive_limit"
             return GuardVerdict(
                 "history_read_consecutive_limit",
@@ -166,7 +228,13 @@ class OperationGuards(private val stepBudget: Int? = null) {
         }
         if (staleCycleCount >= 2 && tool in CYCLE_REPEAT_TOOLS) {
             consecutiveCycleBlocks += 1
-            if (consecutiveCycleBlocks >= 2) {
+            if (stuckActive && !tapAlreadyTried) consecutiveStuckWarnBlocks += 1
+            val shouldStop = if (!stuckActive || tapAlreadyTried) {
+                consecutiveCycleBlocks >= 2
+            } else {
+                consecutiveCycleBlocks >= 3 || consecutiveStuckWarnBlocks >= 4
+            }
+            if (shouldStop) {
                 lastBreakerTrigger = "screen_hash_cycle_stop"
                 stop = GuardVerdict(
                     "no_progress_cycle",
@@ -174,6 +242,7 @@ class OperationGuards(private val stepBudget: Int? = null) {
                     buildJsonObject {
                         put("staleCycleCount", staleCycleCount)
                         put("blockedTool", tool)
+                        put("tapAlreadyTried", tapAlreadyTried)
                     },
                     "Stopped: screen and extracted items repeated without progress; no new item or action succeeded.",
                 )
@@ -190,12 +259,59 @@ class OperationGuards(private val stepBudget: Int? = null) {
                 "Screen and extracted items have repeated $staleCycleCount times in a row without progress. Do NOT repeat $tool. Force a different action: tap the next unopened item on screen, change the search query/filter, navigate back, or end the task with a clear reason if no new item exists.",
             )
         }
-        val repeating = detectRepeatingSequence(stalledToolSeq.toList())
-            ?.takeIf { pattern -> pattern.any { it !in PURE_OBSERVATION_TOOLS } }
+        if (stuckActive && tool !in STUCK_SCREEN_ALLOWED_TOOLS) {
+            consecutiveStuckBlocks += 1
+            if (!tapAlreadyTried) consecutiveStuckWarnBlocks += 1
+            val shouldStop = if (tapAlreadyTried) {
+                consecutiveStuckBlocks >= 2
+            } else {
+                consecutiveStuckBlocks >= 3 || consecutiveStuckWarnBlocks >= 4
+            }
+            if (shouldStop) {
+                lastBreakerTrigger = "stuck_screen_3x_stop"
+                stop = GuardVerdict(
+                    "stuck_screen",
+                    Severity.Stop,
+                    buildJsonObject {
+                        put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                        put("blockedTool", tool)
+                        put("tapAlreadyTried", tapAlreadyTried)
+                    },
+                    if (tapAlreadyTried) {
+                        "Stopped: screen remained unchanged after trying a tap or swipe and no further progress was made."
+                    } else {
+                        "Stopped: screen remained unchanged for $consecutiveUnchangedScreen steps and repeated warnings without trying a tap or swipe were ignored."
+                    },
+                )
+                return stop
+            }
+            lastBreakerTrigger = "stuck_screen_3x"
+            val nextGuidance = if (tapAlreadyTried) {
+                "Screen has remained unchanged for $consecutiveUnchangedScreen steps even after a tap/swipe. Try another phone_tap or phone_swipe on a different area, or call end_not_done with a clear reason."
+            } else {
+                "Screen has not changed for $consecutiveUnchangedScreen steps in a row. Do NOT repeat $tool. Try a real phone action first: call phone_tap on the next unopened item or phone_swipe to a new area before giving up."
+            }
+            return GuardVerdict(
+                "stuck_screen_blocked",
+                Severity.Warn,
+                buildJsonObject {
+                    put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                    put("blockedTool", tool)
+                    put("tapAlreadyTried", tapAlreadyTried)
+                },
+                nextGuidance,
+            )
+        }
         if (repeating != null && tool in repeating) {
             val seqLabel = repeating.joinToString("->")
             consecutiveSequenceBlocks += 1
-            if (consecutiveSequenceBlocks >= 2) {
+            if (stuckActive && !tapAlreadyTried) consecutiveStuckWarnBlocks += 1
+            val shouldStop = if (!stuckActive || tapAlreadyTried) {
+                consecutiveSequenceBlocks >= 2
+            } else {
+                consecutiveSequenceBlocks >= 3 || consecutiveStuckWarnBlocks >= 4
+            }
+            if (shouldStop) {
                 lastBreakerTrigger = "tool_sequence_3x_stop:$seqLabel"
                 stop = GuardVerdict(
                     "tool_sequence_loop",
@@ -204,12 +320,72 @@ class OperationGuards(private val stepBudget: Int? = null) {
                         put("pattern", JsonArray(repeating.map(::JsonPrimitive)))
                         put("repeats", SEQUENCE_MIN_REPEATS)
                         put("blockedTool", tool)
+                        put("tapAlreadyTried", tapAlreadyTried)
                     },
                     "Stopped: tool sequence '$seqLabel' repeated ${SEQUENCE_MIN_REPEATS}+ times without progress toward the goal.",
                 )
                 return stop
             }
             lastBreakerTrigger = "tool_sequence_3x:$seqLabel"
+            val nudge = when (tool) {
+                "phone_tap", "web_tap" -> {
+                    val swipeTool = if (tool == "phone_tap") "phone_swipe" else "web_swipe"
+                    val backTool = if (tool == "phone_tap") "phone_back" else "web_back"
+                    val alternatives = buildList {
+                        if (swipeTool !in repeating) add("swipe to a new area ($swipeTool)")
+                        if (backTool !in repeating) add("navigate back ($backTool)")
+                        if (isEmpty()) add("try a different tool")
+                    }
+                    val tail = if (!stuckActive || tapAlreadyTried) {
+                        ", or call end_not_done with a clear reason if nothing works."
+                    } else {
+                        " before giving up."
+                    }
+                    "Tool sequence '$seqLabel' repeated $SEQUENCE_MIN_REPEATS times in a row with no progress toward the goal. " +
+                        "Do NOT call $tool again right now (repeating it will stop the task). " +
+                        "Instead, ${alternatives.joinToString(", ")}$tail"
+                }
+                "phone_swipe", "web_swipe" -> {
+                    val tapTool = if (tool == "phone_swipe") "phone_tap" else "web_tap"
+                    val backTool = if (tool == "phone_swipe") "phone_back" else "web_back"
+                    val alternatives = buildList {
+                        if (tapTool !in repeating) add("tap an unopened item ($tapTool)")
+                        if (backTool !in repeating) add("navigate back ($backTool)")
+                        if (isEmpty()) add("try a different tool")
+                    }
+                    val tail = if (!stuckActive || tapAlreadyTried) {
+                        ", or call end_not_done with a clear reason if nothing works."
+                    } else {
+                        " before giving up."
+                    }
+                    "Tool sequence '$seqLabel' repeated $SEQUENCE_MIN_REPEATS times in a row with no progress toward the goal. " +
+                        "Do NOT call $tool again right now (repeating it will stop the task). " +
+                        "Instead, ${alternatives.joinToString(", ")}$tail"
+                }
+                else -> {
+                    val isWeb = tool.startsWith("web_") || repeating.any { it.startsWith("web_") }
+                    val tapTool = if (isWeb) "web_tap" else "phone_tap"
+                    val swipeTool = if (isWeb) "web_swipe" else "phone_swipe"
+                    val backTool = if (isWeb) "web_back" else "phone_back"
+                    val hasTap = "phone_tap" in repeating || "web_tap" in repeating
+                    val hasSwipe = "phone_swipe" in repeating || "web_swipe" in repeating
+                    val hasBack = "phone_back" in repeating || "web_back" in repeating
+                    val alternatives = buildList {
+                        if (!hasTap) add("tap the next unopened item ($tapTool)")
+                        if (!hasSwipe) add("swipe to a new area ($swipeTool)")
+                        if (!hasBack) add("navigate back ($backTool)")
+                        if (!stuckActive) add("change the search query/filter")
+                        if (isEmpty()) add("try a completely different tool")
+                    }
+                    val tail = if (!stuckActive || tapAlreadyTried) {
+                        ", or call end_not_done with a clear reason if no new item exists."
+                    } else {
+                        " first before giving up."
+                    }
+                    "Tool sequence '$seqLabel' repeated $SEQUENCE_MIN_REPEATS times in a row with no progress toward the goal. " +
+                        "Do NOT repeat $tool. Force a different action: ${alternatives.joinToString(", ")}$tail"
+                }
+            }
             return GuardVerdict(
                 "tool_sequence_loop_blocked",
                 Severity.Warn,
@@ -218,23 +394,87 @@ class OperationGuards(private val stepBudget: Int? = null) {
                     put("repeats", SEQUENCE_MIN_REPEATS)
                     put("blockedTool", tool)
                 },
-                "Tool sequence '$seqLabel' repeated $SEQUENCE_MIN_REPEATS times in a row with no progress toward the goal. Do NOT repeat $tool. Force a different action: tap the next unopened item on screen, change the search query/filter, navigate back, or end the task with a clear reason if no new item exists.",
+                nudge,
+            )
+        }
+        if (consecutiveUnchangedScreen >= STUCK_SCREEN_MAX_UNCHANGED) {
+            consecutiveAllowedStuckBlocks += 1
+            if (!tapAlreadyTried) consecutiveStuckWarnBlocks += 1
+            if (consecutiveAllowedStuckBlocks >= 2 || (!tapAlreadyTried && consecutiveStuckWarnBlocks >= 4)) {
+                lastBreakerTrigger = "stuck_screen_3x_stop"
+                stop = GuardVerdict(
+                    "stuck_screen",
+                    Severity.Stop,
+                    buildJsonObject {
+                        put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                        put("blockedTool", tool)
+                        put("tapAlreadyTried", tapAlreadyTried)
+                    },
+                    if (tapAlreadyTried) {
+                        "Stopped: screen remained unchanged for $consecutiveUnchangedScreen steps even after trying a tap or swipe and no further progress was made."
+                    } else {
+                        "Stopped: screen remained unchanged for $consecutiveUnchangedScreen steps without trying a tap or swipe or making progress."
+                    },
+                )
+                return stop
+            }
+            lastBreakerTrigger = "stuck_screen_3x"
+            val guidance = if (tapAlreadyTried) {
+                "Screen has remained unchanged for $consecutiveUnchangedScreen steps despite multiple actions. Try another screen-changing action or call end_not_done with a clear reason."
+            } else {
+                "Screen has remained unchanged for $consecutiveUnchangedScreen steps. Do NOT keep cycling $tool without effect: call phone_tap on an unopened item or phone_swipe to a new area first."
+            }
+            return GuardVerdict(
+                "stuck_screen_blocked",
+                Severity.Warn,
+                buildJsonObject {
+                    put("consecutiveUnchangedScreen", consecutiveUnchangedScreen)
+                    put("blockedTool", tool)
+                    put("tapAlreadyTried", tapAlreadyTried)
+                },
+                guidance,
             )
         }
         return null
     }
 
-    internal fun blockedTelemetry(tool: String, historyReadReason: String? = null): StepHashOutcome =
-        StepHashOutcome(
-            screenHash = null,
-            extractedHash = null,
-            screenChanged = null,
+    internal fun blockedTelemetry(
+        tool: String,
+        screenHash: String? = lastScreenHash,
+        historyReadReason: String? = null,
+    ): StepHashOutcome {
+        val effectiveHash = screenHash ?: lastScreenHash
+        return StepHashOutcome(
+            screenHash = effectiveHash,
+            extractedHash = lastExtractedHash,
+            screenChanged = effectiveHash?.let { false },
             extractedItemsNew = null,
             staleCycleCount = staleCycleCount,
             historyReadReason = historyReadReason,
             toolSequence = (stalledToolSeq.toList() + tool).takeLast(SEQUENCE_WINDOW_LOG),
+            breakerTrigger = lastBreakerTrigger ?: stop?.code,
+        )
+    }
+
+    internal fun snapshotTelemetry(
+        tool: String,
+        screenHash: String? = lastScreenHash,
+        historyReadReason: String? = null,
+    ): StepHashOutcome {
+        val screenChanged = screenHash?.let { h ->
+            if (lastScreenHash == null) true else h != lastScreenHash
+        }
+        return StepHashOutcome(
+            screenHash = screenHash,
+            extractedHash = lastExtractedHash,
+            screenChanged = screenChanged,
+            extractedItemsNew = null,
+            staleCycleCount = staleCycleCount,
+            historyReadReason = historyReadReason,
+            toolSequence = stalledToolSeq.toList().takeLast(SEQUENCE_WINDOW_LOG).takeIf { it.isNotEmpty() },
             breakerTrigger = lastBreakerTrigger,
         )
+    }
 
     /** 记录工具执行后的屏幕/提取哈希与周期计数变化。 */
     fun recordStepOutcome(
@@ -244,57 +484,86 @@ class OperationGuards(private val stepBudget: Int? = null) {
         itemHashes: List<String>,
         writing: Boolean,
         ok: Boolean,
+        changed: Boolean? = null,
     ): StepHashOutcome {
         if (tool.startsWith("phone_")) phoneSessionActive = true
         val screenChanged = screenHash?.let { h -> lastScreenHash == null || h != lastScreenHash }
         val extractedItemsNew = if (itemHashes.isNotEmpty()) itemHashes.any { it !in seenExtractedItemHashes } else null
         seenExtractedItemHashes.addAll(itemHashes)
 
-        if (screenChanged == true || extractedItemsNew == true) {
+        val actionEpoch = screenEpoch
+        if (screenChanged == true || extractedItemsNew == true || (screenChanged == null && tool in STUCK_SCREEN_TAP_OR_SWIPE && ok && changed == true)) {
+            screenEpoch += 1
             staleCycleCount = 0
             consecutiveCycleBlocks = 0
             cyclePendingFromScroll = false
             cycleSeenExtract = (tool in CYCLE_ADVANCE_TOOLS && extractedItemsNew == true)
+            consecutiveUnchangedScreen = 0
+            triedTapOnStuckScreen = false
+            consecutiveStuckBlocks = 0
+            consecutiveGiveUpBlocks = 0
+            consecutiveStuckWarnBlocks = 0
+            consecutiveAllowedStuckBlocks = 0
             if (screenChanged == true && lastScreenHash != null) {
                 historyReadsSinceScreenChange = 0
             }
-        } else if (
-            tool in CYCLE_TRACKED_TOOLS &&
-            screenHash != null &&
-            screenHash == lastScreenHash &&
-            (extractedHash == null || extractedHash == lastExtractedHash || extractedItemsNew == false ||
-                (tool in CYCLE_ADVANCE_TOOLS && lastExtractedHash == null))
-        ) {
-            when (tool) {
-                "phone_scroll" -> {
-                    if (cyclePendingFromScroll || !cycleSeenExtract) {
-                        staleCycleCount += 1
-                    } else {
-                        cyclePendingFromScroll = true
+        } else if (screenChanged == false) {
+            if (ok && consecutiveUnchangedScreen >= STUCK_SCREEN_THRESHOLD && tool in STUCK_SCREEN_TAP_OR_SWIPE) {
+                triedTapOnStuckScreen = true
+                consecutiveStuckBlocks = 0
+                consecutiveGiveUpBlocks = 0
+                consecutiveStuckWarnBlocks = 0
+                consecutiveAllowedStuckBlocks = 0
+            }
+            consecutiveUnchangedScreen += 1
+            if (
+                tool in CYCLE_TRACKED_TOOLS &&
+                screenHash == lastScreenHash &&
+                (extractedHash == null || extractedHash == lastExtractedHash || extractedItemsNew == false ||
+                    (tool in CYCLE_ADVANCE_TOOLS && lastExtractedHash == null))
+            ) {
+                when (tool) {
+                    "phone_scroll" -> {
+                        if (cyclePendingFromScroll || !cycleSeenExtract) {
+                            staleCycleCount += 1
+                        } else {
+                            cyclePendingFromScroll = true
+                            staleCycleCount += 1
+                        }
+                    }
+                    in CYCLE_ADVANCE_TOOLS -> {
+                        cyclePendingFromScroll = false
+                        cycleSeenExtract = true
                         staleCycleCount += 1
                     }
                 }
-                in CYCLE_ADVANCE_TOOLS -> {
-                    cyclePendingFromScroll = false
-                    cycleSeenExtract = true
-                    staleCycleCount += 1
-                }
             }
+        } else if (ok && consecutiveUnchangedScreen >= STUCK_SCREEN_THRESHOLD && tool in STUCK_SCREEN_TAP_OR_SWIPE) {
+            triedTapOnStuckScreen = true
+            consecutiveStuckBlocks = 0
+            consecutiveGiveUpBlocks = 0
+            consecutiveStuckWarnBlocks = 0
+            consecutiveAllowedStuckBlocks = 0
         }
 
         val goalProgressed = extractedItemsNew == true ||
-            (tool in GOAL_PROGRESS_TOOLS && ok && screenChanged != false)
-        if (goalProgressed || tool !in SEQUENCE_TRACKED_TOOLS) {
+            (tool in GOAL_PROGRESS_TOOLS && ok && screenChanged != false && changed != false)
+        if (goalProgressed) {
             stalledToolSeq.clear()
+            stalledToolOkSeq.clear()
+            stalledToolEpochSeq.clear()
             consecutiveSequenceBlocks = 0
-            lastBreakerTrigger = null
+            lastBreakerTrigger = stop?.code
         } else {
             stalledToolSeq.pushCapped(tool, cap = SEQUENCE_TRACK_KEEP)
-            detectRepeatingSequence(stalledToolSeq.toList())
-                ?.takeIf { pattern -> pattern.any { it !in PURE_OBSERVATION_TOOLS } }
-                ?.let { pattern ->
-                    lastBreakerTrigger = "tool_sequence_3x:${pattern.joinToString("->")}"
-                }
+            stalledToolOkSeq.pushCapped(ok, cap = SEQUENCE_TRACK_KEEP)
+            stalledToolEpochSeq.pushCapped(actionEpoch, cap = SEQUENCE_TRACK_KEEP)
+            val seqPattern = detectRepeatingSequence(stalledToolSeq.toList())
+            lastBreakerTrigger = stop?.code ?: when {
+                seqPattern != null -> "tool_sequence_3x:${seqPattern.joinToString("->")}"
+                consecutiveUnchangedScreen >= STUCK_SCREEN_THRESHOLD -> "stuck_screen_3x"
+                else -> null
+            }
         }
         val loggedSeq = stalledToolSeq.toList().takeLast(SEQUENCE_WINDOW_LOG).takeIf { it.isNotEmpty() }
 
@@ -450,7 +719,10 @@ class OperationGuards(private val stepBudget: Int? = null) {
         resetNoEffect()
         sinceNewState = 0
         sinceNewWarnedAt = 0
-        if (stop?.code == "no_progress" || stop?.code == "read_loop") stop = null
+        if (stop?.code == "no_progress" || stop?.code == "read_loop") {
+            if (lastBreakerTrigger == stop?.code) lastBreakerTrigger = null
+            stop = null
+        }
     }
 
     fun result(tool: String, content: JsonObject, neutral: Boolean = false): List<GuardVerdict> {
@@ -488,22 +760,23 @@ class OperationGuards(private val stepBudget: Int? = null) {
         val CYCLE_TRACKED_TOOLS = setOf("phone_scroll", "phone_observe", "phone_extract", "phone_collect")
         val CYCLE_ADVANCE_TOOLS = setOf("phone_extract", "phone_collect")
         val GOAL_PROGRESS_TOOLS = setOf(
-            "phone_tap", "phone_type", "phone_input", "phone_launch_app", "phone_open_link",
-            "phone_set_wheel", "do_each", "phone_run", "do_steps",
-            "web_click", "web_type", "web_open",
+            "phone_tap", "phone_type_text", "phone_clear_text", "phone_type", "phone_input",
+            "phone_launch_app", "phone_open_link", "phone_set_wheel",
+            "do_each", "phone_run", "do_steps",
+            "web_tap", "web_type_text", "web_clear_text", "web_click", "web_type",
+            "web_navigate", "web_interact", "web_open",
         )
-        // Standalone screen-read tools already have dedicated read_loop (5/8/12) and screen-hash cycle guards;
-        // sequence breaker focuses on loops with scroll/swipe/extract/offscreen/system/history/memory tools.
-        val PURE_OBSERVATION_TOOLS = setOf(
-            "phone_observe", "phone_list_elements", "phone_query",
-        )
-        val SEQUENCE_TRACKED_TOOLS = setOf(
-            "phone_scroll", "phone_swipe", "phone_find",
-            "phone_observe", "phone_extract", "phone_collect",
-            "phone_list_elements", "phone_query", "phone_read_text", "phone_screenshot",
-            "phone_system_command",
-            "history_read",
-            "task_memory_search", "task_memory_timeline", "task_memory_step",
+        const val STUCK_SCREEN_THRESHOLD = 3
+        const val STUCK_SCREEN_MAX_UNCHANGED = 12
+        val STUCK_SCREEN_TAP_OR_SWIPE = setOf("phone_tap", "phone_swipe", "web_tap", "web_swipe")
+        val STUCK_SCREEN_ALLOWED_TOOLS = STUCK_SCREEN_TAP_OR_SWIPE + setOf(
+            "phone_type_text", "phone_clear_text", "phone_type", "phone_input",
+            "phone_back", "phone_press_key",
+            "phone_launch_app", "phone_open_link", "phone_set_wheel", "phone_gesture",
+            "phone_dialog", "phone_run", "do_each", "do_steps",
+            "web_type_text", "web_clear_text", "web_click", "web_type",
+            "web_back", "web_press_key", "web_navigate", "web_interact", "web_open", "web_upload", "web_tabs",
+            "ask_user", "hand_to_user", "request_confirmation", "handle_obstacle",
         )
         const val SEQUENCE_TRACK_KEEP = 16
         const val SEQUENCE_WINDOW_LOG = 8

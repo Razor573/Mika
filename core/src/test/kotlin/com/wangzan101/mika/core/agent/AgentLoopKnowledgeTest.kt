@@ -82,8 +82,25 @@ class AgentLoopKnowledgeTest {
 
     @Test fun knowledgeSurvivesCompression() {
         val store = KnowledgeStore(listOf(e("alpha", "p.a")))
-        val model = FakeModel(reply(call("phone_observe")), *(1..15).map { reply(call("wait", """{"seconds":${it / 10.0}}""")) }.toTypedArray(), finish, contextTokens = 100)
-        kotlinx.coroutines.runBlocking { AgentLoop(model, toolDispatcher(PkgScreen(listOf("p.a"))), "B", knowledge = store).run("随便") }
+        var ver = 0
+        val screen = object : ScreenPort by PkgScreen(listOf("p.a")) {
+            private fun snap() = ScreenSnapshot(
+                "sk$ver", "p.a",
+                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "text", "v$ver", 10, 10, listOf(0, 0, 50, 50), null, false, false, false)),
+                1080, 2400,
+            )
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
+        val steps = (1..15).map { i ->
+            if (i % 3 == 0) reply(call("phone_tap", """{"x":100,"y":200}""")) else reply(call("wait", """{"seconds":${i / 10.0}}"""))
+        }
+        val model = FakeModel(reply(call("phone_observe")), *steps.toTypedArray(), finish, contextTokens = 100)
+        kotlinx.coroutines.runBlocking { AgentLoop(model, toolDispatcher(screen), "B", knowledge = store).run("随便") }
         val last = model.requests.last()
         assertEquals(1, last.refs().size)
         assertTrue(last.any { m -> m.plainText().startsWith(ContextCompressor.HEADER) })

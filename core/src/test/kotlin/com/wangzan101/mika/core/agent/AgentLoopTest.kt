@@ -236,13 +236,23 @@ class AgentLoopTest {
     }
 
     @Test fun stuckGuardSeesInlineScreens() = runTest {
-        // 不 observe,反复点同一处、画面一直不变:靠动作结果带的屏幕也能认出没进展
-        val m = FakeModel(*Array(8) { reply(call("phone_back")) }, finish())
+        // 不 observe,反复动而画面一直不变:靠动作结果带的屏幕也能认出没进展
+        val actions = listOf(
+            call("phone_back"),
+            call("phone_scroll", """{"direction":"down"}"""),
+            call("phone_swipe", """{"startX":500,"startY":800,"endX":500,"endY":200}"""),
+            call("phone_back"),
+            call("phone_scroll", """{"direction":"down"}"""),
+            call("phone_swipe", """{"startX":500,"startY":800,"endX":500,"endY":200}"""),
+            call("phone_back"),
+            call("phone_scroll", """{"direction":"down"}"""),
+        )
+        val m = FakeModel(*actions.map { reply(it) }.toTypedArray(), finish())
         AgentLoop(m, toolDispatcher(FakeScreen(), inlineScreen = true), "BASE", flags = SpeedFlags(inlineScreen = true)).run("t")
         val seen = m.requests.last().flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
         assertTrue(seen.any { "no_progress" in it })
         // 开关关着、也不 observe:动作自己报的效果(no_effect)也认得出没进展
-        val off = FakeModel(*Array(8) { reply(call("phone_back")) }, finish())
+        val off = FakeModel(*actions.map { reply(it) }.toTypedArray(), finish())
         AgentLoop(off, toolDispatcher(FakeScreen()), "BASE").run("t")
         val offSeen = off.requests.last().flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
         assertTrue(offSeen.any { "no_progress" in it })
@@ -683,10 +693,25 @@ class AgentLoopTest {
         assertNull(m.requests[2].withoutRuntime().last().results().single().json()["advice"])
     }
 
+    private fun changingTapScreen(): ScreenPort {
+        var ver = 0
+        return object : ScreenPort by FakeScreen() {
+            private fun snap() = ScreenSnapshot("sc$ver", "com.x", listOf(button("@e1", "btn-$ver")), 1080, 2400)
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): ActionResult {
+                ver++
+                return ActionResult.Ok(changed = true)
+            }
+        }
+    }
+
     @Test fun progressCheckSuggestsGivingUpHonestlyHalfwayThrough() = runTest {
-        // 每步不同的等待,不会触发重复保护
-        val m = FakeModel(*(1..20).map { tools(call("wait", """{"seconds":${1 + it / 10.0}}""")) }.toTypedArray())
-        loop(m, maxSteps = 20).run("t")
+        val m = FakeModel(*(1..20).map {
+            if (it % 3 == 0) tools(call("phone_tap", """{"x":100,"y":200}"""))
+            else tools(call("wait", """{"seconds":${1 + it / 10.0}}"""))
+        }.toTypedArray())
+        AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", maxSteps = 20, retry = FIXED_RETRY).run("t")
         fun notes(i: Int) = m.requests[i].filter { it.role == Role.User }.flatMap { it.parts }.filterIsInstance<Part.Text>().map { it.text }
         // requests[i] 是第 i+1 步发出的请求:用掉 10 步之前没有提醒,用掉 10 步、15 步时各出现一次
         assertTrue(notes(9).none { "end_not_done" in it })
@@ -705,15 +730,18 @@ class AgentLoopTest {
         repeat(6) { taps += tools(call("phone_tap", """{"x":105,"y":106}""")) }
         taps += finish()
         val m = FakeModel(*taps.toTypedArray())
-        loop(m, FakeScreen().apply { result = ActionResult.Ok(changed = true) }).run("t")
+        AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", retry = FIXED_RETRY).run("t")
         assertNull(m.requests[6].withoutRuntime().last().results().single().json()["advice"])
 
         val typed = FakeModel(tools(call("phone_type_text", """{"text":"张三"}""")), tools(call("phone_type_text", """{"text":"张三"}""")), finish())
         loop(typed).run("t")
         assertNull(typed.requests[2].withoutRuntime().last().results().single().json()["advice"])
 
-        val w = FakeModel(*(1..11).map { tools(call("wait", """{"seconds":${1 + it / 10.0}}""")) }.toTypedArray(), finish())
-        loop(w, maxSteps = 20).run("t")
+        val w = FakeModel(*(1..11).map {
+            if (it % 3 == 0) tools(call("phone_tap", """{"x":100,"y":200}"""))
+            else tools(call("wait", """{"seconds":${1 + it / 10.0}}"""))
+        }.toTypedArray(), finish())
+        AgentLoop(w, toolDispatcher(changingTapScreen()), "BASE", maxSteps = 20, retry = FIXED_RETRY).run("t")
         val check = w.requests[10].filter { it.role == Role.User }.flatMap { it.parts }.filterIsInstance<Part.Text>().map { it.text }
             .single { "Progress check" in it }
         assertTrue(check, separates(check))
@@ -721,12 +749,14 @@ class AgentLoopTest {
 
     @Test fun unchangedElementListClosesOutWithoutNewData() = runTest {
         // 相同元素连续读到三次后先走无新数据收尾;收尾仍只操作、不给结果时按守卫停止。
-        var i = 0
-        val script = mutableListOf<Any>(tools(call("phone_observe")))
-        repeat(12) {
-            script += tools(call("phone_tap", """{"x":${(i++) * 80},"y":10}"""))
-            script += tools(call("phone_observe"))
-        }
+        val script = listOf<Any>(
+            tools(call("phone_observe")),
+            tools(call("phone_list_elements")),
+            tools(call("phone_observe")),
+            tools(call("phone_list_elements")),
+            tools(call("phone_tap", """{"x":80,"y":10}""")),
+            tools(call("phone_tap", """{"x":80,"y":10}""")),
+        )
         val r = loop(FakeModel(*script.toTypedArray())).run("t")
         assertTrue("$r", r is TaskState.Failed && "Stopped after 3 consecutive steps with no new data" in r.reason)
     }
@@ -759,12 +789,26 @@ class AgentLoopTest {
 
     @Test fun recalledScreenshotsAreSentAsImagesAndCountAsNew() = runTest {
         val recall = call("view_past_screens", """{"ids":[1]}""")
-        val m = FakeModel(*Array(4) { tools(call("phone_observe")) }, tools(recall), finish())
+        val m = FakeModel(
+            tools(call("phone_observe")),
+            tools(call("phone_observe")),
+            tools(call("phone_tap", """{"x":100,"y":100}""")),
+            tools(call("phone_observe")),
+            tools(recall),
+            finish(),
+        )
         var reads = 0
+        var ver = 0
         val changing = object : ScreenPort by FakeScreen() {
+            private fun snap(id: Int) = ScreenSnapshot("snap$id-$ver", "com.x", listOf(label("@e1", "第 $id-$ver 屏")), 1080, 2400)
             override suspend fun snapshot(): ScreenSnapshot {
                 reads++
-                return ScreenSnapshot("snap$reads", "com.x", listOf(label("@e1", "第 $reads 屏")), 1080, 2400)
+                return snap(reads)
+            }
+            override suspend fun peek(): ScreenSnapshot = snap(reads)
+            override suspend fun tapXY(x: Int, y: Int): ActionResult {
+                ver++
+                return ActionResult.Ok(changed = true)
             }
         }
         AgentLoop(m, toolDispatcher(changing, visionEnabled = true), "BASE", retry = FIXED_RETRY).run("t")
@@ -877,9 +921,9 @@ class AgentLoopTest {
         val progress = """<task_progress>{"criteria":["收集全部记录"],"metric":{"name":"已收集","done":1,"boundary":"第 1 条"}}</task_progress>开始收集"""
         val m = FakeModel(
             reply(Part.Text(progress), call("phone_observe")),
+            tools(call("phone_list_elements")),
             tools(call("phone_observe")),
-            tools(call("phone_observe")),
-            tools(call("phone_observe")),
+            tools(call("phone_list_elements")),
             finish(),
             tools(call("phone_scroll", """{"direction":"down"}""")), // 停滞收尾后不得再执行
         )
@@ -910,14 +954,17 @@ class AgentLoopTest {
         assertEquals(TaskState.Running(2, "打开设置"), seen[1])
     }
 
-    private fun distinctWaits(n: Int, from: Int = 1) = (from until from + n).map { tools(call("wait", """{"seconds":${it / 10.0}}""")) }
+    private fun distinctWaits(n: Int, from: Int = 1) = (from until from + n).map {
+        if (it % 3 == 0) tools(call("phone_tap", """{"x":100,"y":200}"""))
+        else tools(call("wait", """{"seconds":${it / 10.0}}"""))
+    }
 
     @Test fun contextTooLongRetriesOnceCompressed() = runTest {
         val events = mutableListOf<RunEvent>()
         val sink = object : RunSink { override fun event(e: RunEvent) { events += e } }
         val script = distinctWaits(10) + ModelError.ContextTooLong() + distinctWaits(1, from = 11) + finish()
         val m = FakeModel(*script.toTypedArray())
-        val r = AgentLoop(m, toolDispatcher(FakeScreen()), "BASE", 60, sink = sink).run("t")
+        val r = AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", 60, sink = sink).run("t")
         com.wangzan101.mika.core.testing.assertAnswered(DONE, r)
         // 第 11 次调用报超长,压得更狠后重试一次:留最近 6 次往返,之前的 4 次折成摘要
         assertEquals(13, m.requests.size)
@@ -933,7 +980,7 @@ class AgentLoopTest {
 
         // 压过还超长就失败,不再重试
         val again = FakeModel(*distinctWaits(10).toTypedArray(), ModelError.ContextTooLong(), ModelError.ContextTooLong())
-        val failed = loop(again).run("t")
+        val failed = AgentLoop(again, toolDispatcher(changingTapScreen()), "BASE", retry = FIXED_RETRY).run("t")
         assertTrue(failed is TaskState.Failed && failed.kind == FailKind.Model)
         assertEquals(12, again.requests.size)
     }
@@ -943,7 +990,7 @@ class AgentLoopTest {
         val script = distinctWaits(10) + ModelError.ContextTooLong() + distinctWaits(4, from = 11) + ModelError.ContextTooLong() +
             distinctWaits(1, from = 15) + finish()
         val m = FakeModel(*script.toTypedArray())
-        val r = AgentLoop(m, toolDispatcher(FakeScreen()), "BASE", 60).run("t")
+        val r = AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", 60).run("t")
         com.wangzan101.mika.core.testing.assertAnswered(DONE, r)
         val overflowed = m.requests[15].withoutRuntime()
         val retried = m.requests[16].withoutRuntime()
@@ -954,7 +1001,7 @@ class AgentLoopTest {
 
     @Test fun contextTooLongWithNothingToFoldFailsWithoutResending() = runTest {
         val m = FakeModel(*distinctWaits(3).toTypedArray(), ModelError.ContextTooLong(), finish())
-        val r = loop(m).run("t")
+        val r = AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", retry = FIXED_RETRY).run("t")
         assertTrue(r is TaskState.Failed && r.kind == FailKind.Model)
         assertEquals(4, m.requests.size)
     }
@@ -965,7 +1012,7 @@ class AgentLoopTest {
         // 上下文很小:基础提示词和工具定义就超出触发点,压到最轻也回不到触发点以下,每多一次往返就多折一步;
         // 之后一轮回了空话(被提醒一次),折叠数不变,不再记事件
         val m = FakeModel(*distinctWaits(13).toTypedArray(), reply(Part.Text("")), finish(), contextTokens = 100)
-        AgentLoop(m, toolDispatcher(FakeScreen()), "BASE", 60, sink = sink).run("t")
+        AgentLoop(m, toolDispatcher(changingTapScreen()), "BASE", 60, sink = sink).run("t")
         assertEquals(15, m.requests.size)
         assertEquals((1..12).toList(), events.filterIsInstance<RunEvent.Compressed>().map { it.foldedSteps })
     }
@@ -973,15 +1020,30 @@ class AgentLoopTest {
     @Test fun longTaskStaysUnderBudget() = runTest {
         // 每次读屏约 6000 字;60 步,上下文 32000 token:每次发出的消息估算(乘还没校准时的比值)不超过可用窗口
         var n = 0
+        var ver = 0
         val screen = object : ScreenPort by FakeScreen() {
+            private fun snap(id: Int): ScreenSnapshot {
+                val els = (1..40).map { UiElement("@e$it", "text", "第${id}-${ver}次读屏的第${it}项" + "字".repeat(140), 10, 10, listOf(0, 0, 9, 9), null, false, false, false) }
+                return ScreenSnapshot("snap$id-$ver", "com.x", els, 1080, 2400)
+            }
             override suspend fun snapshot(): ScreenSnapshot {
                 n++
-                val els = (1..40).map { UiElement("@e$it", "text", "第${n}次读屏的第${it}项" + "字".repeat(140), 10, 10, listOf(0, 0, 9, 9), null, false, false, false) }
-                return ScreenSnapshot("snap$n", "com.x", els, 1080, 2400)
+                return snap(n)
+            }
+            override suspend fun peek(): ScreenSnapshot = snap(n)
+            override suspend fun tapXY(x: Int, y: Int): ActionResult {
+                ver++
+                return ActionResult.Ok(changed = true)
             }
         }
-        // 两种读屏交替,避免触发重复操作保护
-        val script = (1..59).map { tools(call(if (it % 2 == 1) "phone_observe" else "phone_list_elements")) } + finish()
+        // 读屏与有效动作交替,避免触发序列重复保护
+        val script = (1..59).map {
+            when {
+                it % 3 == 0 -> tools(call("phone_tap", """{"x":10,"y":10}"""))
+                it % 2 == 1 -> tools(call("phone_observe"))
+                else -> tools(call("phone_list_elements"))
+            }
+        } + finish()
         val m = FakeModel(*script.toTypedArray(), contextTokens = 32_000)
         val l = AgentLoop(m, toolDispatcher(screen), "BASE", 60)
         com.wangzan101.mika.core.testing.assertAnswered(DONE, l.run("长任务"))

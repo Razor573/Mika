@@ -149,6 +149,7 @@ class AgentLoopMemoryTest {
             save("c1", "用户希望回答简短", "回答简短一点"),
             save("c2", "用户常用 Python 写脚本", "回答简短一点"),
             save("c3", "用户住在张江路100号", "回答简短一点"),
+            ModelReply(listOf(Part.ToolCall("ms1", "memory_search", """{"query":"python"}""")), StopReason.ToolUse, null),
             save("c4", "用户每天 7 点起床", "回答简短一点"),
             save("c5", "用户喜欢喝茶", "屏幕上写着喜欢喝茶"),
             finishReply,
@@ -159,17 +160,24 @@ class AgentLoopMemoryTest {
         }
         assertTrue(end.toString(), end is com.wangzan101.mika.core.agent.TaskState.Succeeded)
         assertEquals("只存上了那一条", before + 1, s.items.value.size)
-        // 模型走到了最后:五次调用都发生了,接着给出回答
-        assertEquals(6, model.requests.size)
+        // 模型走到了最后:全部调用都发生了,接着给出回答
+        assertEquals(7, model.requests.size)
     }
 
     // 一口气十条都不收(每条内容不同):不计入连续失败,模型自己停下来收尾
     @Test fun aLongRunOfRefusedSavesStillEnds() {
         val s = store()
         val before = s.items.value.size
-        val calls = (1..10).map { i ->
-            ModelReply(listOf(Part.ToolCall("r$i", "memory_save",
+        val spacers = listOf("memory_search", "wait", "phone_observe", "phone_list_elements")
+        val calls = mutableListOf<ModelReply>()
+        for (i in 1..10) {
+            calls += ModelReply(listOf(Part.ToolCall("r$i", "memory_save",
                 """{"kind":"fact","content":"用户住在张江路${100 + i}号","quote":"回答简短一点"}""")), StopReason.ToolUse, null)
+            if (i % 2 == 0 && i < 10) {
+                val sp = spacers[(i / 2 - 1) % spacers.size]
+                val args = if (sp == "memory_search") """{"query":"x"}""" else "{}"
+                calls += ModelReply(listOf(Part.ToolCall("sp$i", sp, args)), StopReason.ToolUse, null)
+            }
         }
         val model = FakeModel(*(calls + finishReply).toTypedArray())
         val end = runBlocking {
@@ -177,16 +185,23 @@ class AgentLoopMemoryTest {
                 .run("以后回答简短一点,别的你自己总结几条写进记忆")
         }
         assertTrue(end.toString(), end is com.wangzan101.mika.core.agent.TaskState.Succeeded)
-        assertEquals(11, model.requests.size)
+        assertEquals(15, model.requests.size)
         assertEquals(before, s.items.value.size)
     }
 
     // 开着「让 Mika 自己归纳着记」、用户又让它记:一口气十条归纳的都存上,任务正常结束
     @Test fun aBatchOfOwnConclusionsIsSavedWhenAllowed() {
         val s = memStore(inferenceAllowed = { true })
-        val calls = (1..10).map { i ->
-            ModelReply(listOf(Part.ToolCall("i$i", "memory_save",
+        val spacers = listOf("memory_search", "wait")
+        val calls = mutableListOf<ModelReply>()
+        for (i in 1..10) {
+            calls += ModelReply(listOf(Part.ToolCall("i$i", "memory_save",
                 """{"kind":"fact","content":"用户每周 $i 次去张江路${100 + i}号","quote":"你自己总结几条写进记忆"}""")), StopReason.ToolUse, null)
+            if (i % 2 == 0 && i < 10) {
+                val sp = spacers[(i / 2 - 1) % spacers.size]
+                val args = if (sp == "memory_search") """{"query":"x"}""" else "{}"
+                calls += ModelReply(listOf(Part.ToolCall("sp$i", sp, args)), StopReason.ToolUse, null)
+            }
         }
         val model = FakeModel(*(calls + finishReply).toTypedArray())
         val end = runBlocking {
@@ -233,7 +248,7 @@ class AgentLoopMemoryTest {
                 maxSteps = AgentLoop.UNLIMITED_STEPS).run("以后回答简短一点")
         }
         assertTrue(end.toString(), end is com.wangzan101.mika.core.agent.TaskState.Failed)
-        assertTrue(end.toString(), "too_many_failures" in end.toString())
+        assertTrue(end.toString(), "too_many_failures" in end.toString() || "tool_sequence_loop" in end.toString())
         assertTrue("没有一直转下去:${model.requests.size}", model.requests.size <= 6)
         assertTrue(s.items.value.isEmpty())
     }
@@ -241,18 +256,38 @@ class AgentLoopMemoryTest {
     // 每条都不一样、但一条也不收:到上限为止不计失败,再往后照常计,连着三条停下
     @Test fun endlessDistinctRefusedSavesAreStoppedToo() {
         val s = memStore()
-        val calls = (1..100).map { i ->
-            ModelReply(listOf(Part.ToolCall("r$i", "memory_save",
+        var ver = 0
+        val screen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private fun snap() = com.wangzan101.mika.core.screen.uistate.ScreenSnapshot(
+                "sm$ver", "com.x",
+                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "button", "v$ver", 10, 10, listOf(0, 0, 50, 50), null, true, false, false)),
+                1080, 2400,
+            )
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
+        val limit = com.wangzan101.mika.core.tool.MAX_QUIET_MEMORY_REFUSALS
+        val calls = mutableListOf<ModelReply>()
+        for (i in 1..20) {
+            calls += ModelReply(listOf(Part.ToolCall("r$i", "memory_save",
                 """{"kind":"fact","content":"用户住在张江路${100 + i}号","quote":"回答简短一点"}""")), StopReason.ToolUse, null)
+            if (i <= limit && i % 2 == 0) {
+                calls += ModelReply(listOf(Part.ToolCall("tp$i", "phone_tap", """{"x":10,"y":10}""")), StopReason.ToolUse, null)
+            }
         }
         val model = FakeModel(*(calls + finishReply).toTypedArray())
         val end = runBlocking {
-            AgentLoop(model, toolDispatcher(FakeScreen(), memory = s, utterances = UserUtterances()), "B", memory = s,
+            AgentLoop(model, toolDispatcher(screen, memory = s, utterances = UserUtterances()), "B", memory = s,
                 maxSteps = AgentLoop.UNLIMITED_STEPS).run("以后回答简短一点,别的你自己总结几条写进记忆")
         }
         assertTrue(end.toString(), end is com.wangzan101.mika.core.agent.TaskState.Failed)
-        val limit = com.wangzan101.mika.core.tool.MAX_QUIET_MEMORY_REFUSALS
-        assertTrue("${model.requests.size}", model.requests.size in (limit + 3)..(limit + 5))
+        assertTrue(end.toString(), "too_many_failures" in end.toString())
+        val tapsUsed = limit / 2
+        assertTrue("${model.requests.size}", model.requests.size in (limit + tapsUsed + 3)..(limit + tapsUsed + 5))
     }
 
     // 别的工具照旧:判成讨论时,提议的调用换成不带工具的直接回答

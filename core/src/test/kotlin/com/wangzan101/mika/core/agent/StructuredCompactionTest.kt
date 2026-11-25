@@ -130,11 +130,28 @@ class StructuredCompactionTest {
     }
 
     @Test fun loopUsesStructuredSummaryWhenFlagOn() = runTest {
+        var ver = 0
+        val screen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private fun snap() = com.wangzan101.mika.core.screen.uistate.ScreenSnapshot(
+                "ss$ver", "com.x",
+                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "button", "v$ver", 10, 10, listOf(0, 0, 50, 50), null, true, false, false)),
+                1080, 2400,
+            )
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
         val m = fakeModel("main", contextTokens = 128_000) {
-            for (i in 1..15) call("wait", "seconds" to 1 + i / 100.0)
+            for (i in 1..15) {
+                if (i % 3 == 0) call("phone_tap", "x" to 100, "y" to 200)
+                else call("wait", "seconds" to 1 + i / 100.0)
+            }
             answer("等完了")
         }
-        AgentLoop(m, toolDispatcher(FakeScreen()), "BASE", flags = SpeedFlags(structuredCompaction = true)).run("等一会儿")
+        AgentLoop(m, toolDispatcher(screen), "BASE", flags = SpeedFlags(structuredCompaction = true)).run("等一会儿")
         val s = summaries(m.requests.last().messages).single()
         assertTrue(s, "Goal: 等一会儿" in s && "Progress:" in s && "Next: " in s)
     }

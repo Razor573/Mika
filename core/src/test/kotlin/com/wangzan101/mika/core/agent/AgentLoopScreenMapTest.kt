@@ -102,10 +102,23 @@ class AgentLoopScreenMapTest {
     }
 
     @Test fun screenMapSurvivesCompression() {
-        val model = FakeModel(reply(call("phone_observe")),
-            *(1..15).map { reply(call("wait", """{"seconds":${it / 10.0}}""")) }.toTypedArray(), finish, contextTokens = 100)
+        val baseScreen = MapScreen(listOf(el("@h", "首页"), el("@m", "我的")))
+        var ver = 0
+        val screen = object : ScreenPort by baseScreen {
+            private fun snap() = ScreenSnapshot("sm$ver", "p.a", listOf(el("@h", "首页"), el("@m", "我的"), el("@v", "v$ver")), 1080, 2400)
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
+        val steps = (1..15).map { i ->
+            if (i % 3 == 0) reply(call("phone_tap", """{"x":100,"y":200}""")) else reply(call("wait", """{"seconds":${i / 10.0}}"""))
+        }
+        val model = FakeModel(reply(call("phone_observe")), *steps.toTypedArray(), finish, contextTokens = 100)
         runBlocking {
-            AgentLoop(model, toolDispatcher(MapScreen(listOf(el("@h", "首页"), el("@m", "我的")))),
+            AgentLoop(model, toolDispatcher(screen),
                 "B", knowledge = KnowledgeStore(listOf(KnowledgeEntry("alpha", "alpha", Surface.Android, listOf("p.a"),
                     emptyList(), listOf("alpha"), null, "", "APP.md正文"))),
                 screenMaps = MemMapStore(mapOf("p.a" to graph))).run("随便")

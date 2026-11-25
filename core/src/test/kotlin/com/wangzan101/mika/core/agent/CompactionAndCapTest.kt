@@ -84,20 +84,35 @@ class CompactionAndCapTest {
 
     @Test fun agentLoopPeriodicCompactionKeepsLast3ObservationsAndScreenshots() = runTest {
         var reads = 0
+        var ver = 0
         val screen = object : ScreenPort by FakeScreen() {
+            private fun snap(id: Int): ScreenSnapshot {
+                val node = UiTreeNode("TextView", listOf(0, 0, 100, 50), text = "full-node-$id-$ver")
+                val win = UiWindowTree(1, "application", 1, "App", "com.x", true, true, listOf(node))
+                val el = UiElement("@e1", "button", "btn-$id-$ver", 50, 25, listOf(0, 0, 100, 50), null, true, false, false)
+                return ScreenSnapshot("snap-$id-$ver", "com.x", listOf(el), 1080, 2400, windows = listOf(win))
+            }
             override suspend fun snapshot(): ScreenSnapshot {
                 reads++
-                val node = UiTreeNode("TextView", listOf(0, 0, 100, 50), text = "full-node-$reads")
-                val win = UiWindowTree(1, "application", 1, "App", "com.x", true, true, listOf(node))
-                val el = UiElement("@e1", "button", "btn-$reads", 50, 25, listOf(0, 0, 100, 50), null, true, false, false)
-                return ScreenSnapshot("snap-$reads", "com.x", listOf(el), 1080, 2400, windows = listOf(win))
+                return snap(reads)
             }
+            override suspend fun peek(): ScreenSnapshot = snap(reads)
             override suspend fun screenshotPng() = byteArrayOf(1, 2, 3)
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
         }
         var callSeq = 0
         val replies = (1..30).map { step ->
-            val name = if (step >= 28 || step % 2 == 1) "phone_observe" else "phone_list_elements"
-            ModelReply(listOf(Part.ToolCall("c${++callSeq}", name, "{}")), StopReason.ToolUse, null)
+            val name = when {
+                step >= 28 -> "phone_observe"
+                step % 3 == 0 -> "phone_tap"
+                step % 2 == 1 -> "phone_observe"
+                else -> "phone_list_elements"
+            }
+            val args = if (name == "phone_tap") """{"x":100,"y":100}""" else "{}"
+            ModelReply(listOf(Part.ToolCall("c${++callSeq}", name, args)), StopReason.ToolUse, null)
         } + answerReply("finished")
         val model = FakeModel(*replies.toTypedArray(), contextTokens = 1_000_000)
         val end = AgentLoop(model, toolDispatcher(screen, visionEnabled = true), "BASE").run("check 30 screens")

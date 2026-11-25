@@ -25,6 +25,12 @@ import com.wangzan101.mika.core.run.RunId
 import com.wangzan101.mika.core.run.RunOrigin
 import com.wangzan101.mika.core.run.RunProvenance
 import com.wangzan101.mika.core.run.RunSpec
+import com.wangzan101.mika.core.screen.uistate.ActionResult
+import com.wangzan101.mika.core.screen.uistate.ScreenPort
+import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
+import com.wangzan101.mika.core.screen.uistate.UiElement
+import com.wangzan101.mika.core.screen.uistate.UiTreeNode
+import com.wangzan101.mika.core.screen.uistate.UiWindowTree
 import com.wangzan101.mika.core.tool.FakeScreen
 import com.wangzan101.mika.core.cap.web.FakeWebPort
 import java.util.concurrent.atomic.AtomicInteger
@@ -289,5 +295,239 @@ class UsageLogEnhancedTest {
         assertEquals(110L + 140L, summary["totalOutputTokens"]?.jsonPrimitive?.long)
         assertEquals(2800L + 2600L, summary["totalCachedTokens"]?.jsonPrimitive?.long)
         assertEquals(2, summary["subAgents"]?.jsonArray?.size)
+    }
+
+    @Test
+    fun usageLogRecordsScreenHashScreenChangedToolSequenceAndBreakerTriggerOnNormalAndBlockedSteps() = runTest {
+        var ver = 1
+        var tapChanges = false
+        val screen = object : ScreenPort by FakeScreen() {
+            private fun snap(v: Int): ScreenSnapshot {
+                val node = UiTreeNode("TextView", listOf(0, 0, 900, 200), text = "Screen-$v")
+                val win = UiWindowTree(1, "application", 1, "App", "com.shop.app", true, true, listOf(node))
+                val el = UiElement("@e1", "button", "Item-$v", 200, 150, listOf(0, 0, 900, 200), null, true, false, false)
+                return ScreenSnapshot("s-$v", "com.shop.app", listOf(el), 1080, 2400, windows = listOf(win))
+            }
+            override suspend fun snapshot() = snap(ver)
+            override suspend fun peek() = snap(ver)
+            override suspend fun tapRef(ref: String, snapshotId: String): ActionResult {
+                if (tapChanges) ver++
+                return ActionResult.Ok(changed = tapChanges)
+            }
+            override suspend fun tapXY(x: Int, y: Int): ActionResult {
+                if (tapChanges) ver++
+                return ActionResult.Ok(changed = tapChanges)
+            }
+        }
+        val model = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { step ->
+                when (step) {
+                    1 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1000, 30, 0))
+                    2 -> ModelReply(listOf(call("phone_list_elements")), StopReason.ToolUse, Usage(1200, 30, 800))
+                    3 -> ModelReply(listOf(call("view_past_screens", """{"ids":[1]}""")), StopReason.ToolUse, Usage(1400, 30, 900))
+                    4 -> ModelReply(listOf(call("task_memory_search", """{"query":"item"}""")), StopReason.ToolUse, Usage(1600, 30, 1000))
+                    5 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1800, 30, 1100))
+                    6 -> {
+                        tapChanges = true
+                        ModelReply(listOf(call("phone_tap", """{"x":200,"y":150}""")), StopReason.ToolUse, Usage(2000, 30, 1200))
+                    }
+                    else -> ModelReply(listOf(Part.Text("done")), StopReason.EndTurn, Usage(2200, 30, 1400))
+                }
+            },
+        )
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = model.metered(UsageSource("p-main", "vertex", model.name, UsagePurpose.Main), UsageSink { _, _ -> })
+        val taskMemoryStore = com.wangzan101.mika.core.learn.memory.TaskMemoryStore(
+            object : com.wangzan101.mika.core.learn.memory.TaskMemoryPersistence {
+                override fun load() = emptyList<com.wangzan101.mika.core.learn.memory.TaskMemory>()
+                override fun save(items: List<com.wangzan101.mika.core.learn.memory.TaskMemory>) {}
+            },
+            clock = { 0L },
+            ids = { "x" },
+        )
+        val end = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(screen, visionEnabled = false, inlineScreen = true, taskMemory = taskMemoryStore),
+                basePrompt = "BASE",
+                flags = SpeedFlags(inlineScreen = true),
+                sink = sink,
+            ).run("Check telemetry")
+        }
+        assertTrue("$end", end is TaskState.Succeeded)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261124-210003-r3", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRows = rows.filter { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals(7, replyRows.size)
+
+        val step1Hash = replyRows[0]["screenHash"]?.jsonPrimitive?.content
+        assertNotNull(step1Hash)
+        assertEquals(true, replyRows[0]["screenChanged"]?.jsonPrimitive?.boolean)
+
+        for (idx in 1..3) {
+            assertEquals(step1Hash, replyRows[idx]["screenHash"]?.jsonPrimitive?.content)
+            assertEquals(false, replyRows[idx]["screenChanged"]?.jsonPrimitive?.boolean)
+            assertTrue((replyRows[idx]["toolSequence"]?.jsonArray?.size ?: 0) > 0)
+        }
+
+        // Step 5 was blocked by stuck_screen_3x: MUST still log screenHash, screenChanged = false, toolSequence, and breakerTrigger
+        val blockedRow = replyRows[4]
+        assertEquals(step1Hash, blockedRow["screenHash"]?.jsonPrimitive?.content)
+        assertEquals(false, blockedRow["screenChanged"]?.jsonPrimitive?.boolean)
+        assertEquals("stuck_screen_3x", blockedRow["breakerTrigger"]?.jsonPrimitive?.content)
+        val blockedSeq = blockedRow["toolSequence"]?.jsonArray?.map { it.jsonPrimitive.content }
+        assertTrue("Expected phone_observe in blocked toolSequence: $blockedSeq", blockedSeq?.contains("phone_observe") == true)
+
+        // Step 6 tap changed the screen
+        val tapRow = replyRows[5]
+        val tapHash = tapRow["screenHash"]?.jsonPrimitive?.content
+        assertNotNull(tapHash)
+        assertTrue(tapHash != step1Hash)
+        assertEquals(true, tapRow["screenChanged"]?.jsonPrimitive?.boolean)
+    }
+
+    @Test
+    fun usageLogRecordsBreakerStopTelemetryWhenBlockedGiveUpAndSubsequentStopOccur() = runTest {
+        val screen = object : ScreenPort by FakeScreen() {
+            private val snap = ScreenSnapshot(
+                "s-fixed",
+                "com.shop.app",
+                listOf(UiElement("@e1", "button", "SameItem", 200, 150, listOf(0, 0, 900, 200), null, true, false, false)),
+                1080,
+                2400,
+                windows = listOf(UiWindowTree(1, "application", 1, "App", "com.shop.app", true, true, listOf(UiTreeNode("TextView", listOf(0, 0, 900, 200), text = "Fixed")))),
+            )
+            override suspend fun snapshot() = snap
+            override suspend fun peek() = snap
+            override suspend fun tapRef(ref: String, snapshotId: String) = ActionResult.Ok(changed = false)
+            override suspend fun tapXY(x: Int, y: Int) = ActionResult.Ok(changed = false)
+        }
+        val model = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { step ->
+                when (step) {
+                    1 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1000, 20, 0))
+                    2 -> ModelReply(listOf(call("phone_list_elements")), StopReason.ToolUse, Usage(1100, 20, 600))
+                    3 -> ModelReply(listOf(call("view_past_screens", """{"ids":[1]}""")), StopReason.ToolUse, Usage(1200, 20, 700))
+                    4 -> ModelReply(listOf(call("task_memory_search", """{"query":"item"}""")), StopReason.ToolUse, Usage(1300, 20, 800))
+                    5 -> ModelReply(listOf(call("end_not_done", """{"message":"give up early"}""")), StopReason.ToolUse, Usage(1400, 20, 900))
+                    6 -> ModelReply(listOf(call("phone_tap", """{"x":200,"y":150}""")), StopReason.ToolUse, Usage(1500, 20, 1000))
+                    7 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1600, 20, 1100))
+                    else -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1700, 20, 1200))
+                }
+            },
+        )
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = model.metered(UsageSource("p-main", "vertex", model.name, UsagePurpose.Main), UsageSink { _, _ -> })
+        val taskMemoryStore = com.wangzan101.mika.core.learn.memory.TaskMemoryStore(
+            object : com.wangzan101.mika.core.learn.memory.TaskMemoryPersistence {
+                override fun load() = emptyList<com.wangzan101.mika.core.learn.memory.TaskMemory>()
+                override fun save(items: List<com.wangzan101.mika.core.learn.memory.TaskMemory>) {}
+            },
+            clock = { 0L },
+            ids = { "x" },
+        )
+        val end = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(screen, visionEnabled = false, inlineScreen = true, taskMemory = taskMemoryStore),
+                basePrompt = "BASE",
+                flags = SpeedFlags(inlineScreen = true),
+                sink = sink,
+            ).run("Verify give-up block and stop telemetry")
+        }
+        assertTrue("$end", end is TaskState.Failed && end.kind == com.wangzan101.mika.core.agent.FailKind.Guard)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261124-210004-r3stop", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRows = rows.filter { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals(8, replyRows.size)
+
+        val step1Hash = replyRows[0]["screenHash"]?.jsonPrimitive?.content
+        assertNotNull(step1Hash)
+
+        // Step 5: blocked end_not_done
+        val giveUpBlockedRow = replyRows[4]
+        assertEquals(step1Hash, giveUpBlockedRow["screenHash"]?.jsonPrimitive?.content)
+        assertEquals(false, giveUpBlockedRow["screenChanged"]?.jsonPrimitive?.boolean)
+        assertEquals("stuck_screen_giveup_blocked", giveUpBlockedRow["breakerTrigger"]?.jsonPrimitive?.content)
+
+        // Step 8: guard stop row
+        val stopRow = replyRows[7]
+        assertEquals(step1Hash, stopRow["screenHash"]?.jsonPrimitive?.content)
+        assertEquals(false, stopRow["screenChanged"]?.jsonPrimitive?.boolean)
+        assertEquals("stuck_screen_3x_stop", stopRow["breakerTrigger"]?.jsonPrimitive?.content)
+        assertTrue((stopRow["toolSequence"]?.jsonArray?.size ?: 0) > 0)
+
+        val endedRow = rows.first { it["type"]?.jsonPrimitive?.content == "task_ended" }
+        assertEquals("failed", endedRow["outcome"]?.jsonPrimitive?.content)
+        assertEquals("guard", endedRow["kind"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun usageLogPreservesSingleStepVerdictStopBreakerTriggerAfterRecordStepOutcome() = runTest {
+        val screen = object : ScreenPort by FakeScreen() {
+            private val snap = ScreenSnapshot(
+                "s-fail",
+                "com.shop.app",
+                listOf(UiElement("@e1", "button", "Item", 200, 150, listOf(0, 0, 900, 200), null, true, false, false)),
+                1080,
+                2400,
+                windows = listOf(UiWindowTree(1, "application", 1, "App", "com.shop.app", true, true, listOf(UiTreeNode("TextView", listOf(0, 0, 900, 200), text = "Static")))),
+            )
+            override suspend fun snapshot() = snap
+            override suspend fun peek() = snap
+            override suspend fun tapXY(x: Int, y: Int) = ActionResult.Failed("err")
+            override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long) = ActionResult.Failed("err")
+            override suspend fun back() = ActionResult.Failed("err")
+            override suspend fun pressKey(keyCode: Int) = ActionResult.Failed("err")
+            override suspend fun openApp(packageName: String, cold: Boolean) = ActionResult.Failed("err")
+        }
+        val failingCycle = listOf(
+            call("phone_tap", """{"x":200,"y":150}"""),
+            call("phone_swipe", """{"startX":200,"startY":800,"endX":200,"endY":300}"""),
+            call("phone_back"),
+            call("phone_press_key", """{"keyCode":4}"""),
+            call("phone_launch_app", """{"packageName":"com.shop.app"}"""),
+        )
+        val model = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { step ->
+                if (step == 1) ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1000, 20, 0))
+                else ModelReply(listOf(failingCycle[(step - 2) % failingCycle.size]), StopReason.ToolUse, Usage(1000 + step * 50, 20, 500))
+            },
+        )
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = model.metered(UsageSource("p-main", "vertex", model.name, UsagePurpose.Main), UsageSink { _, _ -> })
+        val end = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(screen, visionEnabled = false, inlineScreen = true),
+                basePrompt = "BASE",
+                flags = SpeedFlags(inlineScreen = true),
+                sink = sink,
+            ).run("Verify single-step verdict Stop breakerTrigger")
+        }
+        assertTrue("$end", end is TaskState.Failed && end.kind == com.wangzan101.mika.core.agent.FailKind.Guard)
+        assertTrue(end.toString().contains("too_many_failures"))
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261124-210005-r3verdict", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRows = rows.filter { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        val lastReply = replyRows.last()
+        assertEquals("too_many_failures", lastReply["breakerTrigger"]?.jsonPrimitive?.content)
+        assertNotNull(lastReply["screenHash"]?.jsonPrimitive?.content)
+        assertEquals(false, lastReply["screenChanged"]?.jsonPrimitive?.boolean)
     }
 }

@@ -281,10 +281,10 @@ class AgentLoopLightTest {
             "main",
             FakeModel(
                 tools(call("phone_observe")),
+                tools(call("phone_list_elements")),
+                tools(call("phone_query")),
                 tools(call("phone_observe")),
-                tools(call("phone_observe")),
-                tools(call("phone_observe")),
-                tools(call("phone_observe")),
+                tools(call("phone_list_elements")),
                 finish("done"),
             ),
         )
@@ -556,7 +556,7 @@ class AgentLoopLightTest {
     @Test fun confirmationBlockedStepForcesMain() = runTest {
         // 第 2 步主模型点「提交订单」被确认关卡拦下:之后两步主模型,第 5 步才轮到轻量模型
         val main = Named("main", FakeModel(tools(call("phone_observe")), tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
-            tools(call("phone_observe")), tools(call("phone_observe")), finish()))
+            tools(call("phone_list_elements")), tools(call("phone_observe")), finish()))
         val light = Named("light", FakeModel(tools(call("phone_observe")), finish(), finish()))
         val sink = Events()
         loop(main, light, sink, SendScreen("提交订单")).run("t")
@@ -570,7 +570,8 @@ class AgentLoopLightTest {
             com.wangzan101.mika.core.model.ModelError.Auth(),
             com.wangzan101.mika.core.model.ModelError.DailyBudgetExceeded("轻量服务商", 10_000, 10_000),
         )) {
-            val main = Named("main", FakeModel(*Array(6) { tools(call("phone_observe")) }, finish()))
+            val fillers = listOf("phone_observe", "phone_list_elements", "phone_query", "phone_observe", "phone_list_elements", "phone_query")
+            val main = Named("main", FakeModel(*fillers.map { tools(call(it)) }.toTypedArray(), finish()))
             val light = Named("light", FakeModel(error))
             val sink = Events()
             val r = loop(main, light, sink, SendScreen()).run("t")

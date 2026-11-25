@@ -94,6 +94,13 @@ class ActionExecutor(
                 put("ok", false); put("error", com.wangzan101.mika.core.run.ManualControl.CHANGED)
                 put("message", e.message); put("executed", false)
             }
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (tools.offScreen(call.name)) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(parseArgs(call.argsJson)) else null,
+                )
+            }
             if (origin.policy.recordsRefusal) followUp.refused(content)
             recorder.result(origin.step, call.name, tools.verb(call.name), content, content, null, null, 0, origin.policy.source, call.id)
             ActionOutcome.Refused(com.wangzan101.mika.core.run.ManualControl.CHANGED, content, emptyList())
@@ -117,6 +124,13 @@ class ActionExecutor(
             val content = buildJsonObject {
                 put("ok", false); put("error", e.code); put("message", e.message); put("retryable", false)
                 e.packageName?.let { put("package", it) }
+            }
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (offScreen) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
             }
             // 单步:作为这次工具调用的结果交给模型,让它换路线或向用户说明;批和脚本按 Refused 自己处理
             if (origin.policy.recordsRefusal) followUp.refused(content)
@@ -148,12 +162,31 @@ class ActionExecutor(
             readScope != null -> guards.beforeAction(call.name, args, verb in DIAGNOSTIC_VERBS, readScope)
             else -> guards.beforeAction(call.name, args, verb in DIAGNOSTIC_VERBS)
         }
-        if (guards.stop != null) return refuse("guard_stopped", origin, before)
-        if (policy.stopOnGuardWarning && before.isNotEmpty()) return refuse("guard_warning", origin, before)
+        if (guards.stop != null) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.blockedTelemetry(
+                    call.name,
+                    screenHash = currentModelScreenHash(),
+                    historyReadReason = if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
+            return refuse("guard_stopped", origin, before)
+        }
+        if (policy.stopOnGuardWarning && before.isNotEmpty()) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.blockedTelemetry(
+                    call.name,
+                    screenHash = currentModelScreenHash(),
+                    historyReadReason = if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
+            return refuse("guard_warning", origin, before)
+        }
         if (origin is Origin.Model) {
             guards.checkBeforeTool(call.name)?.let { verdict ->
                 lastStepTelemetry = guards.blockedTelemetry(
                     call.name,
+                    screenHash = currentModelScreenHash(),
                     historyReadReason = if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
                 )
                 if (guards.stop != null) return refuse("guard_stopped", origin, before + verdict)
@@ -163,6 +196,7 @@ class ActionExecutor(
                         put("ok", false)
                         put("error", verdict.code)
                         put("message", verdict.nudge.orEmpty())
+                        put("counts_as_failure", false)
                     }),
                 ))
             }
@@ -284,6 +318,13 @@ class ActionExecutor(
         val failed = raw.content["ok"] == JsonPrimitive(false) && raw.changed != true
         if (changes && s.preset == null && !failed) recorder.noteChange(mark)
         val durationMs = recorder.now() - started
+        if (s.origin is Origin.Model && (raw.outcome is com.wangzan101.mika.core.tool.Outcome.Input || raw.outcome is com.wangzan101.mika.core.tool.Outcome.Takeover)) {
+            lastStepTelemetry = guards.snapshotTelemetry(
+                call.name,
+                if (s.offScreen) null else currentModelScreenHash(),
+                if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(s.args) else null,
+            )
+        }
         val resolved = s.followUp.resolve(raw) ?: return ActionOutcome.Cancelled(s.before)
         tools.interfaces.checkAppAccess(tools.declared(call.name), after = true)
 
@@ -336,20 +377,18 @@ class ActionExecutor(
         return ActionOutcome.Ran(exec, s.before, after, content, durationMs, shotId.takeIf { picture != null }, picture, seen, telemetry)
     }
 
+    internal fun currentModelScreenHash(): String? =
+        tools.interfaces.session.takeUnless { it.stale }?.lastSnapshot?.let(::snapshotHash)
+            ?: guards.currentLastScreenHash
+
     private fun computeStepTelemetry(s: Step, resolved: ToolExecution, elements: JsonArray?): StepHashOutcome? {
         if (s.origin !is Origin.Model) return null
         if (s.preset != null) {
             if (lastStepTelemetry != null) return lastStepTelemetry
-            if (s.call.name != HISTORY_READ) return null
-            return StepHashOutcome(
-                screenHash = null,
-                extractedHash = null,
-                screenChanged = null,
-                extractedItemsNew = null,
-                staleCycleCount = guards.currentStaleCycleCount,
-                historyReadReason = HistoryRead.sanitizedReason(s.args),
-                toolSequence = guards.currentToolSequence.takeIf { it.isNotEmpty() },
-                breakerTrigger = guards.currentBreakerTrigger,
+            return guards.snapshotTelemetry(
+                s.call.name,
+                screenHash = if (s.offScreen) null else currentModelScreenHash(),
+                historyReadReason = if (s.call.name == HISTORY_READ) HistoryRead.sanitizedReason(s.args) else null,
             ).also { lastStepTelemetry = it }
         }
         val session = tools.interfaces.session
@@ -377,6 +416,7 @@ class ActionExecutor(
             itemHashes = extracted?.itemHashes.orEmpty(),
             writing = s.writing,
             ok = ok,
+            changed = resolved.changed,
         )
         return (if (s.call.name == HISTORY_READ) outcome.copy(historyReadReason = HistoryRead.sanitizedReason(s.args)) else outcome).also {
             lastStepTelemetry = it
@@ -432,6 +472,13 @@ class ActionExecutor(
     private fun ownApp(call: Part.ToolCall, args: JsonObject, origin: Origin, before: List<GuardVerdict>, followUp: FollowUp): ActionOutcome {
         val content = Refusals.content(Refusals.OWN_APP, origin.policy.refusals, before, null, null)
         if (origin.policy.recordsRefusal) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (tools.offScreen(call.name)) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
             followUp.refused(content)
             recorder.result(origin.step, call.name, tools.verb(call.name), content, tools.portRecord(call.name, args), null, null, 0, origin.policy.source, call.id)
         }
@@ -447,6 +494,13 @@ class ActionExecutor(
         val code = "approval_unavailable"
         val content = Refusals.content(code, origin.policy.refusals, before, hit, null)
         if (origin.policy.recordsRefusal) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (tools.offScreen(call.name)) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
             followUp.refused(content)
             recorder.result(origin.step, call.name, tools.verb(call.name), content, tools.portRecord(call.name, args), null, null, 0, origin.policy.source, call.id)
         }
@@ -460,6 +514,13 @@ class ActionExecutor(
     ): ActionOutcome {
         recorder.confirmation(hit, if (code == "confirmation_declined") "declined" else "denied")
         if (origin.policy.recordsRefusal) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (tools.offScreen(call.name)) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
             followUp.refused(answer.content)
             recorder.result(origin.step, call.name, tools.verb(call.name), answer.content, tools.portRecord(call.name, args), null, null, 0, origin.policy.source, call.id)
         }
@@ -473,6 +534,13 @@ class ActionExecutor(
         val code = if (reason != null) "confirmation_mismatch" else "confirmation_required"
         val content = Refusals.content(code, origin.policy.refusals, before, hit, reason)
         if (origin.policy.recordsRefusal) {
+            if (origin is Origin.Model) {
+                lastStepTelemetry = guards.snapshotTelemetry(
+                    call.name,
+                    if (tools.offScreen(call.name)) null else currentModelScreenHash(),
+                    if (call.name == HISTORY_READ) HistoryRead.sanitizedReason(args) else null,
+                )
+            }
             followUp.refused(content)
             recorder.result(origin.step, call.name, tools.verb(call.name), content, tools.portRecord(call.name, args), null, null, 0, origin.policy.source, call.id)
         }

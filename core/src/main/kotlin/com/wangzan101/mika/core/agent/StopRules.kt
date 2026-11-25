@@ -57,6 +57,12 @@ internal object StopRules {
             "read_loop" -> "the page did not change and repeated reads did not find what was needed"
             "too_many_failures" -> "actions failed repeatedly"
             "sandbox_loop" -> "the same command failed repeatedly without change"
+            "no_progress_cycle" -> "the screen and extracted items repeated without progress"
+            "tool_sequence_loop" -> "the same tool or sequence kept repeating without progress"
+            "stuck_screen" -> if (v.evidence["tapAlreadyTried"] == JsonPrimitive(false))
+                "the screen did not change after multiple steps and repeated warnings were ignored without trying a tap or swipe"
+            else "the screen did not change after multiple steps and a tap/swipe attempt"
+            "stuck_screen_giveup_stop" -> "the screen did not change after multiple steps and repeated give-up attempts ignored the requirement to try a tap or swipe first"
             else -> "an action guard was triggered"
         }
         return TaskState.Failed("Stopped safely (${v.code}): $why.", FailKind.Guard)

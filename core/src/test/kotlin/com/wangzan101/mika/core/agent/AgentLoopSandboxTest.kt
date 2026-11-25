@@ -37,8 +37,13 @@ class AgentLoopSandboxTest {
         var gated = 0
         sb.next = { CommandResult(1, false, false, 10, "err", 0, false) }
         // 六条不同的失败命令:屏幕的失败熔断(连续 5 次失败)不算它们
-        val m = FakeModel(*(1..6).map { cmd("false $it") }.toTypedArray(),
-            tools(call("write_file", buildJsonObject { put("path", "a.txt"); put("content", "1") })), finish())
+        val m = FakeModel(
+            cmd("false 1"), cmd("false 2"), tools(call("list_files", buildJsonObject {})),
+            cmd("false 3"), cmd("false 4"), tools(call("search_files", buildJsonObject { put("pattern", "x") })),
+            cmd("false 5"), cmd("false 6"),
+            tools(call("write_file", buildJsonObject { put("path", "a.txt"); put("content", "1") })),
+            finish(),
+        )
         val r = loop(m) { gated++ }.run("算一下")
         assertTrue(r.toString(), r is TaskState.Succeeded)
         assertEquals(0, gated)
@@ -48,7 +53,11 @@ class AgentLoopSandboxTest {
 
     @Test fun fiveIdenticalFailuresStop() = runTest {
         sb.next = { CommandResult(2, false, false, 10, "No such file", 0, false) }
-        val m = FakeModel(cmd("python3 x.py"), repeatLast = true)
+        val m = FakeModel(
+            cmd("python3 x.py"), cmd("python3 x.py"), tools(call("list_files", buildJsonObject {})),
+            cmd("python3 x.py"), cmd("python3 x.py"), tools(call("search_files", buildJsonObject { put("pattern", "x") })),
+            cmd("python3 x.py"), finish(),
+        )
         val r = loop(m).run("跑脚本")
         assertTrue(r.toString(), r is TaskState.Failed)
         r as TaskState.Failed
@@ -57,7 +66,7 @@ class AgentLoopSandboxTest {
         assertEquals(5, sb.runs.size)
         val results = toolResults(m)
         assertTrue(results[1].containsKey("guard").not())
-        val guard = results[2]["guard"]!!.jsonArray.single().jsonObject
+        val guard = results[3]["guard"]!!.jsonArray.single().jsonObject
         assertEquals("sandbox_loop", guard["code"]!!.jsonPrimitive.content)
         assertEquals("warn", guard["severity"]!!.jsonPrimitive.content)
     }

@@ -21,9 +21,23 @@ class AgentLoopFrameTest {
     private fun images(msgs: List<Message>) = msgs.flatMap { it.parts }.filterIsInstance<Part.Image>()
 
     @Test fun actionResultFollowedByFrameAndSentFramesAreKeptInOrder() = runTest {
+        var ver = 0
+        val changing = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private fun snap() = com.wangzan101.mika.core.screen.uistate.ScreenSnapshot(
+                "snap-$ver", "com.x",
+                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "button", "Item-$ver", 540, 120, listOf(0, 0, 999, 100), null, true, false, false)),
+                1080, 2400,
+            )
+            override suspend fun snapshot() = snap()
+            override suspend fun peek() = snap()
+            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
+                ver++
+                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
+            }
+        }
         val tap = call("phone_tap", """{"x":500,"y":500}""")
         val m = FakeModel(tools(call("phone_observe")), tools(tap), *(1..5).map { tools(call("phone_tap", """{"x":${it * 100},"y":300}""")) }.toTypedArray(), finish())
-        AgentLoop(m, toolDispatcher(FakeScreen(), visionEnabled = true), "BASE").run("t")
+        AgentLoop(m, toolDispatcher(changing, visionEnabled = true), "BASE").run("t")
         val msgs = m.requests[2]
         val at = msgs.indexOfFirst { it.parts.any { p -> p is Part.ToolResult && p.callId == tap.id } }
         assertEquals(Role.Tool, msgs[at].role)

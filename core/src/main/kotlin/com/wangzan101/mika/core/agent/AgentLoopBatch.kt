@@ -60,6 +60,9 @@ internal suspend fun AgentLoop.batch(
             history += Message(Role.User, listOfNotNull(Part.Text(batchViewNote(ScreenElementTable.text(v.content, flags.tablesAtBirth))), v.image?.let { tools.modelImage(it, v.imageId) }), Author.Mika)
         }
     }
+    if (guards.stop != null && executor.lastStepTelemetry == null) {
+        executor.lastStepTelemetry = guards.blockedTelemetry(first.name, screenHash = executor.currentModelScreenHash())
+    }
     recordReply(BatchRunner.redactArgs(first.argsJson))
     val picture = exec.frame
     val shotId = picture?.let { executor.recorder.nextShot() }
