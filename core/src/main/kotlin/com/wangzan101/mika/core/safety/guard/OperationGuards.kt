@@ -554,7 +554,15 @@ class OperationGuards(private val stepBudget: Int? = null) {
             stalledToolEpochSeq.clear()
             consecutiveSequenceBlocks = 0
             lastBreakerTrigger = stop?.code
-        } else {
+        } else if (ok) {
+            // Only a call that actually ran counts toward a repeating
+            // tool sequence. A failed call (unknown_tool, invalid target,
+            // etc.) never executed, so it must not build up the loop
+            // sequence and get the next call blocked as a loop: e.g.
+            // audio_transcribe called while transcription is off returns
+            // unknown_tool, and that must stay unknown_tool, not turn
+            // into tool_sequence_loop_blocked. Failures are tracked
+            // separately by consecutiveFailures / too_many_failures.
             stalledToolSeq.pushCapped(tool, cap = SEQUENCE_TRACK_KEEP)
             stalledToolOkSeq.pushCapped(ok, cap = SEQUENCE_TRACK_KEEP)
             stalledToolEpochSeq.pushCapped(actionEpoch, cap = SEQUENCE_TRACK_KEEP)

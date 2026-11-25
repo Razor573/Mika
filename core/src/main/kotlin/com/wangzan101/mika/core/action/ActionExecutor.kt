@@ -182,7 +182,12 @@ class ActionExecutor(
             }
             return refuse("guard_warning", origin, before)
         }
-        if (origin is Origin.Model) {
+        if (origin is Origin.Model && tools.definitions().any { it.name == call.name }) {
+            // Loop/stuck-screen breaker only applies to a tool the model can
+            // actually call right now. A tool that is not currently offered
+            // (e.g. audio_transcribe while transcription is off) must fall
+            // through to the dispatcher and come back as unknown_tool, not
+            // be misreported as tool_sequence_loop_blocked.
             guards.checkBeforeTool(call.name)?.let { verdict ->
                 lastStepTelemetry = guards.blockedTelemetry(
                     call.name,
