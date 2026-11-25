@@ -128,6 +128,7 @@ object UsageLogFormatter {
             "screenHash", "extractedHash",
             "screenChanged", "extractedItemsNew", "historyReadReason",
             "toolSequence", "breakerTrigger",
+            "escalatedFromLight", "lightRejectionReason",
         ),
         "compressed" to setOf("foldedSteps", "role", "trigger", "reason"),
         "model_calls" to setOf(

@@ -58,7 +58,7 @@ class PrefixStabilityTest {
                     val body = Json.parseToJsonElement(request.body.readUtf8()).jsonObject
                     bodies += body
                     val msgs = body["messages"]!!.jsonArray.map { it.jsonObject }
-                    val step = STEP.findAll(msgs.last().toString()).last().groupValues[1].toInt()
+                    val step = msgs.asReversed().firstNotNullOf { STEP.findAll(it.toString()).lastOrNull() }.groupValues[1].toInt()
                     if (step in fail && tried.add(step)) return MockResponse().setResponseCode(429).setHeader("retry-after", "0")
                     return MockResponse().setBody(reply(step, msgs, TokenEstimate.of(body.toString()), steps).toString())
                 }
@@ -184,12 +184,17 @@ class PrefixStabilityTest {
         val changed = mutableListOf<Int>()
         for (i in 1 until reqs.size) {
             val (a, b) = reqs[i - 1] to reqs[i]
-            val same = a.msgs.zip(b.msgs).takeWhile { (x, y) -> x == y }.size
-            if (same == a.msgs.size) continue
+            val aPersistent = if (a.raw.lastOrNull()?.str("content")?.startsWith("<context kind=\"notice\" source=\"light_escalation\"") == true) {
+                a.msgs.dropLast(1)
+            } else {
+                a.msgs
+            }
+            val same = aPersistent.zip(b.msgs).takeWhile { (x, y) -> x == y }.size
+            if (same == aPersistent.size) continue
             changed += i
             // 第一条改写的就是被裁剪线裁掉(或折进摘要)的那条
             val first = b.msgs[same]
-            assertTrue("$label 第 ${i + 1} 次请求第 $same 条改写不是压缩:$first", markers.any { it in first && it !in a.msgs[same] } || ContextCompressor.HEADER in first)
+            assertTrue("$label 第 ${i + 1} 次请求第 $same 条改写不是压缩:$first", markers.any { it in first && it !in aPersistent[same] } || ContextCompressor.HEADER in first)
         }
         if (appendOnly) assertEquals("$label:没越过触发点却改写了前缀", emptyList<Int>(), changed)
         return Result(reqs.size - 1, changed, prefixShare(reqs, opened), opened)
@@ -230,6 +235,7 @@ class PrefixStabilityTest {
     @Test fun lightModelRouting() {
         val (main, light) = run(Setup(light = true))
         assertTrue("轻量模型应当接过几步", light.isNotEmpty())
+        assertTrue("ephemeral light_escalation notice must never reach Light", light.none { "light_escalation" in it.toString() })
         check(main, "main")
         check(light, "light")
     }

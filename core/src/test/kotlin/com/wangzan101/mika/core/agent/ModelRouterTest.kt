@@ -141,6 +141,8 @@ class ModelRouterTest {
         assertSame(main, r.pick(clean(3).copy(requestedTool = "phone_system_command")))
         assertSame(main, r.pick(clean(3).copy(requestedTool = "system_command")))
         assertSame(main, r.pick(clean(3).copy(requestedTool = "run_command")))
+        assertSame(main, r.pick(clean(3).copy(requestedTool = "root_run_command")))
+        assertTrue(ModelRouter.mainOnly("root_run_command", null))
 
         val observeSpec = ToolSpec("phone_observe", "obs", "{}")
         val endSpec = ToolSpec("end_not_done", "end", "{}")
@@ -169,6 +171,69 @@ class ModelRouterTest {
             )
             assertTrue("Expected upfront Main after $privileged", r.shouldRouteToMainUpfront(historyAfterPrivileged, listOf(observeSpec), ::verb))
         }
+    }
+
+    @Test fun upfrontMainStepsDoNotConsumeForcedMainBudget() {
+        val r = ModelRouter(main, light)
+        r.noteUnsafeEscalation()
+
+        val dUpfront = r.pickWithReason(clean(3).copy(needsMainUpfront = true))
+        assertSame(main, dUpfront.model)
+        assertTrue(dUpfront.reason.contains("reason=upfront_main"))
+
+        val dLastVerb = r.pickWithReason(clean(4).copy(lastVerb = com.wangzan101.mika.core.tool.Verb.PhoneCommand))
+        assertSame(main, dLastVerb.model)
+        assertTrue(dLastVerb.reason.contains("reason=main_only_last_verb"))
+
+        val dFinal = r.pickWithReason(clean(5).copy(finalSummary = true))
+        assertSame(main, dFinal.model)
+        assertTrue(dFinal.reason.contains("reason=final_summary"))
+
+        val dReqTool = r.pickWithReason(clean(6).copy(requestedTool = "phone_gesture"))
+        assertSame(main, dReqTool.model)
+        assertTrue(dReqTool.reason.contains("reason=main_only_tool"))
+
+        // None of the upfront Main steps above consumed the 2-step forcedMain budget.
+        val dForced1 = r.pickWithReason(clean(7))
+        assertSame(main, dForced1.model)
+        assertTrue(dForced1.reason.contains("reason=forced_main"))
+
+        val dForced2 = r.pickWithReason(clean(8))
+        assertSame(main, dForced2.model)
+        assertTrue(dForced2.reason.contains("reason=forced_main"))
+
+        assertSame(light, r.pick(clean(9)))
+    }
+
+    @Test fun repeatedUnsafeEscalationsIncreaseCooldownAndResetOnLightAccepted() {
+        val r = ModelRouter(main, light)
+
+        // 1st unsafe escalation locks Main for TROUBLE_STEPS (2) steps.
+        r.noteUnsafeEscalation()
+        assertSame(main, r.pick(clean(3)))
+        assertSame(main, r.pick(clean(4)))
+        assertSame(light, r.pick(clean(5)))
+
+        // 2nd consecutive unsafe escalation (without accepted Light call) escalates to ESCALATED_TROUBLE_STEPS (4).
+        r.noteUnsafeEscalation()
+        for (step in 6..9) {
+            assertSame("Expected Main at step $step", main, r.pick(clean(step)))
+        }
+        assertSame(light, r.pick(clean(10)))
+
+        // 3rd consecutive unsafe escalation escalates to MAX_ESCALATED_TROUBLE_STEPS (6).
+        r.noteUnsafeEscalation()
+        for (step in 11..16) {
+            assertSame("Expected Main at step $step", main, r.pick(clean(step)))
+        }
+        assertSame(light, r.pick(clean(17)))
+
+        // Accepted Light call resets consecutive unsafe escalation counter back to TROUBLE_STEPS (2).
+        r.noteLightAccepted()
+        r.noteUnsafeEscalation()
+        assertSame(main, r.pick(clean(18)))
+        assertSame(main, r.pick(clean(19)))
+        assertSame(light, r.pick(clean(20)))
     }
 }
 

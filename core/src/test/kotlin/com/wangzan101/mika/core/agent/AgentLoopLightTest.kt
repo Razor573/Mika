@@ -24,6 +24,7 @@ import com.wangzan101.mika.core.run.record.RunSink
 import com.wangzan101.mika.core.tool.FakeScreen
 import com.wangzan101.mika.core.screen.uistate.ActionResult
 import com.wangzan101.mika.core.screen.uistate.ScreenSnapshot
+import com.wangzan101.mika.core.screen.uistate.SystemCommandResult
 import com.wangzan101.mika.core.screen.uistate.UiElement
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -685,5 +686,477 @@ class AgentLoopLightTest {
         } finally {
             server.shutdown()
         }
+    }
+
+    @Test fun unsafeIrreversibleTargetEscalatesImmediatelyToMainWithEphemeralNoticeAndExecutesConfirmTap() = runTest {
+        var tappedConfirm = false
+        val confirmScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private var tick = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                val n = ++tick
+                return ScreenSnapshot(
+                    snapshotId = "s1",
+                    packageName = "com.notes.app",
+                    elements = listOf(
+                        UiElement("@e1", "button", "确认删除", 500, 600, listOf(400, 550, 600, 650), null, clickable = true, editable = false, scrollable = false),
+                        UiElement("@e2", "text", "删除这条笔记 $n", 500, 300, listOf(200, 250, 800, 350), null, clickable = false, editable = false, scrollable = false),
+                    ),
+                    width = 1080,
+                    height = 2400,
+                )
+            }
+            override suspend fun peek(): ScreenSnapshot = snapshot()
+            override suspend fun tapRef(ref: String, snapshotId: String): ActionResult {
+                if (ref == "@e1") tappedConfirm = true
+                return ActionResult.Ok(changed = true)
+            }
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")),
+                tools(call("phone_observe")),
+                // Step 3 escalated to Main: executes confirmation tap directly without re-observing or ask_user
+                toolsWithUsage(Usage(600, 30, 400), call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
+                finish("已确认删除"),
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                toolsWithUsage(Usage(500, 20, 350), call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, confirmScreen).run("删除这条笔记")
+        assertTrue("$end", end is TaskState.Succeeded)
+        assertTrue("Main must execute the non-payment confirmation tap directly", tappedConfirm)
+
+        // No Light retry after unsafe_tool rejection
+        assertEquals(1, light.requests.size)
+        assertEquals(CallOptions.LIGHT_TOOL_ONLY, light.callOptions.first())
+        assertTrue(light.systems.first().contains("no prose, no explanation, no summary, no thinking out loud", ignoreCase = true))
+
+        // Ephemeral notice appears ONLY in escalated Main request (main.requests[2]), NOT in Step 4 Main request or Light requests
+        val escalatedReqText = main.requests[2].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(escalatedReqText.contains("""<context kind="notice" source="light_escalation""""))
+        assertTrue(escalatedReqText.contains("phone_tap"))
+        assertTrue(escalatedReqText.contains("irreversible_target:phone_tap"))
+        assertTrue(escalatedReqText.contains("confirmation taps"))
+
+        val followUpReqText = main.requests[3].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertFalse("Ephemeral notice must not persist into subsequent Main history", followUpReqText.contains("light_escalation"))
+        assertTrue(
+            "Ephemeral notice must never reach Light",
+            light.requests.flatten().flatMap { it.parts }.filterIsInstance<Part.Text>().none { "light_escalation" in it.text },
+        )
+
+        // ActionExecutor permitted the non-payment confirmation tap
+        val tapResult = sink.list.filterIsInstance<RunEvent.ToolResult>().single { it.tool == "phone_tap" }
+        assertTrue(tapResult.resultJson.contains("\"ok\":true"))
+
+        // Telemetry records both Light rejection and Main escalation
+        val step3Replies = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.step == 3 }
+        assertEquals(2, step3Replies.size)
+        val lightRej = step3Replies[0]
+        assertEquals("light", lightRej.role)
+        assertEquals(false, lightRej.accepted)
+        assertEquals("unsafe_tool", lightRej.reason)
+        assertEquals("irreversible_target:phone_tap", lightRej.validatorReason)
+        assertEquals("phone_tap", lightRej.lightTool)
+        assertEquals(false, lightRej.forcedMain)
+
+        val mainEsc = step3Replies[1]
+        assertEquals("main", mainEsc.role)
+        assertEquals(true, mainEsc.accepted)
+        assertEquals(true, mainEsc.forcedMain)
+        assertEquals(true, mainEsc.escalatedFromLight)
+        assertEquals("unsafe_tool:irreversible_target:phone_tap", mainEsc.lightRejectionReason)
+        assertEquals("phone_tap", mainEsc.tool)
+    }
+
+    @Test fun unsafeMainOnlyToolsEscalateImmediatelyWithoutConsumingForcedMainAndWithoutSecretLeak() = runTest {
+        val ranCommands = mutableListOf<String>()
+        var ranGesture = false
+        val advancedScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by SafeActionScreen() {
+            override suspend fun systemCommand(command: String): SystemCommandResult {
+                ranCommands += command
+                return SystemCommandResult(0, "shell-ok")
+            }
+            override suspend fun gesture(paths: List<List<Pair<Int, Int>>>, durationMs: Long): ActionResult {
+                ranGesture = true
+                return ActionResult.Ok(changed = true)
+            }
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")), // Step 1
+                tools(call("phone_observe")), // Step 2
+                toolsWithUsage(Usage(600, 30, 400), call("phone_system_command", """{"command":"echo ok"}""")), // Step 3 escalated
+                toolsWithUsage(Usage(620, 20, 450), call("phone_observe")), // Step 4 (needsMainUpfront -> preserves forcedMain=2)
+                toolsWithUsage(Usage(640, 20, 470), call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 5 (forcedMain 2->1)
+                toolsWithUsage(Usage(660, 20, 490), call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 6 (forcedMain 1->0)
+                toolsWithUsage(Usage(680, 30, 510), call("phone_gesture", """{"paths":[[[100,200],[300,400]]]}""")), // Step 7 escalated
+                finish("全部手势与命令已完成"), // Step 8
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                // Step 3: Light attempts main_only phone_system_command with sensitive token -> rejected, no retry
+                toolsWithUsage(Usage(500, 20, 350), call("phone_system_command", """{"command":"curl -H Bearer secret_abc12345"}""")),
+                // Step 7: Light resumes after Step 4 (upfront_main) + Steps 5-6 (forced_main), attempts phone_gesture -> rejected, no retry
+                toolsWithUsage(Usage(670, 20, 500), call("phone_gesture", """{"paths":[[[100,200],[300,400]]]}""")),
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, advancedScreen).run("执行系统命令和多指手势")
+        assertTrue("$end", end is TaskState.Succeeded)
+        assertEquals(listOf("echo ok"), ranCommands)
+        assertTrue(ranGesture)
+        // Light only attempted Step 3 and Step 7 (zero retries, zero bounce-back during Steps 4..6)
+        assertEquals(2, light.requests.size)
+        assertEquals(8, main.requests.size)
+
+        // Secret command arg in Light's rejected call must be redacted in Main's escalation notice
+        val cmdEscalationText = main.requests[2].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(cmdEscalationText.contains("main_only_tool:phone_system_command"))
+        assertFalse(cmdEscalationText.contains("secret_abc12345"))
+
+        val gestureEscalationText = main.requests[6].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(gestureEscalationText.contains("main_only_tool:phone_gesture"))
+
+        val step3Main = sink.list.filterIsInstance<RunEvent.ModelReply>().single { it.step == 3 && it.role == "main" }
+        assertEquals(true, step3Main.forcedMain)
+        assertEquals(true, step3Main.escalatedFromLight)
+        assertEquals("unsafe_tool:main_only_tool:phone_system_command", step3Main.lightRejectionReason)
+
+        val step7Main = sink.list.filterIsInstance<RunEvent.ModelReply>().single { it.step == 7 && it.role == "main" }
+        assertEquals(true, step7Main.forcedMain)
+        assertEquals(true, step7Main.escalatedFromLight)
+        assertEquals("unsafe_tool:main_only_tool:phone_gesture", step7Main.lightRejectionReason)
+    }
+
+    @Test fun repeatedUnsafeToolRejectionsEscalateCooldownAndPreventPingPong() = runTest {
+        val confirmScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private var tick = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                val n = ++tick
+                return ScreenSnapshot(
+                    snapshotId = "s1",
+                    packageName = "com.notes.app",
+                    elements = listOf(
+                        UiElement("@e1", "button", "确认删除", 500, 600, listOf(400, 550, 600, 650), null, clickable = true, editable = false, scrollable = false),
+                        UiElement("@e2", "button", "详情条目 $n", 500, 300, listOf(200, 250, 800, 350), null, clickable = true, editable = false, scrollable = false),
+                    ),
+                    width = 1080,
+                    height = 2400,
+                )
+            }
+            override suspend fun peek(): ScreenSnapshot = snapshot()
+            override suspend fun tapRef(ref: String, snapshotId: String): ActionResult = ActionResult.Ok(changed = true)
+            override suspend fun scroll(ref: String?, snapshotId: String?, down: Boolean): ActionResult = ActionResult.Ok(changed = true)
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")), // Step 1
+                tools(call("phone_observe")), // Step 2
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 3 escalated (cooldown 2 -> steps 4, 5)
+                tools(call("phone_scroll", """{"direction":"down"}""")), // Step 4
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 5
+                tools(call("phone_scroll", """{"direction":"down"}""")), // Step 6 escalated (2nd consecutive unsafe -> cooldown 4 -> steps 7..10)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 7
+                tools(call("phone_scroll", """{"direction":"down"}""")), // Step 8
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 9 (would have ping-ponged to Light without escalated cooldown!)
+                tools(call("phone_scroll", """{"direction":"down"}""")), // Step 10
+                finish("完成"), // Step 11
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 3
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 6
+                tools(call("phone_observe")), // Step 11 (only if Light resumed after 4-step cooldown)
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, confirmScreen).run("连续确认")
+        assertTrue("$end", end is TaskState.Succeeded)
+        // Steps 7..10 all stayed on Main (4 steps instead of bouncing back at Step 9)
+        val stepRoles = sink.list.filterIsInstance<RunEvent.ModelReply>().filter { it.accepted == true }.map { it.step to it.role }
+        assertTrue((7..10).all { s -> stepRoles.any { it.first == s && it.second == "main" } })
+    }
+
+    @Test fun genuinePaymentStillRequiresUserApprovalAfterEscalation() = runTest {
+        val payScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
+            private var tick = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                val n = ++tick
+                return ScreenSnapshot(
+                    snapshotId = "s1",
+                    packageName = "com.shop.app",
+                    elements = listOf(
+                        UiElement("@e1", "button", "确认支付", 500, 800, listOf(400, 750, 600, 850), null, clickable = true, editable = false, scrollable = false),
+                        UiElement("@e2", "text", "合计 ¥25.00 ($n)", 500, 300, listOf(200, 250, 800, 350), null, clickable = false, editable = false, scrollable = false),
+                    ),
+                    width = 1080,
+                    height = 2400,
+                )
+            }
+            override suspend fun peek(): ScreenSnapshot = snapshot()
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")),
+                tools(call("phone_observe")),
+                // Escalated Step 3: even if Main tries phone_tap on payable checkout, ConfirmDecision blocks it with confirmation_required
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
+                finish("请由用户亲自完成支付"),
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")),
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, payScreen).run("付款购买订单")
+        assertTrue("$end", end is TaskState.Succeeded)
+        val tapResult = sink.list.filterIsInstance<RunEvent.ToolResult>().first { it.tool == "phone_tap" }
+        assertTrue(tapResult.resultJson.contains("confirmation_required"))
+    }
+
+    @Test fun unsafeRunCommandAndPhoneSystemCommandRedactSecretJsonFieldsAndCommandInEscalationNotice() = runTest {
+        val ranCommands = mutableListOf<String>()
+        val advancedScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by SafeActionScreen() {
+            override suspend fun systemCommand(command: String): SystemCommandResult {
+                ranCommands += command
+                return SystemCommandResult(0, "shell-ok")
+            }
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")), // Step 1
+                tools(call("phone_observe")), // Step 2
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 3 escalated from run_command
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 4 (forcedMain 2->1)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 5 (forcedMain 1->0)
+                tools(call("phone_system_command", """{"command":"echo safe_ok"}""")), // Step 6 escalated from phone_system_command
+                finish("已完成"), // Step 7
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                // Step 3: run_command with command + password/token/secret + nested auth.apiKey
+                tools(
+                    call(
+                        "run_command",
+                        """{"command":"echo secret_cmd_payload","password":"my_secret_password_123","token":"tok_custom_98765","secret":"top_secret_val","auth":{"apiKey":"secret_key_123"}}""",
+                    ),
+                ),
+                // Step 6: phone_system_command with command + extra password/token/secret + nested array secret
+                tools(
+                    call(
+                        "phone_system_command",
+                        """{"command":"echo raw_sys_cmd","password":"sys_pw_123","token":"sys_tok_456","secret":"sys_sec_789","items":[{"apiKey":"nested_key_999"}]}""",
+                    ),
+                ),
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, advancedScreen).run("执行命令并检查")
+        assertTrue("$end", end is TaskState.Succeeded)
+        assertEquals(listOf("echo safe_ok"), ranCommands)
+        assertEquals(2, light.requests.size)
+
+        val runCmdEscalation = main.requests[2].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(runCmdEscalation.contains("""<context kind="notice" source="light_escalation""""))
+        assertTrue(runCmdEscalation.contains("main_only_tool:run_command"))
+        for (leak in listOf("echo secret_cmd_payload", "my_secret_password_123", "tok_custom_98765", "top_secret_val", "secret_key_123")) {
+            assertFalse("run_command notice must redact $leak: $runCmdEscalation", runCmdEscalation.contains(leak))
+        }
+
+        val sysCmdEscalation = main.requests[5].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(sysCmdEscalation.contains("""<context kind="notice" source="light_escalation""""))
+        assertTrue(sysCmdEscalation.contains("main_only_tool:phone_system_command"))
+        for (leak in listOf("raw_sys_cmd", "sys_pw_123", "sys_tok_456", "sys_sec_789", "nested_key_999")) {
+            assertFalse("phone_system_command notice must redact $leak: $sysCmdEscalation", sysCmdEscalation.contains(leak))
+        }
+
+        assertTrue(
+            "Escalation notice must never reach Light",
+            light.requests.flatten().flatMap { it.parts }.filterIsInstance<Part.Text>().none { "light_escalation" in it.text },
+        )
+    }
+
+    @Test fun contextTooLongOverflowRetryPreservesEphemeralTailWithoutPollutingCompressorOrLight() = runTest {
+        val longDetail = "x".repeat(400)
+        val overflowScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by SafeActionScreen() {
+            private var tick = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                val n = ++tick
+                return ScreenSnapshot(
+                    snapshotId = "s1",
+                    packageName = "com.notes.app",
+                    elements = listOf(
+                        UiElement("@e1", "button", "确认删除", 500, 600, listOf(400, 550, 600, 650), null, clickable = true, editable = false, scrollable = false),
+                        UiElement("@e2", "button", "详情条目 $n $longDetail", 500, 300, listOf(200, 250, 800, 350), null, clickable = true, editable = false, scrollable = false),
+                    ),
+                    width = 1080,
+                    height = 2400,
+                )
+            }
+            override suspend fun peek(): ScreenSnapshot = snapshot()
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")), // Step 1
+                tools(call("phone_observe")), // Step 2
+                // Step 9 escalated: 1st Main attempt hits ContextTooLong, overflow retry succeeds with ephemeralTail preserved
+                com.wangzan101.mika.core.model.ModelError.ContextTooLong(),
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 9 retry
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 10 (forcedMain 2->1)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 11 (forcedMain 1->0)
+                finish("完成"), // Step 13
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 3
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 4
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 5
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 6
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 7
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 8
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 9 -> unsafe_tool escalation
+                tools(call("phone_observe")), // Step 12 -> Light resumes cleanly
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, overflowScreen).run("删除条目")
+        assertTrue("$end", end is TaskState.Succeeded)
+
+        // Step 9 1st attempt (main.requests[2]) and overflow retry (main.requests[3]) both carry light_escalation
+        val attempt1Text = main.requests[2].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        val retryText = main.requests[3].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertTrue(attempt1Text.contains("""<context kind="notice" source="light_escalation""""))
+        assertTrue(retryText.contains("""<context kind="notice" source="light_escalation""""))
+        assertTrue("Overflow retry must send compacted history", retryText.contains(ContextCompressor.HEADER))
+        assertTrue(main.requests[3].size < main.requests[2].size)
+
+        // Step 10 Main request (main.requests[4]) must NOT carry light_escalation and must NOT trigger prefix_invalidated
+        val step10Text = main.requests[4].flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        assertFalse(step10Text.contains("light_escalation"))
+
+        val step9Main = sink.list.filterIsInstance<RunEvent.ModelReply>().single { it.step == 9 && it.role == "main" }
+        assertEquals("overflow", step9Main.compactionTrigger)
+        assertEquals(true, step9Main.forcedMain)
+        assertEquals(true, step9Main.escalatedFromLight)
+
+        val step10Main = sink.list.filterIsInstance<RunEvent.ModelReply>().single { it.step == 10 && it.role == "main" }
+        assertEquals(null, step10Main.compactionTrigger)
+
+        assertTrue(sink.list.filterIsInstance<RunEvent.Compressed>().any { it.trigger == "overflow" })
+        assertTrue(
+            "Escalation notice must never reach Light",
+            light.requests.flatten().flatMap { it.parts }.filterIsInstance<Part.Text>().none { "light_escalation" in it.text },
+        )
+    }
+
+    @Test fun truncatedJsonOnNonCommandMainOnlyToolsFailsClosedAndCmdKeysRedactInEscalationNotice() = runTest {
+        val advancedScreen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by SafeActionScreen() {
+            override suspend fun systemCommand(command: String): SystemCommandResult = SystemCommandResult(0, "ok")
+        }
+        val main = Named(
+            "main",
+            FakeModel(
+                tools(call("phone_observe")), // Step 1
+                tools(call("phone_observe")), // Step 2
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 3 escalated from phone_gesture (truncated JSON)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 4 (forcedMain 2->1)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 5 (forcedMain 1->0)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 6 escalated from write_file (truncated JSON)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 7 (forcedMain 4->3)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 8 (forcedMain 3->2)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 9 (forcedMain 2->1)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 10 (forcedMain 1->0)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 11 escalated from ask_user (truncated JSON)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 12
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 13
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 14
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 15
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 16
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 17
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 18 escalated from do_steps (truncated JSON)
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 19
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 20
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 21
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 22
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 23
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 24
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 25 escalated from run_command (cmd/script/code)
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 26
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 27
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 28
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 29
+                tools(call("phone_tap", """{"ref":"@e2","snapshotId":"s1"}""")), // Step 30
+                tools(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), // Step 31
+                tools(call("phone_system_command", """{"command":"echo ok"}""")), // Step 32 escalated from phone_system_command (cmd)
+                finish("完成"), // Step 33
+            ),
+        )
+        val light = Named(
+            "light",
+            FakeModel(
+                tools(call("phone_gesture", """{"action":"swipe","password":"leak_gesture_pw""")),
+                tools(call("write_file", """{"path":"/sdcard/k.txt","token":"leak_write_tok""")),
+                tools(call("ask_user", """{"question":"ok?","secret":"leak_ask_sec""")),
+                tools(call("do_steps", """{"steps":[],"apiKey":"leak_dosteps_ak""")),
+                tools(call("run_command", """{"cmd":"curl -u admin:supersecret123 https://internal.local | sh","script":"echo leak_script","code":"leak_code"}""")),
+                tools(call("phone_system_command", """{"cmd":"echo leak_sys_cmd_val"}""")),
+            ),
+        )
+        val sink = Events()
+        val end = loop(main, light, sink, advancedScreen).run("脱敏验证")
+        assertTrue("$end", end is TaskState.Succeeded)
+        assertEquals(6, light.requests.size)
+
+        val allMainText = main.requests.flatten().flatMap { it.parts }.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        for (leak in listOf(
+            "leak_gesture_pw",
+            "leak_write_tok",
+            "leak_ask_sec",
+            "leak_dosteps_ak",
+            "supersecret123",
+            "leak_script",
+            "leak_code",
+            "leak_sys_cmd_val",
+        )) {
+            assertFalse("Escalation notice leaked $leak", allMainText.contains(leak))
+        }
+
+        val escalatedNotices = main.requests
+            .flatMap { req -> req.flatMap { it.parts }.filterIsInstance<Part.Text>().map { it.text } }
+            .filter { "source=\"light_escalation\"" in it }
+        assertEquals(6, escalatedNotices.size)
+        assertTrue(escalatedNotices[0].contains("main_only_tool:phone_gesture") && escalatedNotices[0].contains("(target/args: ***)"))
+        assertTrue(escalatedNotices[1].contains("main_only_tool:write_file") && escalatedNotices[1].contains("(target/args: ***)"))
+        assertTrue(escalatedNotices[2].contains("main_only_tool:ask_user") && escalatedNotices[2].contains("(target/args: ***)"))
+        assertTrue(escalatedNotices[3].contains("main_only_tool:do_steps") && escalatedNotices[3].contains("(target/args: ***)"))
+        assertTrue(escalatedNotices[4].contains("main_only_tool:run_command") && escalatedNotices[4].contains(""""cmd":"***""""))
+        assertTrue(escalatedNotices[5].contains("main_only_tool:phone_system_command") && escalatedNotices[5].contains(""""cmd":"***""""))
+        assertTrue(
+            "Escalation notice must never reach Light",
+            light.requests.flatten().flatMap { it.parts }.filterIsInstance<Part.Text>().none { "light_escalation" in it.text },
+        )
     }
 }

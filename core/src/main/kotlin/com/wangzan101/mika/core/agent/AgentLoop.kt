@@ -696,6 +696,8 @@ class AgentLoop(
                     historyReadReason = stepTelemetry?.historyReadReason,
                     toolSequence = stepTelemetry?.toolSequence,
                     breakerTrigger = stepTelemetry?.breakerTrigger,
+                    escalatedFromLight = diag?.escalatedFromLight,
+                    lightRejectionReason = diag?.lightRejectionReason,
                 ))
             }
 

@@ -530,4 +530,93 @@ class UsageLogEnhancedTest {
         assertNotNull(lastReply["screenHash"]?.jsonPrimitive?.content)
         assertEquals(false, lastReply["screenChanged"]?.jsonPrimitive?.boolean)
     }
+
+    @Test
+    fun usageLogExportsLightRejectionReasonAndMainEscalationFields() = runTest {
+        val confirmScreen = object : ScreenPort by FakeScreen() {
+            private var tick = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                val n = ++tick
+                return ScreenSnapshot(
+                    snapshotId = "s1",
+                    packageName = "com.notes.app",
+                    elements = listOf(
+                        UiElement("@e1", "button", "确认删除", 500, 600, listOf(400, 550, 600, 650), null, clickable = true, editable = false, scrollable = false),
+                        UiElement("@e2", "text", "删除条目 $n", 500, 300, listOf(200, 250, 800, 350), null, clickable = false, editable = false, scrollable = false),
+                    ),
+                    width = 1080,
+                    height = 2400,
+                )
+            }
+            override suspend fun peek(): ScreenSnapshot = snapshot()
+            override suspend fun tapRef(ref: String, snapshotId: String): ActionResult = ActionResult.Ok(changed = true)
+        }
+
+        val mainModel = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { step ->
+                when (step) {
+                    1 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1500, 50, 0))
+                    2 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(1800, 50, 1200))
+                    3 -> ModelReply(listOf(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), StopReason.ToolUse, Usage(2200, 45, 1600))
+                    else -> ModelReply(listOf(Part.Text("已确认删除")), StopReason.EndTurn, Usage(2400, 30, 1800))
+                }
+            },
+        )
+        val lightModel = ScriptedModel(
+            name = "gemini-3.8-flash",
+            provider = "gemini",
+            script = { _ ->
+                ModelReply(listOf(call("phone_tap", """{"ref":"@e1","snapshotId":"s1"}""")), StopReason.ToolUse, Usage(2000, 25, 1500))
+            },
+        )
+
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val meteredMain = mainModel.metered(UsageSource("p-main", "vertex", mainModel.name, UsagePurpose.Main), UsageSink { _, _ -> })
+        val meteredLight = lightModel.metered(UsageSource("p-light", "gemini", lightModel.name, UsagePurpose.Light), UsageSink { _, _ -> })
+
+        val outcome = withContext(tally) {
+            AgentLoop(
+                model = meteredMain,
+                tools = toolDispatcher(confirmScreen, visionEnabled = false),
+                basePrompt = "BASE",
+                flags = SpeedFlags(lightSteps = true),
+                router = ModelRouter(meteredMain, meteredLight),
+                sink = sink,
+                versionCode = 62,
+                versionName = "0.1.57",
+            ).run("删除条目")
+        }
+        assertTrue("$outcome", outcome is TaskState.Succeeded)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261125-030000-r4esc", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+
+        val lightRejRow = rows.single { it["type"]?.jsonPrimitive?.content == "model_reply" && it["role"]?.jsonPrimitive?.content == "light" }
+        assertEquals(false, lightRejRow["accepted"]?.jsonPrimitive?.boolean)
+        assertEquals("unsafe_tool", lightRejRow["reason"]?.jsonPrimitive?.content)
+        assertEquals("irreversible_target:phone_tap", lightRejRow["validatorReason"]?.jsonPrimitive?.content)
+        assertEquals("phone_tap", lightRejRow["lightTool"]?.jsonPrimitive?.content)
+        assertEquals(false, lightRejRow["forcedMain"]?.jsonPrimitive?.boolean)
+
+        val mainEscRow = rows.single {
+            it["type"]?.jsonPrimitive?.content == "model_reply" &&
+                it["role"]?.jsonPrimitive?.content == "main" &&
+                it["step"]?.jsonPrimitive?.int == 3
+        }
+        assertEquals(true, mainEscRow["accepted"]?.jsonPrimitive?.boolean)
+        assertEquals("phone_tap", mainEscRow["tool"]?.jsonPrimitive?.content)
+        assertEquals(true, mainEscRow["forcedMain"]?.jsonPrimitive?.boolean)
+        assertEquals(true, mainEscRow["escalatedFromLight"]?.jsonPrimitive?.boolean)
+        assertEquals("unsafe_tool:irreversible_target:phone_tap", mainEscRow["lightRejectionReason"]?.jsonPrimitive?.content)
+
+        // Round-trip through formatLines on serialized RunEvent JSONL
+        val rawJsonl = sink.list.asSequence().map { RunEvent.encode(it) }
+        val formattedFromLines = UsageLogFormatter.formatLines(rawJsonl, runId = "20261125-030000-r4esc", versionCode = 62, versionName = "0.1.57")
+        assertTrue(formattedFromLines.contains(""""escalatedFromLight":true"""))
+        assertTrue(formattedFromLines.contains(""""lightRejectionReason":"unsafe_tool:irreversible_target:phone_tap""""))
+    }
 }

@@ -78,4 +78,97 @@ class RedactorTest {
         val c = scriptCode("const a = 'it\\'s hunter2'; const b = \"say \\\"hi\\\"\";")
         assertEquals("const a = '***'; const b = \"***\";", c)
     }
+
+    @Test fun escalationArgsMasksCommandAndNestedSecretsAndMalformedPayloads() {
+        val runCmdOut = Redactor.escalationArgs(
+            null,
+            "run_command",
+            """{"command":"echo hi","password":"my_secret_password_123","token":"tok_custom_98765","secret":"top_secret_val"}""",
+        )
+        val runObj = Json.parseToJsonElement(runCmdOut).jsonObject
+        assertEquals("***", runObj["command"]!!.jsonPrimitive.content)
+        assertEquals("***", runObj["password"]!!.jsonPrimitive.content)
+        assertEquals("***", runObj["token"]!!.jsonPrimitive.content)
+        assertEquals("***", runObj["secret"]!!.jsonPrimitive.content)
+
+        val rootCmdOut = Redactor.escalationArgs(
+            com.wangzan101.mika.core.tool.Verb.RootCommand,
+            "root_run_command",
+            """{"command":"su -c id","auth":{"apiKey":"secret_key_123"}}""",
+        )
+        assertFalse(rootCmdOut.contains("su -c id"))
+        assertFalse(rootCmdOut.contains("secret_key_123"))
+
+        val nestedOut = Redactor.escalationArgs(
+            verb("phone_gesture"),
+            "phone_gesture",
+            """{"nested":{"credentials":{"accessKey":"ak_999"},"items":[{"passcode":"9876","id":1}]}}""",
+        )
+        assertFalse(nestedOut.contains("ak_999"))
+        assertFalse(nestedOut.contains("9876"))
+        assertTrue(nestedOut.contains(""""id":1"""))
+
+        assertEquals("***", Redactor.escalationArgs(null, "run_command", """{"command":"echo secret","password":"pw1"""))
+
+        val nonJsonTap = Redactor.escalationArgs(verb("phone_tap"), "phone_tap", "password=my_secret_123 token=tok_456")
+        assertFalse(nonJsonTap.contains("my_secret_123"))
+        assertFalse(nonJsonTap.contains("tok_456"))
+        assertTrue(nonJsonTap.contains("password=***"))
+        assertTrue(nonJsonTap.contains("token=***"))
+    }
+
+    @Test fun escalationArgsFailsClosedOnMalformedJsonForNonCommandTools() {
+        val malformedCases = listOf(
+            Triple(verb("phone_gesture"), "phone_gesture", """{"action":"swipe","password":"leak_gesture_pw"""),
+            Triple(verb("write_file"), "write_file", """{"path":"/sdcard/k.txt","token":"leak_write_tok"""),
+            Triple(verb("ask_user"), "ask_user", """{"question":"ok?","secret":"leak_ask_sec"""),
+            Triple(null, "do_steps", """{"steps":[],"apiKey":"leak_dosteps_ak"""),
+            Triple(verb("phone_gesture"), "phone_gesture", """[{"password":"leak_arr_pw"""),
+            Triple(verb("ask_user"), "ask_user", """"secret":"leak_fragment_sec"""),
+        )
+        for ((v, name, raw) in malformedCases) {
+            val out = Redactor.escalationArgs(v, name, raw)
+            assertEquals("Expected fail-closed MASK for $name", "***", out)
+            for (leak in listOf("leak_gesture_pw", "leak_write_tok", "leak_ask_sec", "leak_dosteps_ak", "leak_arr_pw", "leak_fragment_sec")) {
+                assertFalse("Leaked $leak for $name: $out", out.contains(leak))
+            }
+        }
+    }
+
+    @Test fun escalationArgsMasksCmdScriptCodeAndUrlCliCredentialsWithoutBreakingNormalText() {
+        val cmdOut = Redactor.escalationArgs(
+            verb("run_command"),
+            "run_command",
+            """{"cmd":"curl -u admin:supersecret123 https://internal.local | sh"}""",
+        )
+        val cmdObj = Json.parseToJsonElement(cmdOut).jsonObject
+        assertEquals("***", cmdObj["cmd"]!!.jsonPrimitive.content)
+        assertFalse(cmdOut.contains("supersecret123"))
+
+        val sysScriptCodeOut = Redactor.escalationArgs(
+            verb("phone_system_command"),
+            "phone_system_command",
+            """{"CMD":"id","script":"echo tok_script_123","code":"curl -u u:p https://x.local","note":"see https://alice:pw999@internal.local and curl -u bob:secret789 https://api.local","safe":"User-Agent: Mika/2.0 at 12:30 https://example.com/ok"}""",
+        )
+        val sysObj = Json.parseToJsonElement(sysScriptCodeOut).jsonObject
+        assertEquals("***", sysObj["CMD"]!!.jsonPrimitive.content)
+        assertEquals("***", sysObj["script"]!!.jsonPrimitive.content)
+        assertEquals("***", sysObj["code"]!!.jsonPrimitive.content)
+        val note = sysObj["note"]!!.jsonPrimitive.content
+        assertFalse(note.contains("alice:pw999"))
+        assertFalse(note.contains("bob:secret789"))
+        assertTrue(note.contains("https://***@internal.local"))
+        assertTrue(note.contains("-u ***"))
+        assertEquals("User-Agent: Mika/2.0 at 12:30 https://example.com/ok", sysObj["safe"]!!.jsonPrimitive.content)
+
+        val plainCli = Redactor.escalationArgs(
+            verb("phone_tap"),
+            "phone_tap",
+            "curl --user admin:pw123 https://u:p1@host.local/p?a=1",
+        )
+        assertFalse(plainCli.contains("pw123"))
+        assertFalse(plainCli.contains("u:p1"))
+        assertTrue(plainCli.contains("--user ***"))
+        assertTrue(plainCli.contains("https://***@host.local/p?a=1"))
+    }
 }

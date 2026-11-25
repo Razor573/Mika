@@ -54,6 +54,8 @@ internal data class CallDiagnostics(
     val lastChanged: Boolean? = null,
     val forcedMain: Boolean = false,
     val lightRetried: Boolean? = null,
+    val escalatedFromLight: Boolean? = null,
+    val lightRejectionReason: String? = null,
 )
 
 /**
@@ -325,6 +327,32 @@ internal class ModelCaller(
         ))
     }
 
+    private fun buildEscalationNotice(rejection: LightValidation.Rejected, reply: ModelReply?): Message? {
+        if (rejection.reason != "unsafe_tool") return null
+        val call = reply?.parts?.firstActionCall()
+        val toolName = rejection.tool ?: call?.name ?: "unknown"
+        val safeArgs = call?.let {
+            Redactor.escalationArgs(tools.verb(it.name), it.name, it.argsJson)
+                .trim()
+                .take(240)
+        }?.takeIf { it.isNotEmpty() && it != "{}" }
+        val targetPart = safeArgs?.let { " (target/args: $it)" }.orEmpty()
+        val body = buildString {
+            append("Light proposed `")
+            append(toolName)
+            append("`")
+            append(targetPart)
+            append(" and was rejected (")
+            append(rejection.validatorReason)
+            append("), so this step was escalated immediately to Main. Execute the needed action or main-only tool directly on the current screen right now instead of calling phone_observe or phone_list_elements to re-observe or re-list the same screen or bouncing back. Perform confirmation taps (such as Confirm, OK, Allow, Continue, 确认, 确定, 删除) directly yourself rather than leaving them for the user (ask_user/hand_to_user), unless the action genuinely spends money (request_confirmation / payment) or requires the user's hands (password, OTP, CAPTCHA).")
+        }
+        return Message(
+            Role.User,
+            listOf(Part.Text(ContextBuilder.envelope(ContextKind.Notice, "light_escalation", body))),
+            Author.Mika,
+        )
+    }
+
     /**
      * 按 [router] 选模型。轻量模型出错、没调工具(不带调用的回复是最终回答,只由主模型给),或要放弃、确认、接管、追问、做不可逆的事,
      * 它的回复不执行(记为 [ROLE_LIGHT] 且 `accepted = false`),这一步改问主模型,改问前用 [restarted] 报新的起问时刻。
@@ -340,13 +368,20 @@ internal class ModelCaller(
         val stepCtx = track.context(step, hasImages).copy(needsMainUpfront = upfrontMain)
         val decision = r.pickWithReason(stepCtx)
         val picked = decision.model
-        suspend fun fallbackToMain(forcedMain: Boolean): Pair<ModelReply, ChatModel> {
-            val (reply, used) = askRouted(history, specs, step, onText = onText)
+        suspend fun fallbackToMain(
+            forcedMain: Boolean,
+            escalatedFromLight: Boolean? = null,
+            lightRejectionReason: String? = null,
+            ephemeralTail: Message? = null,
+        ): Pair<ModelReply, ChatModel> {
+            val (reply, used) = askRouted(history, specs, step, onText = onText, ephemeralTail = ephemeralTail)
             lastCallDiagnostics = (lastCallDiagnostics ?: CallDiagnostics(provider = used.provider)).copy(
                 hasImages = stepCtx.hasImages,
                 sameApp = stepCtx.sameAppAsLast,
                 lastChanged = stepCtx.lastChanged,
                 forcedMain = forcedMain,
+                escalatedFromLight = escalatedFromLight,
+                lightRejectionReason = lightRejectionReason,
             )
             return reply to used
         }
@@ -364,6 +399,7 @@ internal class ModelCaller(
         val attempt1 = runLightAttempt(history, specs, picked, step, onText, asked)
         when (val v1 = LightCallValidator.validate(attempt1.reply, specs, tools, autonomous, retried = false)) {
             is LightValidation.Accepted -> {
+                r.noteLightAccepted()
                 lastCallDiagnostics = (attempt1.diag ?: CallDiagnostics(provider = attempt1.model.provider)).copy(
                     attempt = 1,
                     retryCount = 0,
@@ -394,11 +430,16 @@ internal class ModelCaller(
                 val shouldRetryError = firstReply == null
                 val shouldRetryNoTool = firstReply != null && firstReply.parts.firstActionCall() == null
                 if (!shouldRetryError && !shouldRetryNoTool) {
-                    r.noteTrouble()
+                    if (v1.reason == "unsafe_tool") r.noteUnsafeEscalation() else r.noteTrouble()
                     emit(RunEvent.State(now(), "light_to_main", v1.tool ?: "no_tool"))
                     onText?.invoke("")
                     restarted(now())
-                    return fallbackToMain(forcedMain = false)
+                    return fallbackToMain(
+                        forcedMain = true,
+                        escalatedFromLight = true,
+                        lightRejectionReason = "${v1.reason}:${v1.validatorReason}",
+                        ephemeralTail = buildEscalationNotice(v1, attempt1.reply),
+                    )
                 }
 
                 emit(RunEvent.State(now(), "light_retry", if (shouldRetryError) "model_error" else "no_tool"))
@@ -416,6 +457,7 @@ internal class ModelCaller(
                 val attempt2 = runLightAttempt(retryHistory, specs, picked, step, onText, attempt2Start)
                 when (val v2 = LightCallValidator.validate(attempt2.reply, specs, tools, autonomous, retried = true)) {
                     is LightValidation.Accepted -> {
+                        r.noteLightAccepted()
                         lastRetryWaitMs = retryWaitMs
                         lastCallDiagnostics = (attempt2.diag ?: CallDiagnostics(provider = attempt2.model.provider)).copy(
                             attempt = 2,
@@ -443,14 +485,19 @@ internal class ModelCaller(
                             retryWaitMs = retryWaitMs,
                             lightRetried = true,
                         )
-                        r.noteTrouble()
+                        if (v2.reason == "unsafe_tool") r.noteUnsafeEscalation() else r.noteTrouble()
                         if (attempt2.reply == null && attempt2.error != null) {
                             r.noteLightError()
                         }
                         emit(RunEvent.State(now(), "light_to_main", v2.tool ?: if (attempt2.reply == null) "light_error" else "no_tool"))
                         onText?.invoke("")
                         restarted(now())
-                        return fallbackToMain(forcedMain = false)
+                        return fallbackToMain(
+                            forcedMain = true,
+                            escalatedFromLight = true,
+                            lightRejectionReason = "${v2.reason}:${v2.validatorReason}",
+                            ephemeralTail = buildEscalationNotice(v2, attempt2.reply),
+                        )
                     }
                 }
             }
@@ -468,8 +515,9 @@ internal class ModelCaller(
     /** 同 [ask],返回实际回答的模型(组里可能是任一个成员)。问主模型时同样走主模型链。 */
     suspend fun askRouted(
         history: List<Message>, specs: List<ToolSpec>, step: Int, using: ChatModel = model, onText: ((String) -> Unit)? = null,
+        ephemeralTail: Message? = null,
     ): Pair<ModelReply, ChatModel> {
-        if (using !== model) return complete(viewFor(history, using), specs, using.asPool(), retry, step, onText)
+        if (using !== model) return complete(viewFor(history, using), specs, using.asPool(), retry, step, onText, ephemeralTail = ephemeralTail)
         // 整条链都失败时的说法(MK-1 第 2 批):以主模型最初的错误为主、附每个备援错在哪(见 [terminalError]);
         // 只试过一个模型就原样交出,和没有备援时一致。每步先把错误记进 [trialLog]:切过去之后,
         // 后面的步直接由备援起问,主模型的错不在手边,靠这份记录才拼得回整条链的说法。
@@ -477,7 +525,7 @@ internal class ModelCaller(
         while (true) {
             val current = chain[chainIndex]
             try {
-                val result = complete(viewFor(history, current), specs, current.asPool(), retry, step, onText, clock = clock)
+                val result = complete(viewFor(history, current), specs, current.asPool(), retry, step, onText, clock = clock, ephemeralTail = ephemeralTail)
                 lastMainUsed = result.second
                 return result
             } catch (e: ModelError) {
@@ -543,11 +591,11 @@ internal class ModelCaller(
     private suspend fun complete(
         history: List<Message>, specs: List<ToolSpec>, pool: ModelPool, policy: RetryPolicy, step: Int,
         onText: ((String) -> Unit)? = null, options: CallOptions = CallOptions.DEFAULT,
-        clock: AttemptClock = AttemptClock(),
+        clock: AttemptClock = AttemptClock(), ephemeralTail: Message? = null,
     ): Pair<ModelReply, ChatModel> {
         if (clock.firstAttemptAt == null) lastRetryWaitMs = 0
         // 单模型池不看选择条件:不必为它整份估算历史(长对话下这一步很贵)
-        val planned = if (pool is SingleMemberPool) pool.members else pool.ordered(needOf(history, specs))
+        val planned = if (pool is SingleMemberPool) pool.members else pool.ordered(needOf(if (ephemeralTail != null) history + ephemeralTail else history, specs))
         if (planned.isEmpty()) throw ModelError.GroupUnavailable(pool.groupName ?: "", "没有可用成员")
         val stickyKey = roleKey(planned.first().model)
         val pinned = stickyMembers[stickyKey]
@@ -563,6 +611,7 @@ internal class ModelCaller(
                     viewFor(history, using), specs, using, policy, step, onText, clock,
                     maxRetries = if (candidates.size > 1) minOf(policy.maxRetries, 1) else policy.maxRetries,
                     options = options,
+                    ephemeralTail = ephemeralTail,
                 )
                 stickyMembers[roleKey(using)] = using
                 pool.noteResult(member, now() - memberBegan, null)
@@ -611,6 +660,7 @@ internal class ModelCaller(
     private suspend fun attemptMember(
         history: List<Message>, specs: List<ToolSpec>, using: ChatModel, policy: RetryPolicy, step: Int,
         onText: ((String) -> Unit)?, clock: AttemptClock, maxRetries: Int, options: CallOptions = CallOptions.DEFAULT,
+        ephemeralTail: Message? = null,
     ): ModelReply {
         var retries = 0
         val effectivePrompt = promptTransform?.invoke(systemPrompt) ?: systemPrompt
@@ -639,6 +689,7 @@ internal class ModelCaller(
             if (raw.rewritten) anchors.clear()
             var restored = ContextRecovery.ensure(history, raw.messages)
             var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
+            fun withTail(ms: List<Message>): List<Message> = if (ephemeralTail == null) ms else ms + ephemeralTail
             fun estimatedTotal(ms: List<Message>): Int {
                 val est = TokenEstimate.of(ms)
                 return maxOf(
@@ -649,9 +700,10 @@ internal class ModelCaller(
             }
             fun exceedsCap(ms: List<Message>): Boolean =
                 inputTokenCap != null && estimatedTotal(ms) > inputTokenCap
+            var finalMessages = withTail(sent.messages)
             var capTrigger: String? = null
             var capCheckResult = "ok"
-            if (inputTokenCap != null && exceedsCap(sent.messages)) {
+            if (inputTokenCap != null && exceedsCap(finalMessages)) {
                 capTrigger = "cap_100k"
                 capCheckResult = "compacted"
                 if (!compaction.aggressive || !raw.rewritten) {
@@ -660,17 +712,19 @@ internal class ModelCaller(
                     restored = ContextRecovery.ensure(history, raw.messages)
                     sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
                     compressor.adopt(history, contextTokens, sent.messages, sent.foldedSteps, aggressive = compaction.aggressive)
+                    finalMessages = withTail(sent.messages)
                 }
-                if (exceedsCap(sent.messages)) {
+                if (exceedsCap(finalMessages)) {
                     capCheckResult = "pruned"
-                    val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(it) }
+                    val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(withTail(it)) }
                     if (capped !== sent.messages) {
                         anchors.clear()
                         sent = sent.copy(messages = capped, estimate = TokenEstimate.of(capped), rewritten = true)
                         compressor.adopt(history, contextTokens, capped, sent.foldedSteps, aggressive = compaction.aggressive)
+                        finalMessages = withTail(sent.messages)
                     }
                 }
-                if (exceedsCap(sent.messages)) {
+                if (exceedsCap(finalMessages)) {
                     capCheckResult = "too_long"
                     val prev = prevPrefixByRole[role]
                     val preMiss = computeCacheMissReason(prev, null, modelProviderKey, sysHash, toolHash, promptTransformEffect, null)
@@ -686,10 +740,10 @@ internal class ModelCaller(
                         toolListHash = toolHash,
                         promptTransformEffect = promptTransformEffect,
                         compactionTrigger = sent.trigger ?: capTrigger ?: pendingTrigger,
-                        compactionReason = sent.reason ?: capTrigger?.let { "estimated=${estimatedTotal(sent.messages)} exceeded cap=$inputTokenCap" },
+                        compactionReason = sent.reason ?: capTrigger?.let { "estimated=${estimatedTotal(finalMessages)} exceeded cap=$inputTokenCap" },
                         foldedSteps = sent.foldedSteps,
                         capCheckResult = capCheckResult,
-                        estimatedInputTokens = estimatedTotal(sent.messages),
+                        estimatedInputTokens = estimatedTotal(finalMessages),
                         hasImages = hasImages,
                         vision = using.capabilities.vision,
                     )
@@ -703,15 +757,15 @@ internal class ModelCaller(
             }
             val effectiveCompactionReason = when {
                 overflowRewrote -> "provider reported context too long"
-                effectiveTrigger == "cap_100k" -> sent.reason ?: "estimated=${estimatedTotal(sent.messages)} exceeded cap=$inputTokenCap"
+                effectiveTrigger == "cap_100k" -> sent.reason ?: "estimated=${estimatedTotal(finalMessages)} exceeded cap=$inputTokenCap"
                 else -> sent.reason
             }
             if (effectiveTrigger != null) pendingTrigger = effectiveTrigger
-            val estInputTokens = estimatedTotal(sent.messages)
+            val estInputTokens = estimatedTotal(finalMessages)
             val (nextCompaction, reportCompressed) = CompactionPolicy.sent(compaction, sent.foldedSteps)
             try {
                 // 差异的 base 被裁掉或折叠时,下一次写操作要发全量
-                if (tools.inlineScreen) tools.setVisibleObservations(visibleReads(sent.messages))
+                if (tools.inlineScreen) tools.setVisibleObservations(visibleReads(finalMessages))
                 // 从第一次发出请求起算:失败的请求、退避和换成员都算重试等待,第一次发出之前的准备不算
                 val sentAt = now()
                 lastRetryWaitMs = clock.firstAttemptAt?.let { sentAt - it } ?: 0L
@@ -742,14 +796,14 @@ internal class ModelCaller(
                 )
                 suspend fun invokeModel(): ModelReply = withContext(LoopCallScope()) {
                     if (onText == null) {
-                        if (options == CallOptions.DEFAULT) using.complete(prompt, sent.messages, specs)
-                        else using.complete(prompt, sent.messages, specs, options)
+                        if (options == CallOptions.DEFAULT) using.complete(prompt, finalMessages, specs)
+                        else using.complete(prompt, finalMessages, specs, options)
                     } else if (using is StreamingChatModel) {
-                        if (options == CallOptions.DEFAULT) using.completeStreaming(prompt, sent.messages, specs, onText)
-                        else using.completeStreaming(prompt, sent.messages, specs, options, onText)
+                        if (options == CallOptions.DEFAULT) using.completeStreaming(prompt, finalMessages, specs, onText)
+                        else using.completeStreaming(prompt, finalMessages, specs, options, onText)
                     } else {
-                        val res = if (options == CallOptions.DEFAULT) using.complete(prompt, sent.messages, specs)
-                        else using.complete(prompt, sent.messages, specs, options)
+                        val res = if (options == CallOptions.DEFAULT) using.complete(prompt, finalMessages, specs)
+                        else using.complete(prompt, finalMessages, specs, options)
                         res.also { result ->
                             result.parts.filterIsInstance<Part.Text>().joinToString("") { it.text }
                                 .takeIf(String::isNotEmpty)?.let(onText)
@@ -766,7 +820,7 @@ internal class ModelCaller(
                         sent.rewritten && current != sent.messages -> "history_rewritten folded=" + sent.foldedSteps
                         else -> null
                     }
-                    trace.modelCall(step, using, tools::verb, change, sent.messages) { send() }
+                    trace.modelCall(step, using, tools::verb, change, finalMessages) { send() }
                 }
                 overflowRewrote = false
                 compaction = nextCompaction
@@ -779,7 +833,8 @@ internal class ModelCaller(
                 lastCallDiagnostics = lastCallDiagnostics?.copy(cacheMissReason = finalMissReason)
                 lastOverhead[role] = overhead
                 reply.usage?.let {
-                    compressor.calibrate(sent.estimate + overhead, it.inputTokens)
+                    val sentEst = if (ephemeralTail == null) sent.estimate else TokenEstimate.of(finalMessages)
+                    compressor.calibrate(sentEst + overhead, it.inputTokens)
                     compressor.noteActual(contextTokens, it.inputTokens)
                 }
                 return reply

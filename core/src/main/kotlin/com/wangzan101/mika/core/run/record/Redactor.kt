@@ -3,6 +3,7 @@ package com.wangzan101.mika.core.run.record
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -221,6 +222,72 @@ object Redactor {
     private val JWT = Regex("""\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}""")
     private val LONG_WITH_SLASH = Regex("""[A-Za-z0-9_\-+/=]{32,}""")
     private val LONG = Regex("""[A-Za-z0-9_\-+=]{32,}""")
+    private val ASSIGNMENT_SECRET = Regex(
+        """(?i)((?:\b(?:password|passwd|pwd|passcode|token|tokens|api[_-]?key|secret|secret[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|session[_-]?key|auth[_-]?key|otp|pin|auth|authorization|cookie|session(?:_?id)?|credential|credentials|csrf|xsrf|jwt|bearer|sig|signature)|密码|口令)\s*[=:：]\s*)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;}"'\]]+)"""
+    )
+    private val URL_BASIC_AUTH = Regex("""(?i)(https?://)[^:@/\s]+:[^@/\s]+@""")
+    private val CLI_USER_PASS = Regex("""((?:^|\s)(?:-u\s+|--user(?:\s+|=)))(?:"[^"\s]+:[^"]*"|'[^'\s]+:[^']*'|[^\s"']+:[^\s"']+)""")
+    private val COMMAND_TOOL_NAMES = setOf(
+        "phone_system_command", "system_command", "run_command", "root_command", "root_run_command",
+    )
+    private val COMMAND_ARG_KEYS = setOf("command", "cmd", "script", "code")
+    private val SENSITIVE_ESCALATION_VERBS = setOf(
+        Verb.MemorySave, Verb.MemoryEdit, Verb.Script, Verb.PhoneCommand,
+        Verb.NoticesRead, Verb.PhoneRun, Verb.TypeText, Verb.RunCommand, Verb.RootCommand,
+    )
+
+    /**
+     * Redact Light's rejected tool arguments before embedding them into Main's `light_escalation` notice.
+     * Applies [args] plus recursive JSON secret-key masking ([secretName]), `command` masking for shell/root
+     * command tools, and safe fallback redaction on malformed/non-JSON payloads.
+     */
+    internal fun escalationArgs(verb: Verb?, toolName: String, argsJson: String): String {
+        val rawTrimmed = argsJson.trim()
+        if (rawTrimmed.isEmpty()) return ""
+        val isCommandTool = verb == Verb.PhoneCommand || verb == Verb.RunCommand || verb == Verb.RootCommand ||
+            toolName in COMMAND_TOOL_NAMES
+        val isSensitiveTool = isCommandTool || verb in SENSITIVE_ESCALATION_VERBS
+        val base = args(verb, argsJson, secretField = true).trim()
+        if (base.isEmpty()) return ""
+        val parsed = try {
+            Json.parseToJsonElement(base)
+        } catch (_: SerializationException) {
+            null
+        }
+        if (parsed == null) {
+            val trimmed = base.trimStart()
+            val looksJson = trimmed.startsWith("{") || trimmed.startsWith("[") || base.contains("\":")
+            return if (isSensitiveTool || looksJson) MASK else scrubScalarString(base)
+        }
+        if (isSensitiveTool && parsed !is JsonObject) {
+            return MASK
+        }
+        return maskJsonElement(parsed, maskCommand = isCommandTool).toString()
+    }
+
+    private fun maskJsonElement(el: JsonElement, maskCommand: Boolean, depth: Int = 0): JsonElement {
+        if (depth > 32) return JsonPrimitive(MASK)
+        return when (el) {
+            is JsonArray -> JsonArray(el.map { maskJsonElement(it, maskCommand, depth + 1) })
+            is JsonObject -> JsonObject(el.mapValues { (k, v) ->
+                when {
+                    secretName(k) -> JsonPrimitive(MASK)
+                    maskCommand && k.lowercase() in COMMAND_ARG_KEYS -> JsonPrimitive(MASK)
+                    else -> maskJsonElement(v, maskCommand, depth + 1)
+                }
+            })
+            is JsonPrimitive -> if (el.isString) JsonPrimitive(scrubScalarString(el.content)) else el
+        }
+    }
+
+    private fun scrubScalarString(s: String): String {
+        if (s == MASK || s.isEmpty()) return s
+        val withTextRedacted = text(s)
+        val withUrlAuthRedacted = URL_BASIC_AUTH.replace(withTextRedacted, "$1$MASK@")
+        val withCliAuthRedacted = CLI_USER_PASS.replace(withUrlAuthRedacted, "$1$MASK")
+        val withAssignmentsRedacted = ASSIGNMENT_SECRET.replace(withCliAuthRedacted, "$1$MASK")
+        return pageData(withAssignmentsRedacted)
+    }
 
     /** 值里的 JWT、又长又杂的串、已知格式的 Key。地址里不跨斜杠认(路径各段分开看)。 */
     private fun values(s: String, slash: Boolean): String {

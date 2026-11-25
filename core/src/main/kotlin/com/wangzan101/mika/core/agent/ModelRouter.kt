@@ -44,6 +44,7 @@ class ModelRouter(
     private val lightPools: List<ModelPool> = lightChain.map { it.asPool() }
     private var lightIndex = 0
     private var forcedMain = 0
+    private var consecutiveUnsafeEscalations = 0
     private var disabled = false
 
     /** 当前活跃的轻量模型(可能是组)。 */
@@ -91,14 +92,14 @@ class ModelRouter(
             val detail = "reason=$why step=${ctx.step} hasImages=${ctx.hasImages} vision=${l?.capabilities?.vision ?: false} sameApp=${ctx.sameAppAsLast} lastChanged=${ctx.lastChanged}"
             return RouteDecision(main, usedLight = false, reason = detail)
         }
-        if (forcedMain > 0) {
-            forcedMain--
-            return skipped("forced_main")
-        }
         if (ctx.needsMainUpfront) return skipped("upfront_main")
         if (ctx.finalSummary) return skipped("final_summary")
         if (ctx.lastVerb != null && mainOnly("", ctx.lastVerb)) return skipped("main_only_last_verb:${ctx.lastVerb}")
         if (ctx.requestedTool != null && mainOnly(ctx.requestedTool, null)) return skipped("main_only_tool:${ctx.requestedTool}")
+        if (forcedMain > 0) {
+            forcedMain--
+            return skipped("forced_main")
+        }
         if (l == null) return skipped("no_light_active")
         if (ctx.step <= 1) return skipped("step_1")
         if (ctx.lastWasRecovery) return skipped("recovery")
@@ -109,7 +110,23 @@ class ModelRouter(
     }
 
     /** 出了状况(含轻量模型调用失败、回复被改派给主模型):之后 [TROUBLE_STEPS] 步用主模型。 */
-    fun noteTrouble() { forcedMain = TROUBLE_STEPS }
+    fun noteTrouble() { forcedMain = maxOf(forcedMain, TROUBLE_STEPS) }
+
+    /** 轻量模型返回了被接受的工具调用:重置连续 unsafe_tool 升级计数。 */
+    fun noteLightAccepted() {
+        consecutiveUnsafeEscalations = 0
+    }
+
+    /** 轻量模型因 unsafe_tool(不可逆目标/主模型专属工具)被拒绝并立即升级主模型:首次锁 [TROUBLE_STEPS] 步,连续触发逐步拉长冷却,避免在特权/确认流里反复打回轻量模型。 */
+    fun noteUnsafeEscalation() {
+        consecutiveUnsafeEscalations += 1
+        val lock = when {
+            consecutiveUnsafeEscalations <= 1 -> TROUBLE_STEPS
+            consecutiveUnsafeEscalations == 2 -> ESCALATED_TROUBLE_STEPS
+            else -> MAX_ESCALATED_TROUBLE_STEPS
+        }
+        forcedMain = maxOf(forcedMain, lock)
+    }
 
     /** 这个模型是不是轻量侧(含备援)的成员(不是按对象相等:组里换过成员也要认得出);轻量池本身也算。 */
     fun isLight(m: ChatModel): Boolean = lightChain.any { it === m } || lightPools.any { it.owns(m) }
@@ -133,6 +150,8 @@ class ModelRouter(
 
     companion object {
         const val TROUBLE_STEPS = 2
+        const val ESCALATED_TROUBLE_STEPS = 4
+        const val MAX_ESCALATED_TROUBLE_STEPS = 6
         /** 轻量模型给出这些调用(还有 do_steps)时不执行,这一步改问主模型:放弃、确认、接管、追问、沙箱命令都由主模型决定。 */
         private val MAIN_ONLY_VERBS = setOf(
             Verb.EndNotDone, Verb.RequestConfirmation, Verb.HandToUser, Verb.AskUser, Verb.HandleObstacle,
@@ -144,6 +163,7 @@ class ModelRouter(
 
         private val MAIN_ONLY_NAMES = setOf(
             DO_STEPS_TOOL,
+            "phone_gesture",
             "phone_system_command",
             "system_command",
             "run_command",
@@ -152,6 +172,7 @@ class ModelRouter(
             "request_confirmation",
             "hand_to_user",
             "root_command",
+            "root_run_command",
         )
 
         private val UPFRONT_MAIN_MARKERS = listOf(
