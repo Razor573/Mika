@@ -554,15 +554,7 @@ class OperationGuards(private val stepBudget: Int? = null) {
             stalledToolEpochSeq.clear()
             consecutiveSequenceBlocks = 0
             lastBreakerTrigger = stop?.code
-        } else if (ok) {
-            // Only a call that actually ran counts toward a repeating
-            // tool sequence. A failed call (unknown_tool, invalid target,
-            // etc.) never executed, so it must not build up the loop
-            // sequence and get the next call blocked as a loop: e.g.
-            // audio_transcribe called while transcription is off returns
-            // unknown_tool, and that must stay unknown_tool, not turn
-            // into tool_sequence_loop_blocked. Failures are tracked
-            // separately by consecutiveFailures / too_many_failures.
+        } else {
             stalledToolSeq.pushCapped(tool, cap = SEQUENCE_TRACK_KEEP)
             stalledToolOkSeq.pushCapped(ok, cap = SEQUENCE_TRACK_KEEP)
             stalledToolEpochSeq.pushCapped(actionEpoch, cap = SEQUENCE_TRACK_KEEP)
@@ -773,6 +765,13 @@ class OperationGuards(private val stepBudget: Int? = null) {
             "do_each", "phone_run", "do_steps",
             "web_tap", "web_type_text", "web_clear_text", "web_click", "web_type",
             "web_navigate", "web_interact", "web_open",
+            // A successful transcription returns new text, so it is
+            // progress, not a loop: it clears the tool sequence. Without
+            // this, audio_transcribe called repeatedly (success, then
+            // unknown_tool while transcription is off, then success
+            // again) builds up a 3x sequence and the next offered call
+            // gets blocked as tool_sequence_loop_blocked.
+            "audio_transcribe",
         )
         const val STUCK_SCREEN_THRESHOLD = 3
         const val STUCK_SCREEN_MAX_UNCHANGED = 12
