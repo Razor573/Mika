@@ -19,11 +19,20 @@ internal object UsageMeter {
     /** 一条回复的真实用量,和发出那次请求时固定开销的估算(未乘比值)。 */
     data class Anchor(val usage: Usage, val overhead: Int)
 
-    fun of(messages: List<Message>, overhead: Int, scale: Double, anchorOf: (Message) -> Anchor? = { null }): Int {
+    fun of(messages: List<Message>, overhead: Int, scale: Double, anchorOf: (Message) -> Anchor? = { null }): Int =
+        of(messages, overhead, scale, TokenEstimate::of, anchorOf)
+
+    fun of(
+        messages: List<Message>,
+        overhead: Int,
+        scale: Double,
+        estimateOf: (List<Message>) -> Int,
+        anchorOf: (Message) -> Anchor? = { null },
+    ): Int {
         val at = messages.indexOfLast { it.role == Role.Assistant && anchorOf(it) != null }
-        if (at < 0) return estimate(TokenEstimate.of(messages) + overhead, scale)
+        if (at < 0) return estimate(estimateOf(messages) + overhead, scale)
         val a = anchorOf(messages[at])!!
-        val later = TokenEstimate.of(messages.subList(at + 1, messages.size)) + (overhead - a.overhead)
+        val later = estimateOf(messages.subList(at + 1, messages.size)) + (overhead - a.overhead)
         return a.usage.inputTokens + resent(a.usage) + estimate(later, scale)
     }
 

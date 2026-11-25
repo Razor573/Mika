@@ -69,13 +69,24 @@ fun ChatModel.metered(
     if (this is StreamingChatModel) MeteredStreamingModel(this, source, sink, beforeCall, beforeRetry)
     else MeteredModel(this, source, sink, beforeCall, beforeRetry)
 
+internal fun ChatModel.unwrapWireModel(): ChatModel {
+    var cur: ChatModel = this
+    while (cur is UnwrappingChatModel) cur = cur.innerModel
+    return cur
+}
+
+internal interface UnwrappingChatModel {
+    val innerModel: ChatModel
+}
+
 private open class MeteredModel(
     private val inner: ChatModel,
     protected val source: UsageSource,
     protected val sink: UsageSink,
     private val beforeCall: (UsageSource) -> Unit,
     private val beforeRetry: (UsageSource, Int) -> Unit,
-) : ChatModel {
+) : ChatModel, UnwrappingChatModel {
+    override val innerModel: ChatModel get() = inner
     override val capabilities get() = inner.capabilities
     override val name: String get() = inner.name
     override val provider: String get() = source.providerName.ifBlank { source.providerId }

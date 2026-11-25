@@ -736,4 +736,142 @@ class UsageLogEnhancedTest {
         assertEquals(2, summary["unreportedCalls"]?.jsonPrimitive?.int)
         assertEquals(2, summary["unreportedReasons"]?.jsonObject?.get("network_timeout")?.jsonPrimitive?.int)
     }
+
+    @Test
+    fun usageLogRecordsCap100kPreCapReasonAcrossRetryAndClearsTriggerOnNextStep() = runTest {
+        val screen = object : ScreenPort by FakeScreen() {
+            private var n = 0
+            override suspend fun snapshot(): ScreenSnapshot {
+                n++
+                val children = (1..150).map { i ->
+                    UiTreeNode("TextView", listOf(0, i * 40, 900, i * 40 + 30), text = "Row-$n-$i " + "payload-".repeat(120))
+                }
+                return ScreenSnapshot(
+                    "snap-$n",
+                    "com.shop.app",
+                    listOf(UiElement("@e1", "button", "Item-$n", 100, 100, listOf(0, 100, 300, 180), null, true, false, false)),
+                    1080,
+                    2400,
+                    windows = listOf(UiWindowTree(1, "application", 1, "Shop-$n", "com.shop.app", true, true, children)),
+                )
+            }
+            override suspend fun tapRef(ref: String, snapshotId: String) = ActionResult.Ok(changed = true)
+        }
+        var callNum = 0
+        val mainModel = object : ChatModel {
+            override val name = "gemini-4-hydrogen"
+            override val provider = "vertex"
+            override val capabilities = Capabilities(vision = false, contextTokens = 1_000_000, toolCalls = true, reasoning = false)
+            override suspend fun complete(system: String, messages: List<Message>, tools: List<ToolSpec>): ModelReply {
+                val cur = ++callNum
+                val inTok = com.wangzan101.mika.core.agent.TokenEstimate.of(messages) + com.wangzan101.mika.core.agent.TokenEstimate.of(system)
+                val usage = Usage(inTok, 30, (inTok * 0.5).toInt())
+                return when (cur) {
+                    1 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, usage)
+                    2 -> ModelReply(listOf(call("phone_tap", """{"ref":"@e1","snapshotId":"snap-1"}""")), StopReason.ToolUse, usage)
+                    3 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, usage)
+                    4 -> ModelReply(listOf(call("phone_tap", """{"ref":"@e1","snapshotId":"snap-2"}""")), StopReason.ToolUse, usage)
+                    5 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, usage)
+                    // Step 6 hits cap_100k before sending (>100k across 3 huge observations), then first attempt gets 503 and retries within step 6.
+                    6 -> throw ModelError.Server(503, "unavailable")
+                    7 -> ModelReply(listOf(call("phone_tap", """{"ref":"@e1","snapshotId":"snap-3"}""")), StopReason.ToolUse, usage)
+                    else -> ModelReply(listOf(Part.Text("done")), StopReason.EndTurn, usage)
+                }
+            }
+        }
+        val sink = RecordingEvents()
+        val tally = RunUsageTally()
+        val metered = mainModel.metered(UsageSource("p-main", "vertex", mainModel.name, UsagePurpose.Main), UsageSink { _, _ -> })
+        val outcome = withContext(tally) {
+            AgentLoop(
+                model = metered,
+                tools = toolDispatcher(screen, visionEnabled = false),
+                basePrompt = "BASE",
+                flags = SpeedFlags.OFF,
+                retry = com.wangzan101.mika.core.agent.RetryPolicy(
+                    maxRetries = 3,
+                    baseMs = 1L,
+                    maxBackoffMs = 5L,
+                    jitter = { 0.0 },
+                ),
+                sink = sink,
+                versionCode = 62,
+                versionName = "0.1.57",
+            ).run("Cap 100k logging check")
+        }
+        assertTrue("$outcome", outcome is TaskState.Succeeded)
+        sink.event(tally.event(System.currentTimeMillis()))
+
+        val formatted = UsageLogFormatter.formatEvents(sink.list, runId = "20261125-080000-r6cap", versionCode = 62, versionName = "0.1.57")
+        val rows = formatted.trimEnd().lines().map { Json.parseToJsonElement(it).jsonObject }
+        val replyRows = rows.filter { it["type"]?.jsonPrimitive?.content == "model_reply" }
+        assertEquals(7, replyRows.size)
+
+        // Step 6 (index 5) had cap_100k + 503 retry: trigger & pre-cap reason must survive the retry!
+        val capRow = replyRows[5]
+        assertEquals("cap_100k", capRow["compactionTrigger"]?.jsonPrimitive?.content)
+        val capReason = capRow["compactionReason"]?.jsonPrimitive?.content
+        assertNotNull("compactionReason must survive intra-step retry", capReason)
+        assertFalse(capReason!!.contains("provider reported context too long"))
+        assertTrue("Expected pre-cap exceeded cap=100000, got: $capReason", capReason.endsWith("exceeded cap=100000"))
+        val preCapVal = capReason.substringAfter("estimated=").substringBefore(" ").toInt()
+        assertTrue("preCapVal ($preCapVal) must be > 100000", preCapVal > 100_000)
+        assertTrue((capRow["inputTokens"]?.jsonPrimitive?.int ?: Int.MAX_VALUE) <= 100_000)
+        assertTrue((capRow["estimatedInputTokens"]?.jsonPrimitive?.int ?: 0) > 0)
+
+        // Step 7 (index 6) is a non-compaction step: trigger and reason must NOT leak!
+        val nextRow = replyRows[6]
+        assertTrue(nextRow["compactionTrigger"] == null || nextRow["compactionTrigger"] == kotlinx.serialization.json.JsonNull)
+        assertTrue(nextRow["compactionReason"] == null || nextRow["compactionReason"] == kotlinx.serialization.json.JsonNull)
+
+        // Round-trip through formatLines preserves R6 fields cleanly.
+        val roundTrip = UsageLogFormatter.formatLines(
+            sink.list.asSequence().map { RunEvent.encode(it) },
+            runId = "20261125-080000-r6cap",
+            versionCode = 62,
+            versionName = "0.1.57",
+        )
+        assertTrue(roundTrip.contains(""""compactionTrigger":"cap_100k""""))
+        assertTrue(roundTrip.contains(capReason))
+    }
+
+    @Test
+    fun failedPreAttemptMainCallDoesNotLeakPreviousStepDiagnostics() = runTest {
+        var transformCalls = 0
+        val mainModel = ScriptedModel(
+            name = "gemini-4-hydrogen",
+            provider = "vertex",
+            script = { step ->
+                when (step) {
+                    1 -> ModelReply(listOf(call("phone_observe")), StopReason.ToolUse, Usage(2000, 30, 0))
+                    else -> ModelReply(listOf(Part.Text("done")), StopReason.EndTurn, Usage(2500, 20, 0))
+                }
+            },
+        )
+        val sink = RecordingEvents()
+        val outcome = AgentLoop(
+            model = mainModel,
+            tools = toolDispatcher(FakeScreen(), visionEnabled = false),
+            basePrompt = "BASE",
+            flags = SpeedFlags.OFF,
+            sink = sink,
+            promptTransform = { base ->
+                transformCalls++
+                if (transformCalls == 2) throw IllegalStateException("prompt transform boom")
+                base
+            },
+        ).run("Pre-attempt failure check")
+        assertTrue("$outcome", outcome is TaskState.Failed)
+        val replies = sink.list.filterIsInstance<RunEvent.ModelReply>()
+        assertEquals(2, replies.size)
+        val step1 = replies[0]
+        val step2Failed = replies[1]
+        assertTrue((step1.estimatedInputTokens ?: 0) > 0)
+        assertEquals(false, step2Failed.accepted)
+        assertEquals(null, step2Failed.estimatedInputTokens)
+        assertEquals(null, step2Failed.compactionTrigger)
+        assertEquals(null, step2Failed.compactionReason)
+        assertEquals(null, step2Failed.foldedSteps)
+        assertEquals(null, step2Failed.capCheckResult)
+    }
 }

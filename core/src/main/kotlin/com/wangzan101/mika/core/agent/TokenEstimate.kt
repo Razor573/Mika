@@ -22,10 +22,10 @@ object TokenEstimate {
         var text = 0.0
         for (m in messages) for (p in m.parts) when (p) {
             is Part.Image -> images += image(p.width, p.height)
-            is Part.Text -> text += chars(p.text)
-            is Part.Thinking -> text += chars(p.text)
-            is Part.ToolCall -> text += chars(p.name) + chars(p.argsJson)
-            is Part.ToolResult -> text += chars(p.content)
+            is Part.Text -> text += charsOf(p.text)
+            is Part.Thinking -> text += charsOf(p.text)
+            is Part.ToolCall -> text += charsOf(p.name) + charsOf(p.argsJson)
+            is Part.ToolResult -> text += charsOf(p.content)
         }
         return images + ceil(text).toInt()
     }
@@ -46,7 +46,7 @@ object TokenEstimate {
     private const val SMOOTHING = 0.3
 
     /** 同一口径估算一段文字,用于不在消息里的固定开销(基础提示词、工具定义)。 */
-    fun of(text: String): Int = ceil(chars(text)).toInt()
+    fun of(text: String): Int = ceil(charsOf(text)).toInt()
 
     /** 截到不超过 [maxTokens] 个 token 的最长前缀,末尾接 [hint];只在上下文预算处用。 */
     fun clip(text: String, maxTokens: Int, hint: String = "…"): String {
@@ -73,6 +73,8 @@ object TokenEstimate {
     )
 
     private fun wide(cp: Int) = Character.UnicodeScript.of(cp) in WIDE_SCRIPTS || Character.UnicodeBlock.of(cp) in WIDE_BLOCKS
+
+    internal fun charsOf(s: String): Double = chars(s)
 
     private fun chars(s: String): Double {
         var han = 0

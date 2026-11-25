@@ -4,6 +4,8 @@ import com.wangzan101.mika.core.run.trace.RunTrace
 import com.wangzan101.mika.core.model.Author
 import com.wangzan101.mika.core.model.CallOptions
 import com.wangzan101.mika.core.model.ChatModel
+import com.wangzan101.mika.core.model.GeminiCodec
+import com.wangzan101.mika.core.model.GeminiModel
 import com.wangzan101.mika.core.model.InferenceTimeoutOverride
 import com.wangzan101.mika.core.model.LightPrompt
 import com.wangzan101.mika.core.model.Message
@@ -13,12 +15,16 @@ import com.wangzan101.mika.core.model.ModelErrors
 import com.wangzan101.mika.core.model.ModelNeed
 import com.wangzan101.mika.core.model.ModelReply
 import com.wangzan101.mika.core.model.Part
+import com.wangzan101.mika.core.model.ResponsesModel
 import com.wangzan101.mika.core.model.Role
 import com.wangzan101.mika.core.model.StreamingChatModel
 import com.wangzan101.mika.core.model.ToolSpec
 import com.wangzan101.mika.core.model.Usage
+import com.wangzan101.mika.core.model.VertexModel
+import com.wangzan101.mika.core.model.AntigravityModel
 import com.wangzan101.mika.core.model.usage.ConversationMeter
 import com.wangzan101.mika.core.model.usage.LoopCallScope
+import com.wangzan101.mika.core.model.usage.unwrapWireModel
 import com.wangzan101.mika.core.run.record.Redactor
 import com.wangzan101.mika.core.run.record.RunEvent
 import com.wangzan101.mika.core.run.record.UsageCostEstimator
@@ -34,6 +40,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlin.math.ceil
 
 internal data class CallDiagnostics(
     val provider: String? = null,
@@ -176,10 +183,84 @@ internal class ModelCaller(
         if (usage != null && overhead != null) anchors[m] = key to UsageMeter.Anchor(usage, overhead)
     }
 
+    /** 仅清空指定角色的锚点，避免主/轻量模型压缩时互相抹除对方的真实用量锚点。 */
+    private fun clearAnchorsFor(role: String) {
+        val it = anchors.entries.iterator()
+        while (it.hasNext()) {
+            if (it.next().value.first == role) it.remove()
+        }
+    }
+
     /** 发给 [using] 所在角色的整份请求有多大:最近一条该角色带真实用量的回复作锚点,没有就全量估算(见 [UsageMeter])。 */
-    private fun requestTokens(messages: List<Message>, using: ChatModel, overhead: Int, scale: Double): Int {
+    private fun requestTokens(
+        messages: List<Message>,
+        using: ChatModel,
+        overhead: Int,
+        scale: Double,
+        estimateOf: (List<Message>) -> Int = TokenEstimate::of,
+    ): Int {
         val key = roleKey(using)
-        return UsageMeter.of(messages, overhead, scale) { m -> anchors[m]?.takeIf { it.first == key }?.second }
+        return UsageMeter.of(messages, overhead, scale, estimateOf) { m -> anchors[m]?.takeIf { it.first == key }?.second }
+    }
+
+    private fun isGeminiFamily(m: ChatModel): Boolean {
+        val raw = m.unwrapWireModel()
+        return raw is GeminiModel || raw is VertexModel || raw is AntigravityModel || raw.provider in GEMINI_PROVIDERS
+    }
+
+    private fun isResponsesModel(m: ChatModel): Boolean {
+        val raw = m.unwrapWireModel()
+        return raw is ResponsesModel || raw.provider == "openai_responses"
+    }
+
+    private fun tokenCounterFor(m: ChatModel): (List<Message>) -> Int {
+        return when {
+            isGeminiFamily(m) -> {
+                val imgTokens = if (m.capabilities.vision) GEMINI_IMAGE_TOKENS else OMITTED_IMAGE_TOKENS
+                { ms ->
+                    var images = 0
+                    var text = 0.0
+                    for (msg in ms) for (p in msg.parts) when (p) {
+                        is Part.Image -> images += imgTokens
+                        is Part.Text -> text += TokenEstimate.charsOf(p.text)
+                        is Part.Thinking -> Unit
+                        is Part.ToolCall -> text += TokenEstimate.charsOf(p.name) + TokenEstimate.charsOf(p.argsJson)
+                        is Part.ToolResult -> text += TokenEstimate.charsOf(p.content)
+                    }
+                    images + ceil(text).toInt()
+                }
+            }
+            isResponsesModel(m) -> { ms ->
+                var images = 0
+                var text = 0.0
+                for (msg in ms) for (p in msg.parts) when (p) {
+                    is Part.Image -> images += if (m.capabilities.vision) TokenEstimate.image(p.width, p.height) else OMITTED_IMAGE_TOKENS
+                    is Part.Text -> text += TokenEstimate.charsOf(p.text)
+                    is Part.Thinking -> Unit
+                    is Part.ToolCall -> text += TokenEstimate.charsOf(p.name) + TokenEstimate.charsOf(p.argsJson)
+                    is Part.ToolResult -> text += TokenEstimate.charsOf(p.content)
+                }
+                images + ceil(text).toInt()
+            }
+            else -> TokenEstimate::of
+        }
+    }
+
+    private fun specsOverhead(m: ChatModel, specs: List<ToolSpec>, forceToolCall: Boolean): Int {
+        if (specs.isEmpty()) return 0
+        if (!isGeminiFamily(m)) {
+            return specs.sumOf { TokenEstimate.of(it.name + it.description + it.parametersJsonSchema) }
+        }
+        val stripArrayBounds = forceToolCall && specs.isNotEmpty()
+        return specs.sumOf { spec ->
+            val cleanParams = runCatching {
+                val el = Json.parseToJsonElement(spec.parametersJsonSchema)
+                val clean = GeminiCodec.sanitize(el, stripArrayBounds)
+                val hasProps = (clean as? JsonObject)?.get("properties")?.let { it is JsonObject && it.isNotEmpty() } == true
+                if (hasProps) clean.toString() else ""
+            }.getOrDefault(spec.parametersJsonSchema)
+            TokenEstimate.of(spec.name + spec.description + cleanParams)
+        }
     }
 
     /** 本任务里分工是否在起作用:开关打开、轻量模型能接手机步、没因不可恢复的错误停用。 */
@@ -388,6 +469,7 @@ internal class ModelCaller(
             lightRejectionReason: String? = null,
             ephemeralTail: Message? = null,
         ): Pair<ModelReply, ChatModel> {
+            lastCallDiagnostics = null
             val (reply, used) = try {
                 askRouted(history, specs, step, onText = onText, ephemeralTail = ephemeralTail)
             } catch (e: Throwable) {
@@ -587,6 +669,7 @@ internal class ModelCaller(
         history: List<Message>, specs: List<ToolSpec>, step: Int, using: ChatModel = model, onText: ((String) -> Unit)? = null,
         ephemeralTail: Message? = null,
     ): Pair<ModelReply, ChatModel> {
+        lastCallDiagnostics = null
         if (using !== model) return complete(viewFor(history, using), specs, using.asPool(), retry, step, onText, ephemeralTail = ephemeralTail)
         // 整条链都失败时的说法(MK-1 第 2 批):以主模型最初的错误为主、附每个备援错在哪(见 [terminalError]);
         // 只试过一个模型就原样交出,和没有备援时一致。每步先把错误记进 [trialLog]:切过去之后,
@@ -656,6 +739,8 @@ internal class ModelCaller(
         var timeoutRetries: Int = 0
         var lastTimeoutMs: Long? = null
         var lastRetryReason: String? = null
+        var pendingCompactionTrigger: String? = null
+        var pendingCompactionReason: String? = null
     }
 
     /**
@@ -748,55 +833,68 @@ internal class ModelCaller(
         val prompt = if (options.forceToolCall) LightPrompt.ensure(effectivePrompt) else effectivePrompt
         val sysHash = sha256Hex12(prompt)
         val toolHash = sha256Hex12(specs.joinToString("") { "\n\n" + it.name + "\n" + it.description + "\n" + it.parametersJsonSchema })
-        val overhead = TokenEstimate.of(prompt) + specs.sumOf { TokenEstimate.of(it.name + it.description + it.parametersJsonSchema) }
+        val counter = tokenCounterFor(using)
+        val overhead = TokenEstimate.of(prompt) + specsOverhead(using, specs, options.forceToolCall)
+        val maxImages = using.capabilities.maxImages
         val contextTokens = using.capabilities.contextTokens
         val role = roleKey(using)
         val compressor = compressorFor(using)
         var compaction = compactions[role] ?: CompactionState()
         var overflowRetried = false
         var overflowRewrote = false
-        var pendingTrigger: String? = null
+        var pendingTrigger: String? = clock.pendingCompactionTrigger
+        var pendingReason: String? = clock.pendingCompactionReason
         val hasImages = history.any { m -> m.parts.any { it is Part.Image } }
         val modelProviderKey = "${using.name}|${using.provider}"
         while (true) {
-            val current = ContextRecovery.ensure(history, compressor.current(history, contextTokens))
-            val currentTokens = requestTokens(current, using, overhead, compressor.scale)
-            var raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, using.capabilities.maxImages)
-            if (raw.rewritten) anchors.clear()
+            val current = ContextRecovery.ensure(history, compressor.current(history, contextTokens, maxImages))
+            val currentTokens = requestTokens(current, using, overhead, compressor.scale, counter)
+            var raw = compressor.compress(history, contextTokens, currentTokens, compaction.aggressive, overhead, maxImages, counter)
+            if (raw.rewritten) clearAnchorsFor(role)
             var restored = ContextRecovery.ensure(history, raw.messages)
-            var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
-            fun withTail(ms: List<Message>): List<Message> = if (ephemeralTail == null) ms else ms + ephemeralTail
-            fun estimatedTotal(ms: List<Message>): Int {
-                val est = TokenEstimate.of(ms)
-                return maxOf(
-                    requestTokens(ms, using, overhead, compressor.scale),
-                    UsageMeter.estimate(est + overhead, compressor.scale),
-                    est + overhead,
-                )
+            var sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = counter(restored))
+            if (raw.rewritten && restored !== raw.messages) {
+                compressor.adopt(history, contextTokens, sent.messages, sent.foldedSteps, aggressive = compaction.aggressive, tokenCounter = counter)
             }
+            fun withTail(ms: List<Message>): List<Message> = if (ephemeralTail == null) ms else ms + ephemeralTail
+            fun estimatedTotal(ms: List<Message>): Int = requestTokens(ms, using, overhead, compressor.scale, counter)
             fun exceedsCap(ms: List<Message>): Boolean =
                 inputTokenCap != null && estimatedTotal(ms) > inputTokenCap
             var finalMessages = withTail(sent.messages)
             var capTrigger: String? = null
             var capCheckResult = "ok"
+            var preCapEstimated: Int? = null
             if (inputTokenCap != null && exceedsCap(finalMessages)) {
+                val preCap = estimatedTotal(finalMessages)
+                preCapEstimated = preCap
                 capTrigger = "cap_100k"
                 capCheckResult = "compacted"
                 if (!compaction.aggressive || !raw.rewritten) {
-                    raw = compressor.compress(history, contextTokens, currentTokens = Int.MAX_VALUE, aggressive = true, fixedOverhead = overhead, maxImages = using.capabilities.maxImages)
-                    if (raw.rewritten) anchors.clear()
+                    raw = compressor.compress(
+                        history,
+                        contextTokens,
+                        currentTokens = preCap,
+                        aggressive = compaction.aggressive,
+                        fixedOverhead = overhead,
+                        maxImages = maxImages,
+                        tokenCounter = counter,
+                        forceCap = true,
+                    )
+                    if (raw.rewritten) clearAnchorsFor(role)
                     restored = ContextRecovery.ensure(history, raw.messages)
-                    sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = TokenEstimate.of(restored))
-                    compressor.adopt(history, contextTokens, sent.messages, sent.foldedSteps, aggressive = compaction.aggressive)
+                    sent = if (restored === raw.messages) raw else raw.copy(messages = restored, estimate = counter(restored))
+                    if (restored !== raw.messages) {
+                        compressor.adopt(history, contextTokens, sent.messages, sent.foldedSteps, aggressive = compaction.aggressive, tokenCounter = counter)
+                    }
                     finalMessages = withTail(sent.messages)
                 }
                 if (exceedsCap(finalMessages)) {
                     capCheckResult = "pruned"
                     val capped = HistoryPruner.enforceCap(sent.messages, tools.index) { !exceedsCap(withTail(it)) }
                     if (capped !== sent.messages) {
-                        anchors.clear()
-                        sent = sent.copy(messages = capped, estimate = TokenEstimate.of(capped), rewritten = true)
-                        compressor.adopt(history, contextTokens, capped, sent.foldedSteps, aggressive = compaction.aggressive)
+                        clearAnchorsFor(role)
+                        sent = sent.copy(messages = capped, estimate = counter(capped), rewritten = true)
+                        compressor.adopt(history, contextTokens, capped, sent.foldedSteps, aggressive = compaction.aggressive, tokenCounter = counter)
                         finalMessages = withTail(sent.messages)
                     }
                 }
@@ -815,8 +913,8 @@ internal class ModelCaller(
                         promptVersion = lastPromptVersion,
                         toolListHash = toolHash,
                         promptTransformEffect = promptTransformEffect,
-                        compactionTrigger = sent.trigger ?: capTrigger ?: pendingTrigger,
-                        compactionReason = sent.reason ?: capTrigger?.let { "estimated=${estimatedTotal(finalMessages)} exceeded cap=$inputTokenCap" },
+                        compactionTrigger = capTrigger ?: sent.trigger ?: pendingTrigger,
+                        compactionReason = "estimated=$preCap exceeded cap=$inputTokenCap",
                         foldedSteps = sent.foldedSteps,
                         capCheckResult = capCheckResult,
                         estimatedInputTokens = estimatedTotal(finalMessages),
@@ -828,15 +926,20 @@ internal class ModelCaller(
             }
             val effectiveTrigger = when {
                 overflowRewrote -> "overflow"
-                capTrigger != null && (sent.trigger == null || (!compaction.aggressive && sent.trigger == "overflow")) -> capTrigger
+                capTrigger != null -> capTrigger
                 else -> sent.trigger ?: pendingTrigger
             }
             val effectiveCompactionReason = when {
                 overflowRewrote -> "provider reported context too long"
-                effectiveTrigger == "cap_100k" -> sent.reason ?: "estimated=${estimatedTotal(finalMessages)} exceeded cap=$inputTokenCap"
-                else -> sent.reason
+                effectiveTrigger == "cap_100k" -> preCapEstimated?.let { "estimated=$it exceeded cap=$inputTokenCap" } ?: sent.reason ?: pendingReason
+                else -> sent.reason ?: pendingReason
             }
-            if (effectiveTrigger != null) pendingTrigger = effectiveTrigger
+            if (effectiveTrigger != null) {
+                pendingTrigger = effectiveTrigger
+                pendingReason = effectiveCompactionReason
+                clock.pendingCompactionTrigger = effectiveTrigger
+                clock.pendingCompactionReason = effectiveCompactionReason
+            }
             val estInputTokens = estimatedTotal(finalMessages)
             val (nextCompaction, reportCompressed) = CompactionPolicy.sent(compaction, sent.foldedSteps)
             try {
@@ -924,7 +1027,7 @@ internal class ModelCaller(
                 lastCallDiagnostics = lastCallDiagnostics?.copy(cacheMissReason = finalMissReason)
                 lastOverhead[role] = overhead
                 reply.usage?.let {
-                    val sentEst = if (ephemeralTail == null) sent.estimate else TokenEstimate.of(finalMessages)
+                    val sentEst = if (ephemeralTail == null) sent.estimate else counter(finalMessages)
                     compressor.calibrate(sentEst + overhead, it.inputTokens)
                     compressor.noteActual(contextTokens, it.inputTokens)
                 }
@@ -932,12 +1035,12 @@ internal class ModelCaller(
             } catch (e: ModelError.ContextTooLong) {
                 onText?.invoke("")
                 val (after, again) = CompactionPolicy.overflow(compaction, overflowRetried) {
-                    compressor.overflow(history, contextTokens, overhead)
+                    compressor.overflow(history, contextTokens, overhead, maxImages, counter)
                 }
                 compaction = after
                 compactions[role] = compaction
                 overflowRetried = true
-                if (again) { anchors.clear(); overflowRewrote = true }
+                if (again) { clearAnchorsFor(role); overflowRewrote = true }
                 if (!again) throw e
             } catch (e: ModelError) {
                 onText?.invoke("")
@@ -1007,6 +1110,9 @@ internal class ModelCaller(
         private const val RATE_LIMIT_FAILOVER_RETRIES = 1
         /** 有备援时，超过这段 Retry-After 就直接切换备援。 */
         private const val RATE_LIMIT_FAILOVER_WAIT_BUDGET_MS = 5_000L
+        private val GEMINI_PROVIDERS = setOf("gemini", "vertex", "antigravity")
+        private const val GEMINI_IMAGE_TOKENS = 258
+        private val OMITTED_IMAGE_TOKENS = TokenEstimate.of("[screenshot omitted: the current model cannot see images]")
     }
 }
 

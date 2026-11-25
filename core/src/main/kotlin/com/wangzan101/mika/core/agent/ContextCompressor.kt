@@ -52,33 +52,31 @@ class ContextCompressor(
     private val keepFullObservations: Int = KEEP_FULL_OBSERVATIONS,
     /** 可选的输入 token 上限(null = 不加额外硬帽,只按模型窗口与 15 步定期压缩工作)。 */
     private val maxInputTokens: Int? = null,
+    private val tokenCounter: (List<Message>) -> Int = TokenEstimate::of,
 ) {
     /** 「真实 / 粗估」比值:每次用量回来就平滑更新([TokenEstimate.calibrated]);只决定什么时候压缩、压到哪一级,不改发过的内容。 */
     private var observed: Double? = null
     /**
-     * 估算乘的比值。真实用量只用来提高这个保守下限,不把后面的增量往下估:
-     * 普通提示词的用量偏低,不代表随后追加的标点密集 JSON 也有同样的字符/token 比。
+     * 估算乘的比值。未校准前取保守值 [UNCALIBRATED_SCALE] (1.2);有真实用量校准后允许降到 1.0,
+     * 避免永久虚高触发误压缩,同时不低于 1.0 防止低估突破硬帽。
      */
-    internal val scale: Double get() = observed?.coerceAtLeast(UNCALIBRATED_SCALE) ?: UNCALIBRATED_SCALE
+    internal val scale: Double get() = observed?.coerceAtLeast(1.0) ?: UNCALIBRATED_SCALE
 
     /** 上一次压缩:它覆盖的完整历史开头 [covered],压成的 [base](粗估 [estimate]);[aggressive]:按模型报超长那一档压的。 */
-    private class View(val covered: List<Message>, val base: List<Message>, val folded: Int, val aggressive: Boolean) {
-        val estimate = TokenEstimate.of(base)
+    private class View(
+        val covered: List<Message>,
+        val base: List<Message>,
+        val folded: Int,
+        val aggressive: Boolean,
+        val estimate: Int,
+    ) {
         var actualPostCompactTokens: Int? = null
     }
     private val views = HashMap<Int, View>()
 
     /** 一次请求发出后:[estimated] 是这次请求的粗估(含固定开销),[actual] 是服务商报的输入 token。 */
     fun calibrate(estimated: Int, actual: Int) {
-        val prev = observed
-        observed = if (prev != null && estimated > 0 && actual > estimated * 1.1) {
-            maxOf(
-                TokenEstimate.calibrated(prev, estimated, actual),
-                actual.toDouble() / estimated * 0.7 + prev * 0.3,
-            ).coerceIn(TokenEstimate.MIN_SCALE, TokenEstimate.MAX_SCALE)
-        } else {
-            TokenEstimate.calibrated(prev, estimated, actual)
-        }
+        observed = TokenEstimate.calibrated(observed, estimated, actual)
     }
 
     /** 记录本次压缩后首次真实请求返回的服务商输入 token，避免低估触发连续重压。 */
@@ -92,17 +90,25 @@ class ContextCompressor(
 
     /** 新任务:压缩状态清空(校准比值留着,同一个模型)。 */
     /** 把外层(例如 100k 硬帽裁剪)改写后的视图记回缓存,避免下一步前缀失效导致每步重复压缩。 */
-    fun adopt(history: List<Message>, contextTokens: Int, messages: List<Message>, foldedSteps: Int, aggressive: Boolean) {
-        views[contextTokens] = View(history.toList(), messages.toList(), foldedSteps, aggressive)
+    fun adopt(
+        history: List<Message>,
+        contextTokens: Int,
+        messages: List<Message>,
+        foldedSteps: Int,
+        aggressive: Boolean,
+        tokenCounter: (List<Message>) -> Int = this.tokenCounter,
+    ) {
+        val snapshot = messages.toList()
+        views[contextTokens] = View(history.toList(), snapshot, foldedSteps, aggressive, tokenCounter(snapshot))
     }
 
     fun forget() = views.clear()
 
-    private fun tokens(ms: List<Message>) = TokenEstimate.of(ms) * scale
+    private fun tokens(ms: List<Message>, counter: (List<Message>) -> Int) = counter(ms) * scale
 
     /** 上一次压缩之后实际会发出的消息(没有压缩过就是完整历史);调用方据此算当前上下文大小。 */
-    fun current(history: List<Message>, contextTokens: Int): List<Message> =
-        sent(valid(views[contextTokens], history), history)
+    fun current(history: List<Message>, contextTokens: Int, maxImages: Int = Int.MAX_VALUE): List<Message> =
+        HistoryPruner.limitImages(sent(valid(views[contextTokens], history), history), maxImages)
 
     /**
      * [currentTokens]:整份请求的大小(含固定开销,见 [UsageMeter]);null 时按 [current] 加 [fixedOverhead] 全量估算。越过触发点才压缩。
@@ -118,25 +124,28 @@ class ContextCompressor(
         aggressive: Boolean = false,
         fixedOverhead: Int = 0,
         maxImages: Int = Int.MAX_VALUE,
+        tokenCounter: (List<Message>) -> Int = this.tokenCounter,
+        forceCap: Boolean = false,
     ): Compressed {
         val limits = ContextLimits.of(contextTokens, triggerOverride, maxInputTokens)
         val last = views[contextTokens]
         val view = valid(last, history)
-        val sent = sent(view, history)
+        val rawSent = sent(view, history)
+        val sent = HistoryPruner.limitImages(rawSent, maxImages)
         val delta = if (view == null) history else history.subList(view.covered.size, history.size)
         val stepsSinceCompact = delta.count { it.role == Role.Assistant && it.parts.any { p -> p is Part.ToolCall } }
         val periodicCompact = foldEvery == null && compactEverySteps > 0 && stepsSinceCompact >= compactEverySteps
-        val rawSize = UsageMeter.estimate(TokenEstimate.of(sent) + fixedOverhead, scale)
+        val rawSize = UsageMeter.estimate(tokenCounter(sent) + fixedOverhead, scale)
         val size = currentTokens ?: rawSize
         val effectiveCap = maxInputTokens?.let { minOf(limits.usable, it) } ?: limits.usable
-        val overCap = size > effectiveCap || rawSize > effectiveCap || (maxInputTokens != null && (TokenEstimate.of(sent) + fixedOverhead) > maxInputTokens)
+        val overCap = forceCap || size > effectiveCap
         // 回差:压缩之后至少再长一个 margin 才再压,压不到触发点以下的历史也不会每步都压;但不越过可用窗口,越过了每步都得压
         val trigger = view?.let {
-            val baseAfter = maxOf(UsageMeter.estimate(it.estimate + fixedOverhead, scale), it.actualPostCompactTokens ?: 0)
+            val baseAfter = it.actualPostCompactTokens ?: UsageMeter.estimate(it.estimate + fixedOverhead, scale)
             maxOf(limits.trigger, baseAfter + limits.margin).coerceAtMost(effectiveCap)
         } ?: limits.trigger
         val prefixInvalidated = last != null && view == null
-        val overflowTriggered = aggressive && view?.aggressive != true
+        val overflowTriggered = !forceCap && aggressive && view?.aggressive != true
         // When periodic 15-step compaction is active on a >=100k window without an explicit model trigger override,
         // do not fire premature size_trigger (e.g. 87k) every few steps; compact only on periodic_15, real cap, or overflow.
         val allowSizeTrigger = triggerOverride != null || compactEverySteps <= 0 || effectiveCap < ContextLimits.MAX_INPUT_TOKENS
@@ -156,19 +165,26 @@ class ContextCompressor(
         val triggerDetail = when (triggerReason) {
             "prefix_invalidated" -> "history prefix diverged from cached compaction view"
             "overflow" -> "provider reported context too long"
-            "cap_100k" -> "estimated=${maxOf(size, rawSize)} exceeded cap=$effectiveCap"
+            "cap_100k" -> "estimated=$size exceeded cap=$effectiveCap"
             "size_trigger" -> "estimated=$size exceeded trigger=$trigger"
             "periodic_15" -> "steps_since_compact=$stepsSinceCompact >= interval=$compactEverySteps"
             "round_over" -> "tool_rounds=${toolRounds(sent)} > keepRecent+foldEvery"
             else -> null
         }
         val compact = prefixInvalidated || overflowTriggered || sizeTriggered || overCap || periodicCompact
-        if (!compact && !roundOver) return Compressed(HistoryPruner.limitImages(sent, maxImages), view?.folded ?: 0)
-        val next = if (compact) compact(history, limits, fixedOverhead, aggressive, periodicCompact) else foldToRecent(history)
+        if (!compact && !roundOver) {
+            return Compressed(sent, view?.folded ?: 0, estimate = tokenCounter(sent))
+        }
+        val next = if (compact) {
+            compact(history, limits, fixedOverhead, aggressive = aggressive || forceCap, periodic = periodicCompact && !forceCap, maxImages = maxImages, tokenCounter = tokenCounter, recordAggressive = aggressive)
+        } else {
+            foldToRecent(history, maxImages, tokenCounter)
+        }
         views[contextTokens] = next
         return Compressed(
-            HistoryPruner.limitImages(next.base, maxImages),
+            next.base,
             next.folded,
+            estimate = next.estimate,
             rewritten = true,
             trigger = triggerReason,
             reason = triggerDetail,
@@ -179,10 +195,25 @@ class ContextCompressor(
      * 模型报了上下文超长:从完整历史重新按狠的一档压一次(上次狠压之后历史又长了也重压)。
      * 压出来的比刚发出的小才换上并返回 true(调用方据此重发一次);一样大说明压不动了,返回 false。
      */
-    fun overflow(history: List<Message>, contextTokens: Int, fixedOverhead: Int = 0): Boolean {
-        val current = sent(valid(views[contextTokens], history), history)
-        val next = compact(history, ContextLimits.of(contextTokens, triggerOverride, maxInputTokens), fixedOverhead, aggressive = true, periodic = false)
-        if (next.estimate >= TokenEstimate.of(current)) return false
+    fun overflow(
+        history: List<Message>,
+        contextTokens: Int,
+        fixedOverhead: Int = 0,
+        maxImages: Int = Int.MAX_VALUE,
+        tokenCounter: (List<Message>) -> Int = this.tokenCounter,
+    ): Boolean {
+        val current = HistoryPruner.limitImages(sent(valid(views[contextTokens], history), history), maxImages)
+        val next = compact(
+            history,
+            ContextLimits.of(contextTokens, triggerOverride, maxInputTokens),
+            fixedOverhead,
+            aggressive = true,
+            periodic = false,
+            maxImages = maxImages,
+            tokenCounter = tokenCounter,
+            recordAggressive = true,
+        )
+        if (next.estimate >= tokenCounter(current)) return false
         views[contextTokens] = next
         return true
     }
@@ -201,7 +232,16 @@ class ContextCompressor(
      * 最重的一级整份请求仍超过 [ContextLimits.usable](最近的结果本身太大)时,从最新的开始缩短大结果,直到放得下。
      * 比较的是消息的估算:目标和可用窗口先扣掉固定开销(同一个比值),固定开销只算这一次。
      */
-    private fun compact(history: List<Message>, limits: ContextLimits, fixedOverhead: Int, aggressive: Boolean, periodic: Boolean): View {
+    private fun compact(
+        history: List<Message>,
+        limits: ContextLimits,
+        fixedOverhead: Int,
+        aggressive: Boolean,
+        periodic: Boolean,
+        maxImages: Int = Int.MAX_VALUE,
+        tokenCounter: (List<Message>) -> Int = this.tokenCounter,
+        recordAggressive: Boolean = aggressive,
+    ): View {
         val overhead = UsageMeter.estimate(fixedOverhead, scale)
         val effectiveCap = maxInputTokens?.let { minOf(limits.usable, it) } ?: limits.usable
         val effectiveTarget = minOf(limits.target, (effectiveCap - limits.margin).coerceAtLeast(0))
@@ -229,8 +269,8 @@ class ContextCompressor(
         }
 
         fun pruneObs(c: Compressed): Compressed {
-            val pruned = HistoryPruner.pruneOlderObservations(c.messages, tools, keepFullObservations)
-            return if (pruned === c.messages) c else Compressed(pruned, c.foldedSteps)
+            val pruned = HistoryPruner.limitImages(HistoryPruner.pruneOlderObservations(c.messages, tools, keepFullObservations), maxImages)
+            return if (pruned === c.messages) c else Compressed(pruned, c.foldedSteps, estimate = tokenCounter(pruned))
         }
 
         val ladder = sequence {
@@ -245,26 +285,28 @@ class ContextCompressor(
         var chosen = pruneObs(Compressed(history, 0))
         for (c in ladder) {
             chosen = c
-            if (tokens(c.messages) <= target &&
-                tokens(c.messages) + overhead <= effectiveCap - limits.margin &&
-                (maxInputTokens == null || (TokenEstimate.of(c.messages) + fixedOverhead) <= maxInputTokens)
+            if (tokens(c.messages, tokenCounter) <= target &&
+                tokens(c.messages, tokenCounter) + overhead <= effectiveCap - limits.margin &&
+                (maxInputTokens == null || (tokenCounter(c.messages) + fixedOverhead) <= maxInputTokens)
             ) break
         }
         chosen = chosen.let {
             val capped = HistoryPruner.enforceCap(it.messages, tools) { ms ->
-                tokens(ms) <= window && (maxInputTokens == null || (TokenEstimate.of(ms) + fixedOverhead) <= maxInputTokens)
+                tokens(ms, tokenCounter) <= window && (maxInputTokens == null || (tokenCounter(ms) + fixedOverhead) <= maxInputTokens)
             }
-            if (capped === it.messages) it else Compressed(capped, it.foldedSteps)
+            if (capped === it.messages) it else Compressed(capped, it.foldedSteps, estimate = tokenCounter(capped))
         }
         // 副本:什么都没裁时 chosen 可能就是调用方那份还会追加的历史
-        return View(history.toList(), chosen.messages.toList(), chosen.foldedSteps, aggressive)
+        val base = chosen.messages.toList()
+        return View(history.toList(), base, chosen.foldedSteps, recordAggressive, tokenCounter(base))
     }
 
     /** 只为控轮数:大小没超、模型没报超长,把最早超出的往返折进摘要,留最近 [keepRecent] 个原样(不做按目标的整段缩短,也不换更狠的档)。 */
-    private fun foldToRecent(history: List<Message>): View {
+    private fun foldToRecent(history: List<Message>, maxImages: Int = Int.MAX_VALUE, tokenCounter: (List<Message>) -> Int = this.tokenCounter): View {
         val pruned = HistoryPruner.prune(history, tools, HistoryPruner.Cut(keepRecent))
         val folded = fold(pruned, keepRecent, aggressive = false)
-        return View(history.toList(), folded.messages.toList(), folded.foldedSteps, aggressive = false)
+        val base = HistoryPruner.limitImages(folded.messages, maxImages).toList()
+        return View(history.toList(), base, folded.foldedSteps, aggressive = false, estimate = tokenCounter(base))
     }
 
     /** 一段消息里模型发起工具调用的往返数(折叠摘要没有工具调用,不计)。 */

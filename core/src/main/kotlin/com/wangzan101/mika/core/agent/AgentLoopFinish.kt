@@ -154,11 +154,33 @@ internal suspend fun AgentLoop.finalTurn(
         val retryWaitMs = caller.lastRetryWaitMs
         val repliedAtMs = now()
         val latencyMs = repliedAtMs - asked - retryWaitMs
+        val diag = caller.lastCallDiagnostics
         emit(RunEvent.ModelReply(
             now(), step, RunEvent.clip(Redactor.text(text)), call?.name, call?.let { Redactor.args(tools.verb(it.name), it.argsJson, secretField = false) },
             reply.usage?.inputTokens, reply.usage?.outputTokens, reply.usage?.cachedInputTokens, latencyMs, retryWaitMs = retryWaitMs,
             model = used.name, role = if (caller.recordRoles) caller.roleOf(used) else null,
             group = caller.groupOf(used), repliedAtMs = repliedAtMs,
+            provider = diag?.provider ?: used.provider,
+            accepted = true,
+            attempt = diag?.attempt,
+            retryCount = diag?.retryCount,
+            usageReported = reply.usage != null,
+            hasImages = diag?.hasImages,
+            vision = diag?.vision,
+            cacheMissReason = diag?.cacheMissReason,
+            systemPromptHash = diag?.systemPromptHash,
+            promptVersion = diag?.promptVersion ?: caller.lastPromptVersion,
+            toolListHash = diag?.toolListHash,
+            promptTransformEffect = diag?.promptTransformEffect,
+            compactionTrigger = diag?.compactionTrigger,
+            compactionReason = diag?.compactionReason,
+            foldedSteps = diag?.foldedSteps,
+            capCheckResult = diag?.capCheckResult,
+            estimatedInputTokens = diag?.estimatedInputTokens,
+            timedOut = diag?.timedOut,
+            timeoutRetries = diag?.timeoutRetries,
+            timeoutMs = diag?.timeoutMs,
+            retryReason = diag?.retryReason,
         ))
         // 收尾模型也可能正在生成时收到插话。最多重答两次，其余交给下一任务。
         if (attempt < 2 && inbox?.hasSteers() == true) {
