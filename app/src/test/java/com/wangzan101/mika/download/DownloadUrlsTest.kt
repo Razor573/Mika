@@ -13,7 +13,7 @@ class DownloadUrlsTest {
 
     /** 和更新原来的规则一模一样:官方附件,或「镜像前缀 + 官方地址」,都得是 .apk。 */
     @Test fun apkRulesUnchanged() {
-        val official = "https://github.com/wangzan101/Mika/releases/download/v0.2.0/Mika.apk"
+        val official = "https://github.com/Razor573/Mika/releases/download/v0.2.0/Mika.apk"
         DownloadUrls.requireTrusted(official, official, mirrors, ".apk")
         DownloadUrls.requireTrusted("https://ghfast.top/$official", official, mirrors, ".apk")
         DownloadUrls.requireTrusted(official.replace(".apk", ".APK"), official.replace(".apk", ".APK"), mirrors, ".apk")
@@ -23,8 +23,8 @@ class DownloadUrlsTest {
             "https://evil.test/$official" to mirrors,
             "https://ghfast.top/$official?x=1" to mirrors,
             "https://user:pass@ghfast.top/$official" to mirrors,
-            "https://ghfast.top/https://github.com/wangzan101/Mika/releases/download/v0.2.0/other.apk" to mirrors,
-            "https://ghfast.top/https://github.com/wangzan101/Mika/releases/tag/v0.2.0" to mirrors,
+            "https://ghfast.top/https://github.com/Razor573/Mika/releases/download/v0.2.0/other.apk" to mirrors,
+            "https://ghfast.top/https://github.com/Razor573/Mika/releases/tag/v0.2.0" to mirrors,
         )) rejects { DownloadUrls.requireTrusted(url, official, allowed, ".apk") }
         for (url in listOf(
             "http://github.com/wangzan101/Mika/releases/download/v0.2.0/Mika.apk",
