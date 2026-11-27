@@ -79,8 +79,6 @@ English · [简体中文](docs/readme/README.zh-CN.md) · [繁體中文](docs/re
 
 ## Get started in three steps
 
-> **Fork note:** If you already have an upstream Mika APK installed, uninstall it before installing an APK built from this fork because the signing keys differ.
-
 1. **Install**: download the APK from [Releases](https://github.com/wangzan101/Mika/releases/latest).
 2. **Connect a model**: in Settings › Model, pick a provider and enter an API key, or just sign in with an account ([models and sign-in](docs/models.en.md)).
 3. **To operate phone apps**: follow the "Set up phone control" wizard in Settings and pair wireless debugging on the phone once ([setup guide](docs/setup-guide.en.md)). Skip this if you only want chat, web and files.

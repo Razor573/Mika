@@ -232,6 +232,7 @@ internal object CallPolicy {
         AppLanguage.Russian -> "Russian"
         AppLanguage.Indonesian -> "Indonesian"
         AppLanguage.Turkish -> "Turkish"
+        AppLanguage.Vietnamese -> "Vietnamese"
     }
 
     fun prompt(

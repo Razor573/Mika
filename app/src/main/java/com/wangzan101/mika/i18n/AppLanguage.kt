@@ -64,6 +64,7 @@ enum class AppLanguage(val tag: String?, val speechTag: String?) {
             Russian -> "Russian"
             Indonesian -> "Indonesian"
             Turkish -> "Turkish"
+            Vietnamese -> "Vietnamese"
         }
     }
 
