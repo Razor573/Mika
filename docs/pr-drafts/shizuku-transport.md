@@ -45,5 +45,5 @@ Upstream Mika's Wireless debugging helper requires active Wi-Fi and Wireless deb
 
 ## Deliberately left out
 
-- Fork-only Banking mode / pause-resume integrations (`BankingMode` and `BankingScreen` were removed cleanly from this branch).
+- Fork-only Banking mode / pause-resume integrations (banking mode and its settings screen were removed cleanly from this branch).
 - Fork application ID / branding (`applicationId` remains `com.wangzan101.mika`).

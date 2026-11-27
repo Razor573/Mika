@@ -481,12 +481,12 @@ class ProviderStoreTest {
         s.use(ModelRole.Main, first.id, "m1", none)
         s.use(ModelRole.Vision, second.id, "m1", none)
         val cfg = s.configFor(ModelRole.Main)!!
-        val saved = ModelContextSettings(1_000_000, 80_000)
+        val saved = ModelContextSettings(1_000_000, 600_000)
         assertTrue(s.setModelContext(cfg.id, saved))
         for (role in listOf(ModelRole.Main, ModelRole.Light)) {
             val caps = s.modelFor(role)!!.capabilities
             assertEquals(1_000_000, caps.contextTokens)
-            assertEquals(80_000, caps.compactionTriggerTokens)
+            assertEquals(600_000, caps.compactionTriggerTokens)
         }
         assertEquals(64_000, s.modelFor(ModelRole.Vision)!!.capabilities.contextTokens)
         assertNull(s.modelFor(ModelRole.Vision)!!.capabilities.compactionTriggerTokens)
@@ -496,7 +496,7 @@ class ProviderStoreTest {
         val reloaded = store()
         reloaded.use(ModelRole.Main, first.id, "m1", none)
         assertEquals(saved, reloaded.provider(first.id)!!.contextSettings["m1"])
-        assertEquals(80_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
+        assertEquals(600_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
         assertTrue(reloaded.setModelContext(reloaded.configFor(ModelRole.Main)!!.id, ModelContextSettings()))
         assertNull(store().provider(first.id)!!.contextSettings["m1"])
     }

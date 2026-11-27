@@ -28,7 +28,7 @@ object DownloadUrls {
     fun requireRelease(url: String, suffix: String?) {
         val parsed = url.toHttpUrl()
         requireHttps(parsed)
-        val allowedBases = if (suffix == null) listOf(release, upstreamRelease) else listOf(release, upstreamRelease)
+        val allowedBases = if (suffix.equals(".apk", ignoreCase = true)) listOf(release) else listOf(release, upstreamRelease)
         require(allowedBases.any { base -> parsed.host == base.host && parsed.encodedPath.startsWith(base.encodedPath) })
         requireSuffix(parsed, suffix)
     }
