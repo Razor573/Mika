@@ -39,7 +39,6 @@ import com.wangzan101.mika.core.device.shell.SuProbe
 import com.wangzan101.mika.cap.phone.shell.HelperHub
 import com.wangzan101.mika.cap.phone.shell.adb.AndroidAdb
 import com.wangzan101.mika.cap.phone.shell.adb.NsdAdbServiceFinder
-import com.wangzan101.mika.settings.BankingMode
 import com.wangzan101.mika.settings.MikaPause
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -118,7 +117,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
     val engine: BuiltinShellEngine by lazy {
         BuiltinShellEngine(
             platform, hub.shell, scope, Dispatchers.IO, autoOn = wirelessAutoOn,
-            pausedFlag = { MikaPause.get(app).paused() || BankingMode.isPaused(app) },
+            pausedFlag = { MikaPause.get(app).paused() },
         )
     }
 

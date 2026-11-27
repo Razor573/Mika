@@ -220,9 +220,11 @@ object HistoryPruner {
     fun enforceCap(
         messages: List<Message>,
         tools: ToolIndex,
+        hardCap: Boolean = true,
         fits: (List<Message>) -> Boolean,
     ): List<Message> {
         if (fits(messages)) return messages
+        if (!hardCap) return shrinkOversized(messages, fits)
         var out = pruneOlderObservations(messages, tools, ContextCompressor.KEEP_FULL_OBSERVATIONS)
         if (fits(out)) return out
         out = shrinkOversized(out, fits)
@@ -437,8 +439,6 @@ object HistoryPruner {
         clipCandidateList(ranked { m, p -> m.author != Author.User && isPinnedMessage(m) && !isSummaryMessage(m) && p is Part.Text })
         if (fits(work)) return work
         clipCandidateList(ranked { m, p -> isSummaryMessage(m) && p is Part.Text })
-        if (fits(work)) return work
-        clipCandidateList(ranked { m, p -> m.author == Author.User && (p is Part.Text || p is Part.Thinking || p is Part.ToolResult) })
         return work
     }
 

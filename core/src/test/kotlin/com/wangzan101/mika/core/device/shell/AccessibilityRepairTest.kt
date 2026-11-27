@@ -281,7 +281,7 @@ class AccessibilityRepairTest {
      * (direct),助手状态是 Paused 也不能修。用户恢复时自己在系统设置里打开。
      */
     @Test
-    fun bankingModePausedNeverRepairs() = runTest {
+    fun pauseStatePausedNeverRepairs() = runTest {
         val rig = Rig(helperStatus = BuiltinShellStatus.Paused, direct = true).also { it.start(this) }
         advanceTimeBy(AccessibilityRepair.GRACE_MS + 20_000)
         runCurrent()

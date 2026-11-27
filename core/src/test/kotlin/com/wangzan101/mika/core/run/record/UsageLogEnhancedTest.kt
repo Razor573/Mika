@@ -642,7 +642,7 @@ class UsageLogEnhancedTest {
                 model = metered,
                 tools = toolDispatcher(FakeScreen(), visionEnabled = false),
                 basePrompt = "BASE",
-                flags = SpeedFlags.OFF,
+                flags = SpeedFlags(inputTokenCap = true),
                 retry = com.wangzan101.mika.core.agent.RetryPolicy(
                     maxRetries = 3,
                     baseMs = 20L,
@@ -700,7 +700,7 @@ class UsageLogEnhancedTest {
                 model = metered,
                 tools = toolDispatcher(FakeScreen(), visionEnabled = false),
                 basePrompt = "BASE",
-                flags = SpeedFlags.OFF,
+                flags = SpeedFlags(inputTokenCap = true),
                 retry = com.wangzan101.mika.core.agent.RetryPolicy(
                     maxRetries = 3,
                     baseMs = 20L,
@@ -744,7 +744,7 @@ class UsageLogEnhancedTest {
             override suspend fun snapshot(): ScreenSnapshot {
                 n++
                 val children = (1..150).map { i ->
-                    UiTreeNode("TextView", listOf(0, i * 40, 900, i * 40 + 30), text = "Row-$n-$i " + "payload-".repeat(120))
+                    UiTreeNode("TextView", listOf(0, i * 40, 900, i * 40 + 30), text = "Row-$n-$i " + "payload-".repeat(150))
                 }
                 return ScreenSnapshot(
                     "snap-$n",
@@ -787,7 +787,7 @@ class UsageLogEnhancedTest {
                 model = metered,
                 tools = toolDispatcher(screen, visionEnabled = false),
                 basePrompt = "BASE",
-                flags = SpeedFlags.OFF,
+                flags = SpeedFlags(inputTokenCap = true),
                 retry = com.wangzan101.mika.core.agent.RetryPolicy(
                     maxRetries = 3,
                     baseMs = 1L,

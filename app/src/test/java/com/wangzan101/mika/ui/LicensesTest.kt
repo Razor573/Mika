@@ -17,6 +17,9 @@ class LicensesTest {
         "Guava ListenableFuture(由 AndroidX 库引入)" to "Guava ListenableFuture (pulled in by AndroidX)",
         "MCP 服务品牌 logo（mcp/mcp-logos.json）" to "MCP service brand logos (mcp/mcp-logos.json)",
         "MCP 服务品牌 logo 补充集（mcp/mcp-logos.json）" to "MCP service brand logos supplement (mcp/mcp-logos.json)",
+        "SenseVoice Small(离线识别语音包)" to "SenseVoice Small (offline speech pack)",
+        "Dolphin Base(离线识别语音包)" to "Dolphin Base (offline speech pack)",
+        "Whisper(离线识别语音包)" to "Whisper (offline speech pack)",
     )
 
     @Test

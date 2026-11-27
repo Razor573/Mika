@@ -770,12 +770,12 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         scope.launch(Dispatchers.IO) { runCatching { com.wangzan101.mika.cap.web.WebProxy.apply(this@MikaApp) } }
         capsule.start()
         // Mika paused on disk: notify shellControl before starting watchdog so startup race cannot start helper.
-        if (com.wangzan101.mika.settings.MikaPause.get(this).paused() || com.wangzan101.mika.settings.BankingMode.isPaused(this)) {
+        if (com.wangzan101.mika.settings.MikaPause.get(this).paused()) {
             phone.shellControl.pauseChanged()
         }
         // 内置助手的真实现,并开始看着助手(Mika 进程起来后,还活着的助手会自己交接 Binder)
         phone.shellManager.start()
-        if (com.wangzan101.mika.settings.MikaPause.get(this).paused() || com.wangzan101.mika.settings.BankingMode.isPaused(this)) {
+        if (com.wangzan101.mika.settings.MikaPause.get(this).paused()) {
             phone.shellControl.pauseChanged()
         }
         // 连接一可用就补上默认打开的几项能力

@@ -1104,7 +1104,7 @@ class BuiltinShellEngineTest {
     }
 
     @Test
-    fun bankingModePauseAndResumeWorkWithShizukuWithoutWifiOrPairing() = runTest {
+    fun pauseAndResumeWorkWithShizukuWithoutWifiOrPairing() = runTest {
         bankingPaused = false
         platform.wifi = false
         platform.wireless = false

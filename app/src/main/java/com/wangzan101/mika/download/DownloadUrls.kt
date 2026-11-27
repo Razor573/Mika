@@ -16,6 +16,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
  */
 object DownloadUrls {
     private val release = "${MikaLinks.RELEASES}/download/".toHttpUrl()
+    private val upstreamRelease = "https://github.com/wangzan101/Mika/releases/download/".toHttpUrl()
     private val commit = "[0-9a-f]{40}"
     /** 上游主机和它的固定提交路径形式:`/<作者>/<仓库>/resolve/<提交>/…`、`/<作者>/<仓库>/<提交>/…`。 */
     private val upstream = mapOf(
@@ -27,8 +28,8 @@ object DownloadUrls {
     fun requireRelease(url: String, suffix: String?) {
         val parsed = url.toHttpUrl()
         requireHttps(parsed)
-        require(parsed.host == release.host)
-        require(parsed.encodedPath.startsWith(release.encodedPath))
+        val allowedBases = if (suffix == null) listOf(release, upstreamRelease) else listOf(release, upstreamRelease)
+        require(allowedBases.any { base -> parsed.host == base.host && parsed.encodedPath.startsWith(base.encodedPath) })
         requireSuffix(parsed, suffix)
     }
 

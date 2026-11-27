@@ -1,5 +1,8 @@
 package com.wangzan101.mika.settings
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
 import com.wangzan101.mika.core.device.shell.BuiltinShellStatus
 import com.wangzan101.mika.task.PauseState
 import com.wangzan101.mika.task.ResumeStep
@@ -92,5 +95,60 @@ class MikaPauseTest {
     fun pausedHelperWithSavedPairingNeedsNoRePairing() {
         // 暂停后恢复:助手还是 Paused、配对还在,不用重新配对。
         assertTrue(planResumeSteps(state(helper = BuiltinShellStatus.Paused)).isEmpty())
+    }
+
+    @Test
+    fun legacyPausePrefsMigratesToMikaPauseAndClearsOldPrefs() {
+        val prefsMap = mutableMapOf<String, InMemoryPrefs>()
+        val legacy = InMemoryPrefs().apply { data["paused"] = true }
+        val current = InMemoryPrefs()
+        prefsMap["banking_mode"] = legacy
+        prefsMap["mika_pause"] = current
+
+        val ctx = object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                prefsMap.getOrPut(name) { InMemoryPrefs() }
+
+            override fun deleteSharedPreferences(name: String): Boolean = prefsMap.remove(name) != null
+        }
+
+        val pause = MikaPause.load(ctx)
+        assertTrue(pause.paused())
+        assertEquals(true, current.data["paused"])
+        assertFalse(legacy.contains("paused"))
+        assertFalse(legacy.getBoolean("paused", false))
+    }
+
+    private class InMemoryPrefs : SharedPreferences {
+        val data = mutableMapOf<String, Any?>()
+        override fun getAll(): MutableMap<String, *> = data.toMutableMap()
+        override fun getString(key: String?, defValue: String?): String? = data[key] as? String ?: defValue
+        override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
+        override fun getInt(key: String?, defValue: Int): Int = data[key] as? Int ?: defValue
+        override fun getLong(key: String?, defValue: Long): Long = data[key] as? Long ?: defValue
+        override fun getFloat(key: String?, defValue: Float): Float = data[key] as? Float ?: defValue
+        override fun getBoolean(key: String?, defValue: Boolean): Boolean = data[key] as? Boolean ?: defValue
+        override fun contains(key: String?): Boolean = data.containsKey(key)
+        override fun registerOnSharedPreferenceChangeListener(l: SharedPreferences.OnSharedPreferenceChangeListener?) = Unit
+        override fun unregisterOnSharedPreferenceChangeListener(l: SharedPreferences.OnSharedPreferenceChangeListener?) = Unit
+        override fun edit(): SharedPreferences.Editor = object : SharedPreferences.Editor {
+            private var cleared = false
+            private val pending = mutableMapOf<String, Any?>()
+            override fun putString(key: String?, value: String?) = apply { if (key != null) pending[key] = value }
+            override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { if (key != null) pending[key] = values }
+            override fun putInt(key: String?, value: Int) = apply { if (key != null) pending[key] = value }
+            override fun putLong(key: String?, value: Long) = apply { if (key != null) pending[key] = value }
+            override fun putFloat(key: String?, value: Float) = apply { if (key != null) pending[key] = value }
+            override fun putBoolean(key: String?, value: Boolean) = apply { if (key != null) pending[key] = value }
+            override fun remove(key: String?) = apply { if (key != null) pending[key] = null }
+            override fun clear() = apply { cleared = true }
+            override fun commit(): Boolean {
+                if (cleared) data.clear()
+                pending.forEach { (k, v) -> if (v == null) data.remove(k) else data[k] = v }
+                return true
+            }
+            override fun apply() { commit() }
+        }
     }
 }

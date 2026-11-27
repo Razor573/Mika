@@ -94,7 +94,7 @@ internal class ModelCaller(
     private val chainProviderIds: List<String?> = emptyList(),
 ) {
     /** 按角色(main / light)各持一份压缩器、压缩状态与粘性池成员，避免 ModelPool/GroupPool 换对象身份时反复新建压缩器。 */
-    private val inputTokenCap: Int? = if (flags.disableInputTokenCap) null else ContextLimits.MAX_INPUT_TOKENS
+    private val inputTokenCap: Int? = if (flags.inputTokenCap) ContextLimits.MAX_INPUT_TOKENS else null
     private val compressors = HashMap<String, ContextCompressor>()
     private fun roleKey(m: ChatModel): String = if (router?.isLight(m) == true) ROLE_LIGHT else ROLE_MAIN
     private fun compressorFor(m: ChatModel): ContextCompressor {
@@ -105,6 +105,7 @@ internal class ModelCaller(
                 structured = flags.structuredCompaction,
                 diffScreens = tools.inlineScreen,
                 triggerOverride = m.capabilities.compactionTriggerTokens,
+                foldEvery = m.capabilities.compactionEveryRounds,
                 maxInputTokens = inputTokenCap,
             )
         }

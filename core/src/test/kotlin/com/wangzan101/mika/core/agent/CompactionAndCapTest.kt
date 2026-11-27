@@ -66,84 +66,17 @@ class CompactionAndCapTest {
         )
     }
 
-    @Test fun compactionTriggersEvery15StepsSummarisesCompletedStepsAndKeepsLast3Observations() {
+    @Test fun prefixStaysAppendOnlyUntilTriggerIsCrossed() {
         val compressor = ContextCompressor(TOOLS)
         val allObs = (1..30).map { obsRound(it, treePad = "screen-tree-$it") }
         fun historyAt(steps: Int) = listOf(task) + allObs.take(steps).flatten()
 
-        for (step in 1..14) {
+        for (step in 1..30) {
             val out = compressor.compress(historyAt(step), contextTokens = 1_000_000)
-            assertFalse("step $step should not compact", out.rewritten)
+            assertFalse("step $step should stay append-only (trigger=${out.trigger})", out.rewritten)
             assertEquals(0, out.foldedSteps)
+            assertNull(out.trigger)
         }
-
-        val at15 = compressor.compress(historyAt(15), contextTokens = 1_000_000)
-        assertTrue(at15.rewritten)
-        assertEquals(12, at15.foldedSteps)
-        val summary15 = at15.messages.firstNotNullOf { m -> m.plainText().takeIf { it.startsWith(ContextCompressor.HEADER) } }
-        assertTrue(summary15, "Step 1 phone_observe" in summary15 && "Step 12 phone_observe" in summary15 && "Step 13" !in summary15)
-        val trees15 = at15.messages.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
-        assertEquals(3, trees15.size)
-        assertTrue((13..15).all { n -> trees15.any { "\"screen-tree-$n\"" in it } })
-        assertTrue((1..12).all { n -> trees15.none { "\"screen-tree-$n\"" in it } })
-
-        for (step in 16..29) {
-            val out = compressor.compress(historyAt(step), contextTokens = 1_000_000)
-            assertFalse("step $step should stay append-only", out.rewritten)
-        }
-
-        val at30 = compressor.compress(historyAt(30), contextTokens = 1_000_000)
-        assertTrue(at30.rewritten)
-        assertEquals(27, at30.foldedSteps)
-        val trees30 = at30.messages.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }
-        assertEquals(3, trees30.size)
-        assertTrue((28..30).all { n -> trees30.any { "\"screen-tree-$n\"" in it } })
-        assertTrue((1..27).all { n -> trees30.none { "\"screen-tree-$n\"" in it } })
-    }
-
-    @Test fun agentLoopPeriodicCompactionKeepsLast3ObservationsAndScreenshots() = runTest {
-        var reads = 0
-        var ver = 0
-        val screen = object : ScreenPort by FakeScreen() {
-            private fun snap(id: Int): ScreenSnapshot {
-                val node = UiTreeNode("TextView", listOf(0, 0, 100, 50), text = "full-node-$id-$ver")
-                val win = UiWindowTree(1, "application", 1, "App", "com.x", true, true, listOf(node))
-                val el = UiElement("@e1", "button", "btn-$id-$ver", 50, 25, listOf(0, 0, 100, 50), null, true, false, false)
-                return ScreenSnapshot("snap-$id-$ver", "com.x", listOf(el), 1080, 2400, windows = listOf(win))
-            }
-            override suspend fun snapshot(): ScreenSnapshot {
-                reads++
-                return snap(reads)
-            }
-            override suspend fun peek(): ScreenSnapshot = snap(reads)
-            override suspend fun screenshotPng() = byteArrayOf(1, 2, 3)
-            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
-                ver++
-                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
-            }
-        }
-        var callSeq = 0
-        val replies = (1..30).map { step ->
-            val name = when {
-                step >= 28 -> "phone_observe"
-                step % 3 == 0 -> "phone_tap"
-                step % 2 == 1 -> "phone_observe"
-                else -> "phone_list_elements"
-            }
-            val args = if (name == "phone_tap") """{"x":100,"y":100}""" else "{}"
-            ModelReply(listOf(Part.ToolCall("c${++callSeq}", name, args)), StopReason.ToolUse, null)
-        } + answerReply("finished")
-        val model = FakeModel(*replies.toTypedArray(), contextTokens = 1_000_000)
-        val end = AgentLoop(model, toolDispatcher(screen, visionEnabled = true), "BASE").run("check 30 screens")
-        assertTrue(end is TaskState.Succeeded)
-
-        val finalReq = model.requests.last()
-        assertTrue(finalReq.any { it.plainText().startsWith(ContextCompressor.HEADER) })
-        val fullNodesKept = finalReq.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().count { "btn-" in it.content }
-        assertEquals(3, fullNodesKept)
-        val imagesKept = finalReq.flatMap { it.parts }.filterIsInstance<Part.Image>()
-        assertEquals(3, imagesKept.size)
-        assertTrue(TokenEstimate.of(finalReq) <= ContextLimits.MAX_INPUT_TOKENS)
     }
 
     @Test fun inputTokenCap100kEnforcedInLimitsCompressorAndModelCaller() = runTest {
@@ -168,7 +101,7 @@ class CompactionAndCapTest {
         assertTrue(UsageMeter.estimate(TokenEstimate.of(compressed.messages) + 5_000, compressor.scale) <= ContextLimits.MAX_INPUT_TOKENS)
 
         val fake = FakeModel(answerReply("ok"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
 
         val hugePayload180k = listOf(
@@ -191,41 +124,43 @@ class CompactionAndCapTest {
                 return answerReply("ok")
             }
         }
-        val streamCaller = ModelCaller(streaming, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
+        val streamCaller = ModelCaller(streaming, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
         streamCaller.reset("SYSTEM")
-        val hugeUser180k = listOf(Message(Role.User, listOf(Part.Text("u".repeat(720_000))), Author.User))
-        assertTrue(TokenEstimate.of(hugeUser180k) > 175_000)
-        streamCaller.ask(hugeUser180k, emptyList(), step = 1) {}
+        streamCaller.ask(hugePayload180k, emptyList(), step = 1) {}
         val sentStreamCap = streamedRequests.single()
         assertTrue("${TokenEstimate.of(sentStreamCap)}", TokenEstimate.of(sentStreamCap) <= ContextLimits.MAX_INPUT_TOKENS)
         assertTrue(UsageMeter.estimate(TokenEstimate.of(sentStreamCap) + TokenEstimate.of("SYSTEM"), ContextCompressor.UNCALIBRATED_SCALE) <= ContextLimits.MAX_INPUT_TOKENS)
     }
 
-    @Test fun periodicCompactionWithMixedTapsAndObservationsPreservesLast3Obs() {
-        val compressor = ContextCompressor(TOOLS)
-        val rounds = (1..15).flatMap { step ->
-            if (step in listOf(1, 4, 7, 10, 12, 14, 15)) obsRound(step, treePad = "mixed-tree-$step")
-            else tapRound(step)
+    @Test fun authorUserTextIsNeverClippedAndOversizedUserMessageFailsWithContextTooLong() = runTest {
+        val hugeUserText = "u".repeat(720_000)
+        val hugeUserMsg = Message(Role.User, listOf(Part.Text(hugeUserText)), Author.User)
+        val prunerResult = HistoryPruner.enforceCap(listOf(hugeUserMsg), TOOLS) { TokenEstimate.of(it) <= 10_000 }
+        assertEquals(hugeUserText, prunerResult.single().plainText())
+
+        val fake = FakeModel(answerReply("should-not-be-called"), contextTokens = 1_000_000)
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
+        caller.reset("SYSTEM")
+        var thrown: Throwable? = null
+        try {
+            caller.ask(listOf(hugeUserMsg), emptyList(), step = 1)
+        } catch (e: Throwable) {
+            thrown = e
         }
-        val h = listOf(task) + rounds
-        val c = compressor.compress(h, contextTokens = 1_000_000)
-        assertTrue(c.rewritten)
-        assertEquals(11, c.foldedSteps)
-        val keptObs = c.messages.flatMap { it.parts }.filterIsInstance<Part.ToolResult>().map { it.content }.filter { "mixed-tree-" in it }
-        assertEquals(3, keptObs.size)
-        assertTrue(listOf(12, 14, 15).all { n -> keptObs.any { "mixed-tree-$n" in it } })
+        assertTrue("Expected ContextTooLong, got $thrown", thrown is ModelError.ContextTooLong)
+        assertTrue("Oversized Author.User message must not be sent or silently clipped", fake.requests.isEmpty())
     }
 
-    @Test fun periodicCompactionWorksIndependentlyWhenInputCapIsOff() = runTest {
-        // disableInputTokenCap = true turns the 100k cap off while 15-step compaction still runs on its own.
+    @Test fun inputTokenCapIsOffByDefaultAndOnlyEnforcedWhenEnabled() = runTest {
+        assertFalse(SpeedFlags.OFF.inputTokenCap)
         val fake = FakeModel(answerReply("ok"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(disableInputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
         val bigUser120k = listOf(Message(Role.User, listOf(Part.Text("u".repeat(480_000))), Author.User))
         assertTrue(TokenEstimate.of(bigUser120k) > ContextLimits.MAX_INPUT_TOKENS)
         caller.ask(bigUser120k, emptyList(), step = 1)
         assertTrue(
-            "when inputTokenCap is off, >100k request should not be clipped on a 1M window",
+            "when inputTokenCap is off (default), >100k request should not be clipped or rejected on a 1M window",
             TokenEstimate.of(fake.requests.single()) > ContextLimits.MAX_INPUT_TOKENS,
         )
     }
@@ -263,12 +198,12 @@ class CompactionAndCapTest {
         // Original prompt is tiny, but promptTransform expands it to ~80k tokens.
         val expanded = "p".repeat(320_000)
         val caller = ModelCaller(
-            fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 },
+            fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 },
         )
         caller.promptTransform = { expanded }
         caller.reset("TINY")
-        val user50k = listOf(Message(Role.User, listOf(Part.Text("u".repeat(200_000))), Author.User))
-        caller.ask(user50k, emptyList(), step = 1)
+        val mika50k = listOf(task, Message(Role.User, listOf(Part.Text("u".repeat(200_000))), Author.Mika))
+        caller.ask(mika50k, emptyList(), step = 1)
         val sent = fake.requests.single()
         val totalWithTransformedPrompt = TokenEstimate.of(sent) + TokenEstimate.of(expanded)
         assertTrue(
@@ -279,7 +214,7 @@ class CompactionAndCapTest {
 
     @Test fun inputCapFailsClearlyWhenUserImagesCannotFit() = runTest {
         val fake = FakeModel(answerReply("should-not-be-called"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
         // 80 user images (~1500 tokens each -> ~120k tokens) cannot fit under 100k even after pruning.
         val manyUserImages = listOf(
@@ -297,27 +232,6 @@ class CompactionAndCapTest {
         }
         assertTrue("expected ContextTooLong, got $failed", failed is com.wangzan101.mika.core.model.ModelError.ContextTooLong)
         assertTrue("over-cap request must not be dispatched to model", fake.requests.isEmpty())
-    }
-
-    @Test fun doesNotFirePrematureSizeTriggerBelow100kWhenPeriodic15IsActive() {
-        val compressor = ContextCompressor(TOOLS, maxInputTokens = ContextLimits.MAX_INPUT_TOKENS)
-        // Build 10 steps whose calibrated total sits in the old size_trigger zone (87k..100k):
-        // old code fired size_trigger prematurely every few steps; now it must NOT compact before step 15!
-        val mediumPad = "word ".repeat(7_500)
-        val obs = obsRound(1, treePad = mediumPad)
-        val smallRounds = (2..15).map { idx -> obsRound(idx, treePad = "item-$idx") }
-        val at10 = listOf(task) + obs + smallRounds.take(9).flatten()
-        val est10 = TokenEstimate.of(at10) + 75_000
-        assertTrue("fixture should sit in 87k..100k zone (was $est10)", est10 in 88_000..99_500)
-        val out10 = compressor.compress(at10, contextTokens = 1_000_000, currentTokens = est10, fixedOverhead = 5_000)
-        assertFalse("must not fire size_trigger below 100k cap (trigger=${out10.trigger})", out10.rewritten)
-
-        // At step 15, periodic_15 fires cleanly with explicit trigger & reason.
-        val at15 = listOf(task) + obs + smallRounds.take(14).flatten()
-        val out15 = compressor.compress(at15, contextTokens = 1_000_000, currentTokens = 92_000, fixedOverhead = 5_000)
-        assertTrue(out15.rewritten)
-        assertEquals("periodic_15", out15.trigger)
-        assertTrue(out15.reason?.contains("steps_since_compact=15") == true)
     }
 
     private fun geminiWireTokenCount(system: String, messages: List<Message>, tools: List<ToolSpec>, vision: Boolean = true): Int {
@@ -434,12 +348,11 @@ class CompactionAndCapTest {
             assertTrue("Step ${r.step}: est=$est diverged from actual=$actual (ratio=$diffRatio)", diffRatio <= 0.15)
         }
 
-        // Compaction must fire ONLY at step 16 (after 15 completed steps) and step 31 (periodic_15), NEVER every step and NEVER false cap_100k.
+        // Trigger-based compaction does NOT fire on step count alone when 32 steps fit well under the 1M window.
         val compactedSteps = replies.filter { it.compactionTrigger != null }.map { it.step to it.compactionTrigger }
-        assertEquals(listOf(16 to "periodic_15", 31 to "periodic_15"), compactedSteps)
+        assertEquals(emptyList<Pair<Int, String?>>(), compactedSteps)
         val compressedEvents = events.filterIsInstance<RunEvent.Compressed>()
-        assertEquals(2, compressedEvents.size)
-        assertTrue(compressedEvents.all { it.trigger == "periodic_15" })
+        assertEquals(0, compressedEvents.size)
     }
 
     @Test fun cap100kCompactsThenDropsOlderObservationsAndMemoryReadsAndNeverSendsOver100k() = runTest {
@@ -480,6 +393,7 @@ class CompactionAndCapTest {
             model = model,
             tools = toolDispatcher(screen, visionEnabled = true),
             basePrompt = SystemPrompt.identity(),
+            flags = SpeedFlags(inputTokenCap = true),
             maxSteps = 20,
             sink = object : RunSink {
                 override fun event(e: RunEvent) { events += e }
@@ -519,7 +433,7 @@ class CompactionAndCapTest {
 
         // 2) Unshrinkable >100k request fails with ModelError.ContextTooLong without sending over the wire.
         val fake = FakeModel(answerReply("never-sent"), contextTokens = 1_000_000)
-        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags.OFF, RetryPolicy.NONE, {}, { 0 })
+        val caller = ModelCaller(fake, toolDispatcher(FakeScreen()), null, SpeedFlags(inputTokenCap = true), RetryPolicy.NONE, {}, { 0 })
         caller.reset("SYSTEM")
         val hugeUnshrinkableImages = listOf(
             Message(Role.User, listOf(Part.Text("user images")) + List(120) { Part.Image("image/png", "AQID") }, Author.User),

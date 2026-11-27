@@ -257,7 +257,7 @@ class V59CostAndCacheFixTest {
             tools = toolDispatcher(screen, visionEnabled = true),
             basePrompt = SystemPrompt.identity(),
             maxSteps = 50,
-            flags = SpeedFlags(lightSteps = true),
+            flags = SpeedFlags(lightSteps = true, inputTokenCap = true),
             router = ModelRouter(main, light),
             sink = sink,
         )

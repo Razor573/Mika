@@ -105,7 +105,7 @@ class ContextCompressorTest {
     /** 默认不按轮数触发(关掉周期压缩时只按大小),40 轮在 1M 窗口里原样发。 */
     @Test fun withoutFoldEveryRoundCountDoesNotTrigger() {
         val h = head + taps(40)
-        val c = ContextCompressor(TOOLS, compactEverySteps = 0).compress(h, contextTokens = 1_000_000)
+        val c = ContextCompressor(TOOLS).compress(h, contextTokens = 1_000_000)
         assertEquals(h, c.messages)
         assertEquals(0, c.foldedSteps)
     }

@@ -19,7 +19,7 @@ class VideoSelectionTest {
     }
 
     @Test fun theArkPresetIsNamedWhenNoServiceCanGenerate() {
-        assertTrue(VideoProviders.presetLabels().contains("火山方舟"))
+        assertTrue(VideoProviders.presetLabels().contains("Volcengine Ark"))
     }
 
     @Test fun aCompatibleChoiceResolvesWithTheModelsDeclaredCapabilities() {

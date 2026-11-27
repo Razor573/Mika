@@ -37,7 +37,7 @@ class StructuredCompactionTest {
             round("web_navigate", """{"url":"https://wttr.in/"}""", """{"ok":true,"url":"https://wttr.in/Shanghai"}""") +
             round("phone_tap", """{"target":"刷新"}""", """{"ok":false,"error":"ref_expired"}""", said = "刷新一下再读") +
             taps(12)
-        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 1_000).messages).single()
+        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 100).messages).single()
         assertEquals(
             listOf(
                 ContextCompressor.HEADER,
@@ -59,7 +59,7 @@ class StructuredCompactionTest {
     @Test fun oneSummaryAcrossPinnedRoundsAndPairsIntact() {
         val takeover = round("hand_to_user", """{"reason":"login"}""", """{"outcome":"complete","ok":true}""")
         val h = head + taps(3) + takeover + taps(2) + taps(12)
-        val out = ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 1_000).messages
+        val out = ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 100).messages
         // 一份摘要在第一段的位置;接管往返原样保留在后面
         assertEquals(1, summaries(out).size)
         assertTrue(out[2].plainText().startsWith(ContextCompressor.HEADER))
@@ -73,7 +73,7 @@ class StructuredCompactionTest {
         val h = head + (1..20).flatMap { i ->
             if (i % 5 == 0) round("phone_tap", """{"target":"坏$i"}""", """{"ok":false,"error":"ref_expired"}""") else round("phone_tap", """{"target":"好$i"}""")
         } + taps(12)
-        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 1_000).messages).single().lines()
+        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 100).messages).single().lines()
         // 上下文很小,只留最近一次往返:折了 31 步,最近 15 步逐条,更早 16 步并成计数
         assertTrue(s.toString(), "- 16 earlier steps: applied 13, ref_expired 3" in s)
         assertEquals(15, s.count { it.startsWith("- Step ") })
@@ -82,12 +82,12 @@ class StructuredCompactionTest {
 
     @Test fun plainSummaryWhenOff() {
         val h = head + taps(15)
-        val s = summaries(ContextCompressor(TOOLS).compress(h, contextTokens = 1_000).messages).single()
+        val s = summaries(ContextCompressor(TOOLS).compress(h, contextTokens = 100).messages).single()
         assertTrue("Goal: " !in s && s.lines()[1] == ContextCompressor.SUMMARY_REMINDER && s.lines()[2].startsWith("Step 1"))
     }
 
     @Test fun calibratedEstimateDecidesWhenToCompact() {
-        val h = head + taps(12)
+        val h = head + taps(20)
         val context = windowFor(uncalibrated(h))
         val c = ContextCompressor(TOOLS)
         assertEquals(h, c.compress(h, context).messages)
@@ -97,7 +97,7 @@ class StructuredCompactionTest {
     }
 
     @Test fun compactionIsStickyForTheTask() {
-        val all = head + taps(12)
+        val all = head + taps(20)
         val context = windowFor(uncalibrated(all))
         val c = ContextCompressor(TOOLS)
         assertTrue(c.compress(all, context, fixedOverhead = 100).foldedSteps > 0)
@@ -112,7 +112,7 @@ class StructuredCompactionTest {
         val said = Message(Role.User, listOf(Part.Text("顺便把亮度也调低"), Part.Image("PPPP")), Author.User)
         val h = head + round("phone_tap", """{"target":"设置"}""") + said + taps(14)
         for (structured in listOf(false, true)) {
-            val out = ContextCompressor(TOOLS,structured = structured).compress(h, contextTokens = 4_000).messages
+            val out = ContextCompressor(TOOLS,structured = structured).compress(h, contextTokens = 100).messages
             assertTrue(summaries(out).isNotEmpty() && said in out)
         }
     }
@@ -122,36 +122,19 @@ class StructuredCompactionTest {
         val h = head + (1..200).flatMap { i ->
             round("tool_$i$long", """{"target":"$long"}""", """{"ok":false,"error":"$long$i","url":"https://e.com/$i$long","currentApp":"app$i"}""", said = long)
         } + taps(12)
-        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 2_000).messages).single()
+        val s = summaries(ContextCompressor(TOOLS,structured = true).compress(h, contextTokens = 100).messages).single()
         assertTrue("${s.length}", s.length < 4000)
         assertTrue(long !in s)
-        val plain = summaries(ContextCompressor(TOOLS).compress(h, contextTokens = 2_000).messages).single()
+        val plain = summaries(ContextCompressor(TOOLS).compress(h, contextTokens = 100).messages).single()
         assertTrue(plain.lines().drop(2).all { it.length < 120 })
     }
 
     @Test fun loopUsesStructuredSummaryWhenFlagOn() = runTest {
-        var ver = 0
-        val screen = object : com.wangzan101.mika.core.screen.uistate.ScreenPort by FakeScreen() {
-            private fun snap() = com.wangzan101.mika.core.screen.uistate.ScreenSnapshot(
-                "ss$ver", "com.x",
-                listOf(com.wangzan101.mika.core.screen.uistate.UiElement("@e1", "button", "v$ver", 10, 10, listOf(0, 0, 50, 50), null, true, false, false)),
-                1080, 2400,
-            )
-            override suspend fun snapshot() = snap()
-            override suspend fun peek() = snap()
-            override suspend fun tapXY(x: Int, y: Int): com.wangzan101.mika.core.screen.uistate.ActionResult {
-                ver++
-                return com.wangzan101.mika.core.screen.uistate.ActionResult.Ok(changed = true)
-            }
-        }
-        val m = fakeModel("main", contextTokens = 128_000) {
-            for (i in 1..15) {
-                if (i % 3 == 0) call("phone_tap", "x" to 100, "y" to 200)
-                else call("wait", "seconds" to 1 + i / 100.0)
-            }
+        val m = fakeModel("main", contextTokens = 100) {
+            for (i in 1..14) call("wait", "seconds" to 1 + i / 100.0)
             answer("等完了")
         }
-        AgentLoop(m, toolDispatcher(screen), "BASE", flags = SpeedFlags(structuredCompaction = true)).run("等一会儿")
+        AgentLoop(m, toolDispatcher(FakeScreen()), "BASE", flags = SpeedFlags(structuredCompaction = true)).run("等一会儿")
         val s = summaries(m.requests.last().messages).single()
         assertTrue(s, "Goal: 等一会儿" in s && "Progress:" in s && "Next: " in s)
     }

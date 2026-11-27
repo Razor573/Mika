@@ -21,6 +21,10 @@ class SpeedFlagsTest {
         assertEquals(SpeedFlags(adaptiveVision = true), SpeedFlags.parse("adaptiveVision"))
         val tables = SpeedFlags(tablesAtBirth = true)
         assertEquals(tables, SpeedFlags.parse(tables.describe()))
+        assertEquals(false, SpeedFlags.OFF.inputTokenCap)
+        val cap = SpeedFlags(inputTokenCap = true)
+        assertEquals(cap, SpeedFlags.parse("inputTokenCap"))
+        assertEquals("inputTokenCap", cap.describe())
     }
 
     @Test fun unknownKeyRejected() {

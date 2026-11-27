@@ -217,7 +217,7 @@ class PhoneLoopBreakerAndCompactionTest {
             tools = toolDispatcher(screen, visionEnabled = true),
             basePrompt = SystemPrompt.identity(),
             maxSteps = 55,
-            flags = SpeedFlags(lightSteps = true),
+            flags = SpeedFlags(lightSteps = true, inputTokenCap = true),
             router = ModelRouter(main, failingLight),
             sink = sink,
         ).run("Browse 48 phone steps")

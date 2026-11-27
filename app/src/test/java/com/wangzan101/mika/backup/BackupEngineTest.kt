@@ -62,6 +62,10 @@ class BackupEngineTest {
         filesDir.write("proactive/contacts.bin", exportCipher.encrypt("contacts-plain".toByteArray()))
         filesDir.write("proactive/digest.bin", exportCipher.encrypt("digest-plain".toByteArray()))
         filesDir.write("proactive/journal.bin", exportCipher.encrypt("journal-plain".toByteArray()))
+        filesDir.write("settings/decision-model.bin", exportCipher.encrypt("decision-plain".toByteArray()))
+        filesDir.write("workflows-v1.bin", exportCipher.encrypt("workflows-plain".toByteArray()))
+        filesDir.write("saved-checklists-v1.bin", exportCipher.encrypt("checklists-plain".toByteArray()))
+        filesDir.write("sms-login-consent.txt", exportCipher.encrypt("sms-plain".toByteArray()))
         prefsDir.write(
             "web_search.xml",
             """<?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="enabled" value="true" /><string name="api_key_encrypted_you">${b64(exportCipher.encrypt("you-key".toByteArray()))}</string><string name="api_key_encrypted">${b64(exportCipher.encrypt("legacy-search-key".toByteArray()))}</string><string name="endpoint_you">https://you.example</string></map>""",
@@ -109,6 +113,10 @@ class BackupEngineTest {
         assertTrue(manifest.entries.any { it.path == "files/settings/provider-keys.json" && it.encrypted })
         assertTrue(manifest.entries.any { it.path == "files/memory/memory.bin" && it.encrypted && it.alias == "mika-memory" })
         assertTrue(manifest.entries.any { it.path == "files/proactive/topics.bin" && it.alias == "mika-proactive-topics" })
+        assertTrue(manifest.entries.any { it.path == "files/settings/decision-model.bin" && it.encrypted && it.alias == "mika-decision-key" })
+        assertTrue(manifest.entries.any { it.path == "files/workflows-v1.bin" && it.encrypted && it.alias == "mika-workflows" })
+        assertTrue(manifest.entries.any { it.path == "files/saved-checklists-v1.bin" && it.encrypted && it.alias == "mika-saved-checklists" })
+        assertTrue(manifest.entries.any { it.path == "files/sms-login-consent.txt" && it.encrypted && it.alias == "mika-sms-login-profiles" })
         assertTrue(manifest.skippedProviderKeys.isEmpty())
         assertTrue(manifest.skippedPrefs.isEmpty())
 
@@ -129,6 +137,10 @@ class BackupEngineTest {
         assertEquals("task-plain", String(importCipher.decrypt(File(dstFiles, "memory/task_memory/task_memory.bin").readBytes())))
         assertEquals("topics-plain", String(importCipher.decrypt(File(dstFiles, "proactive/topics.bin").readBytes())))
         assertEquals("contacts-plain", String(importCipher.decrypt(File(dstFiles, "proactive/contacts.bin").readBytes())))
+        assertEquals("decision-plain", String(importCipher.decrypt(File(dstFiles, "settings/decision-model.bin").readBytes())))
+        assertEquals("workflows-plain", String(importCipher.decrypt(File(dstFiles, "workflows-v1.bin").readBytes())))
+        assertEquals("checklists-plain", String(importCipher.decrypt(File(dstFiles, "saved-checklists-v1.bin").readBytes())))
+        assertEquals("sms-plain", String(importCipher.decrypt(File(dstFiles, "sms-login-consent.txt").readBytes())))
 
         // Prefs: encrypted values were decrypted on export and re-encrypted on import;
         // plain values survive untouched.

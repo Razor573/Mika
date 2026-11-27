@@ -13,15 +13,15 @@ data class SpeedFlags(
     /** 元素优先,只有读不清或模型主动请求时才给主模型画面。 */
     val adaptiveVision: Boolean = false,
     val tablesAtBirth: Boolean = false,
-    /** 统一输入 token 上限(100k):与 15 步定期压缩解耦,默认关闭。 */
-    val disableInputTokenCap: Boolean = false,
+    /** 统一输入 token 上限(100k):默认关闭,开启后强制截断/拒绝超 100k 请求。 */
+    val inputTokenCap: Boolean = false,
 ) {
     private fun on(): Map<String, Boolean> = mapOf(
         "inlineScreen" to inlineScreen, "batchSteps" to batchSteps,
         "replay" to replay, "deepLinks" to deepLinks, "lightSteps" to lightSteps, "parallelTasks" to parallelTasks,
         "structuredCompaction" to structuredCompaction,
         "adaptiveVision" to adaptiveVision, "tablesAtBirth" to tablesAtBirth,
-        "disableInputTokenCap" to disableInputTokenCap,
+        "inputTokenCap" to inputTokenCap,
     )
 
     /** 打开的开关名按字母序用逗号连接;全关为 "none"。[parse] 可读回。 */
@@ -51,7 +51,7 @@ data class SpeedFlags(
                 }
             }
             fun f(k: String) = set[k] ?: false
-            return SpeedFlags(f("inlineScreen"), f("batchSteps"), f("replay"), f("deepLinks"), f("lightSteps"), f("parallelTasks"), f("structuredCompaction"), f("adaptiveVision"), f("tablesAtBirth"), f("disableInputTokenCap"))
+            return SpeedFlags(f("inlineScreen"), f("batchSteps"), f("replay"), f("deepLinks"), f("lightSteps"), f("parallelTasks"), f("structuredCompaction"), f("adaptiveVision"), f("tablesAtBirth"), f("inputTokenCap"))
         }
     }
 }

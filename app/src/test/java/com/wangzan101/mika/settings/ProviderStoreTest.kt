@@ -562,12 +562,12 @@ class ProviderStoreTest {
         val first = connected(s)
         s.use(ModelRole.Main, first.id, "m1", none)
         val cfg = s.configFor(ModelRole.Main)!!
-        assertTrue(s.setModelContext(cfg.id, ModelContextSettings(1_000_000, 80_000, 600)))
+        assertTrue(s.setModelContext(cfg.id, ModelContextSettings(1_000_000, 600_000, 600)))
         val file = tmp.root.resolve("providers.json")
         file.writeText(file.readText().replace("\"readTimeoutSeconds\":600", "\"readTimeoutSeconds\":2147484"))
 
         val reloaded = store()
-        assertEquals(ModelContextSettings(1_000_000, 80_000), reloaded.provider(first.id)!!.contextSettings["m1"])
+        assertEquals(ModelContextSettings(1_000_000, 600_000), reloaded.provider(first.id)!!.contextSettings["m1"])
         assertEquals(1_000_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.contextTokens)
         assertNull(setups.last().readTimeoutSeconds)
     }
@@ -592,17 +592,17 @@ class ProviderStoreTest {
         val p = connected(s)
         s.use(ModelRole.Main, p.id, "m1", none.copy(contextTokens = 1_000_000))
         val id = s.configFor(ModelRole.Main)!!.id
-        for (value in listOf(50_000, 100_000, 80_000)) {
+        for (value in listOf(500_000, 980_000, 950_000)) {
             assertTrue(s.setModelContext(id, ModelContextSettings(triggerTokens = value)))
         }
-        for (value in listOf(0, 49_999, 100_001)) {
+        for (value in listOf(0, 499_999, 980_001)) {
             assertFalse(s.setModelContext(id, ModelContextSettings(triggerTokens = value)))
         }
         assertFalse(s.setModelContext(id, ModelContextSettings(windowTokens = -1)))
         s.use(ModelRole.Main, p.id, "m2", none)
         s.use(ModelRole.Main, p.id, "m1", none.copy(contextTokens = 32_000))
         val saved = store().provider(p.id)!!.contextSettings.getValue("m1")
-        assertEquals(80_000, saved.triggerTokens)
+        assertEquals(950_000, saved.triggerTokens)
         assertEquals(24_000, saved.limits(s.modelFor(ModelRole.Main)!!.capabilities.contextTokens).trigger)
     }
 
@@ -619,9 +619,9 @@ class ProviderStoreTest {
         assertEquals(mapOf("m1" to ModelContextSettings(1_000_000), "m2" to ModelContextSettings(triggerTokens = 600_000)),
             reloaded.provider(p.id)!!.contextSettings)
         reloaded.use(ModelRole.Main, p.id, "m2", none.copy(contextTokens = 1_000_000))
-        assertEquals(100_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
+        assertEquals(600_000, reloaded.modelFor(ModelRole.Main)!!.capabilities.compactionTriggerTokens)
         val m2CfgId = reloaded.configFor(ModelRole.Main)!!.id
-        assertEquals(100_000, reloaded.modelForConfig(m2CfgId)!!.capabilities.compactionTriggerTokens)
+        assertEquals(600_000, reloaded.modelForConfig(m2CfgId)!!.capabilities.compactionTriggerTokens)
     }
 
     @Test fun failedContextSaveLeavesBothTheStoredAndActiveModelAloneAndCanBeRetried() {

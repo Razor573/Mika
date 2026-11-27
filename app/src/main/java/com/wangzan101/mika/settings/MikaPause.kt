@@ -30,15 +30,39 @@ class MikaPause internal constructor(initial: Boolean, private val persist: (Boo
 
     companion object {
         private const val PREFS = "mika_pause"
+        private const val LEGACY_PREFS = "banking_mode"
         private const val KEY_PAUSED = "paused"
 
         @Volatile private var instance: MikaPause? = null
 
         fun get(context: Context): MikaPause = instance ?: synchronized(this) {
-            instance ?: run {
-                val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                MikaPause(prefs.getBoolean(KEY_PAUSED, false)) { prefs.edit().putBoolean(KEY_PAUSED, it).commit() }
-            }.also { instance = it }
+            instance ?: load(context).also { instance = it }
+        }
+
+        internal fun load(context: Context): MikaPause {
+            val app = context.applicationContext
+            migrateLegacyPrefs(app)
+            val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            return MikaPause(prefs.getBoolean(KEY_PAUSED, false)) { prefs.edit().putBoolean(KEY_PAUSED, it).commit() }
+        }
+
+        internal fun migrateLegacyPrefs(context: Context) {
+            val app = context.applicationContext
+            val legacy = app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
+            val hadPaused = legacy.getBoolean(KEY_PAUSED, false)
+            val hadKey = legacy.contains(KEY_PAUSED)
+            if (hadPaused) {
+                app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_PAUSED, true)
+                    .commit()
+            }
+            if (hadPaused || hadKey) {
+                legacy.edit().clear().commit()
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    app.deleteSharedPreferences(LEGACY_PREFS)
+                }
+            }
         }
     }
 }

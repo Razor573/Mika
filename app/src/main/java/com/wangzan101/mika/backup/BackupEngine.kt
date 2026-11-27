@@ -86,6 +86,7 @@ class BackupEngine(
         "settings/remote-relay.bin" to "mika-remote-relay",
         "settings/device-access.bin" to "mika-device-access",
         "settings/mcp-server-secrets.bin" to "mika-mcp-servers",
+        "settings/decision-model.bin" to "mika-decision-key",
         "memory/memory.bin" to "mika-memory",
         "memory/profile.bin" to "mika-memory",
         "memory/task_memory/task_memory.bin" to "mika-memory",
@@ -93,6 +94,9 @@ class BackupEngine(
         "proactive/contacts.bin" to "mika-proactive-contacts",
         "proactive/digest.bin" to "mika-proactive-digest",
         "proactive/journal.bin" to "mika-proactive-journal",
+        "workflows-v1.bin" to "mika-workflows",
+        "saved-checklists-v1.bin" to "mika-saved-checklists",
+        "sms-login-consent.txt" to "mika-sms-login-profiles",
         "call-history-v2.enc" to "mika-call-history",
         "wechat/account.enc" to "mika-wechat-account",
     )
@@ -399,7 +403,7 @@ class BackupEngine(
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     val name = entry.name
-                    if (name.isBlank() || name.contains("..") || name.startsWith("/") || name.endsWith("/")) {
+                    if (name.isBlank() || name.contains("..") || name.contains('\\') || name.startsWith("/") || name.endsWith("/")) {
                         throw BackupException("Backup has an unsafe entry name: $name")
                     }
                     val bytes = ByteArrayOutputStream().also { out -> zip.copyTo(out) }.toByteArray()
