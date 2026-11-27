@@ -76,8 +76,8 @@
     <string name="about_auto_update_disable">خاموش کردن به‌روزرسانی خودکار</string>
     <string name="about_auto_update_now">به‌روزرسانی کن</string>
     <string name="about_auto_update_ready">میکا %1$s دانلود شد</string>
-    <string name="about_mirror_download">استفاده از آینه‌ها برای به‌روزرسانی</string>
-    <string name="about_mirror_download_detail">بررسی به‌روزرسانی از آینه‌ها و GitHub استفاده می‌کند؛ دانلود ابتدا آینه‌ها را امتحان می‌کند. بسته پیش از نصب همچنان از نظر امضا بررسی می‌شود.</string>
+    <string name="about_mirror_download">استفاده از آینه‌ها برای دانلود</string>
+    <string name="about_mirror_download_detail">برای به‌روزرسانی برنامه و بسته‌های صوتی آفلاین: بررسی به‌روزرسانی از آینه‌ها و GitHub استفاده می‌کند و دانلود ابتدا آینه‌ها را امتحان می‌کند. برنامه همچنان از نظر امضا و بسته‌های صوتی از نظر چک‌سام بررسی می‌شوند.</string>
     <string name="about_mirror_sources">آینه‌های به‌روزرسانی</string>
     <string name="about_mirror_sources_detail">تغییر ترتیب، افزودن یا حذف</string>
     <string name="about_mirrors_intro">بررسی به‌روزرسانی آینه‌ها و GitHub را به‌صورت موازی امتحان می‌کند. دانلود آینه‌ها را به ترتیب و سپس GitHub را امتحان می‌کند. پیش از نصب، نام بسته، نسخه و امضا همچنان بررسی می‌شوند.</string>

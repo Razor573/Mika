@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">新版の Mika が利用できます</string>
     <string name="about_auto_update_confirm_detail">今すぐ %1$s をインストールするか、自動更新をオフにして設定から手動で確認できます。</string>
     <string name="about_auto_update_now">今すぐ更新</string>
-    <string name="about_mirror_download">更新にミラーを使う</string>
-    <string name="about_mirror_download_detail">更新の確認にはミラーと GitHub を使い、ダウンロードはミラーを優先します。インストール前の署名確認は変わりません。</string>
+    <string name="about_mirror_download">ダウンロードにミラーを使う</string>
+    <string name="about_mirror_download_detail">アプリの更新とオフライン音声パックに使います。更新の確認にはミラーと GitHub を使い、ダウンロードはミラーを優先します。アプリはインストール前に署名を、音声パックはチェックサムを確認します。</string>
     <string name="about_mirror_sources">更新ミラー</string>
     <string name="about_mirror_sources_detail">順番の変更、追加、削除</string>
     <string name="about_mirrors_intro">更新の確認ではミラーと GitHub を並行して試します。ダウンロードではミラーを順番に試し、最後に GitHub を使います。インストール前にパッケージ名、バージョン、署名を確認します。</string>

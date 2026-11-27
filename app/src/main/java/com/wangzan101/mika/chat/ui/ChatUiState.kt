@@ -118,6 +118,8 @@ data class Exchange(
     val audios: List<com.wangzan101.mika.core.chat.GeneratedAudio> = emptyList(),
     /** 这一轮 Mika 生成并留在工作区里的图,显示成照片格子。 */
     val photos: List<com.wangzan101.mika.core.chat.GeneratedPhoto> = emptyList(),
+    /** 这一轮 Mika 生成并留在工作区里的视频,显示成视频卡片。 */
+    val videos: List<com.wangzan101.mika.core.chat.GeneratedVideo> = emptyList(),
     /** 这次打开 App 后开始跟的时刻(毫秒);不知道时为 0。 */
     val startedAt: Long = 0L,
     /** 结束时算出的用时;没结束或不知道开始时刻时为 null。 */
@@ -244,6 +246,8 @@ data class ChatUi(
     val exchanges: List<Exchange> = emptyList(),
     /** 所属项目分组 id;新对话还没发第一句话时只保存在草稿/界面状态,发送首条消息时写入旁文件。 */
     val projectId: String? = null,
+    /** 这个对话下一次任务使用的主模型;未发首句时选择只留在界面进程内。 */
+    val mainModel: MainModelUi = MainModelUi(),
     /** 上次发送被拦下时缺的条件;为空表示没被拦。 */
     val blocked: List<Problem>? = null,
     val pip: PipUi = PipUi(),

@@ -75,6 +75,7 @@ internal fun filterLanguages(query: String): List<AppLanguage> {
             AppLanguage.Arabic -> "arabic العربية 阿拉伯语"
             AppLanguage.Persian -> "persian فارسی 波斯语"
             AppLanguage.Turkish -> "turkish türkçe 土耳其语"
+            AppLanguage.Vietnamese -> "vietnamese tiếng việt 越南语"
         }.lowercase().contains(q)
     }
 }

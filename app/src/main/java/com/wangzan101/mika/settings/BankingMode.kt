@@ -55,6 +55,7 @@ class BankingMode private constructor(
 
     private fun setPaused(value: Boolean) {
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_PAUSED, value).apply()
+        runCatching { MikaPause.get(app).set(value) }
     }
 
     /** 此刻的真实状态,直接读系统,不读缓存。 */
@@ -92,7 +93,7 @@ class BankingMode private constructor(
             tasksStopped = true
         }
         // 先停助手和配对监听:看门狗从这一刻起不再重起它;配对钥匙和端口缓存不动。
-        shell.pause()
+        shell.pauseChanged()
         runCatching { PhoneServices.of(app).pairing.end() }
         // 无障碍:服务在跑时能自己关掉自己;如果服务在列表里却没在跑,
         // 只能由用户去系统设置里关,界面要说清楚。
@@ -143,7 +144,7 @@ class BankingMode private constructor(
         if (!before.wirelessDebugging && canWriteSecureSettings()) {
             DeveloperSettings.turnOnWirelessDebugging(app.contentResolver)
         }
-        shell.resume()
+        shell.pauseChanged()
         // 再读一次系统:写开关可能被系统在不允许的 Wi-Fi 上撤回,以实测为准。
         val after = snapshot()
         return ResumeResult(

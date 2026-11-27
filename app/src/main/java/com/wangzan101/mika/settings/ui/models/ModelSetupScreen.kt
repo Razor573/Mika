@@ -64,6 +64,7 @@ import com.wangzan101.mika.settings.ui.UsageCopy
 import com.wangzan101.mika.setup.ui.Onboarding
 import com.wangzan101.mika.setup.ui.OnboardingStep
 import com.wangzan101.mika.ui.NavSlide
+import com.wangzan101.mika.ui.rememberPageStates
 import com.wangzan101.mika.ui.Route
 import com.wangzan101.mika.ui.openInBrowser
 import com.wangzan101.mika.voice.ui.VoiceHubSection
@@ -83,6 +84,8 @@ fun ModelSetupScreen(
     onOpenVoice: (() -> Unit)? = null,
     /** 设置里点「图片模型」卡片去设置页;上手流程不传,卡片就不出现。 */
     onOpenImage: (() -> Unit)? = null,
+    /** 设置里点「视频模型」卡片去设置页;上手流程不传,卡片就不出现。 */
+    onOpenVideo: (() -> Unit)? = null,
     /** 设置里查看 Token 用量;上手流程不传。 */
     onOpenUsage: (() -> Unit)? = null,
     /** 设置里打开统一语音模型目录;上手流程不传。 */
@@ -149,7 +152,7 @@ fun ModelSetupScreen(
     val role = picking
     val actions = ModelSetupActions(
         selectPreset = vm::selectPreset, setKind = vm::setKind, setBaseUrl = vm::setBaseUrl, setAccountId = vm::setAccountId, setApiKey = vm::setApiKey,
-        setModel = vm::setModel, setManual = vm::setManual, setName = vm::setName,
+        setModel = vm::setModel, setManual = vm::setManual, setName = vm::setName, setNickname = vm::setNickname,
         testAndSave = vm::testAndSave,
         saveUntested = vm::saveWithoutTest,
         openForm = vm::openForm, closeForm = vm::closeForm,
@@ -162,10 +165,11 @@ fun ModelSetupScreen(
         pickFallback = { pickingFallbackRole = ModelRole.Main; pickingFallbackSlot = it },
         pickRoleFallback = { r, s -> pickingFallbackRole = r; pickingFallbackSlot = s },
         clearFallback = vm::clearFallback,
+        moveFallback = vm::moveFallback,
         openProviders = { showProviders = true },
         openGroups = { groupsOpen = true },
         next = onDone, openSpeech = onOpenSpeech,
-        openVoice = onOpenVoice, openUsage = onOpenUsage,
+        openVoice = onOpenVoice, openImage = onOpenImage, openVideo = onOpenVideo, openUsage = onOpenUsage,
         openVoiceCatalog = onOpenVoiceCatalog, openCallMode = onOpenCallMode,
         openDecision = { openDecision = true }, openSignIn = { signInSheet = it },
         setReasoningEffort = vm::setReasoningEffort, setModelContext = vm::setModelContext,
@@ -186,7 +190,9 @@ fun ModelSetupScreen(
     // 换页动画期间旧页还在渲染:服务商刚删掉时详情页也能从缓存里拿到数据画完退出
     var heldProviders by remember { mutableStateOf(ui.providers) }
     if (ui.providers.isNotEmpty()) heldProviders = ui.providers
-    NavSlide(subPage, depth = { it.depth }) { page ->
+    // 子页的滚动位置等:返回到上一层时原样恢复,退出的子页丢掉(规则见 PageStates)
+    val pageStates = rememberPageStates()
+    NavSlide(subPage, depth = { it.depth }, states = pageStates) { page ->
     when (page) {
         is ModelSubPage.AddProvider -> {
             BackHandler(onBack = vm::closeForm)
@@ -229,6 +235,7 @@ fun ModelSetupScreen(
                     },
                     useAsMain = { vm.useAsMain(p.id) },
                     setDailyBudget = { vm.setDailyTokenBudget(p.id, it) },
+                    rename = { vm.renameProvider(p.id, it) },
                 )
                 if (page is ModelSubPage.AllModels) {
                     BackHandler { allModels = false }
@@ -379,6 +386,8 @@ class ModelSetupActions(
     /** 「手动填写模型名」的开和收。 */
     val setManual: (Boolean) -> Unit = {},
     val setName: (String) -> Unit = {},
+    /** 添加时填的账号备注(见 [com.wangzan101.mika.settings.Provider.nickname])。 */
+    val setNickname: (String) -> Unit = {},
     val testAndSave: () -> Unit = {},
     /** 不测试,直接保存(见 [ModelSetupViewModel.saveWithoutTest])。 */
     val saveUntested: () -> Unit = {},
@@ -389,6 +398,7 @@ class ModelSetupActions(
     val pickFallback: (Int) -> Unit = {},
     val pickRoleFallback: (ModelRole, Int) -> Unit = { _, _ -> },
     val clearFallback: (ModelRole, Int) -> Unit = { _, _ -> },
+    val moveFallback: (ModelRole, Int, Int) -> Unit = { _, _, _ -> },
     /** 打开「服务商」页(已连接的服务商 + 添加表单)。 */
     val openProviders: () -> Unit = {},
     /** 打开「语音转文字」的选择页;为 null 时不显示这张卡(上手流程)。 */
@@ -397,6 +407,8 @@ class ModelSetupActions(
     val openVoice: (() -> Unit)? = null,
     /** 打开「图片模型」设置页;为 null 时不显示这张卡(上手流程)。 */
     val openImage: (() -> Unit)? = null,
+    /** 打开「视频模型」设置页;为 null 时不显示这张卡(上手流程)。 */
+    val openVideo: (() -> Unit)? = null,
     /** 打开 Token 用量;为 null 时不显示入口(上手流程)。 */
     val openUsage: (() -> Unit)? = null,
     /** 打开统一语音模型目录;为 null 时不显示入口(上手流程)。 */
@@ -449,15 +461,11 @@ fun ModelSetupContent(
                     RolesSection(ui, onPick, actions.setReasoningEffort)
                     FooterNote(ModelSetupCopy.ONBOARDING_NOTE)
                 } else {
-                    // Providers entry — show count + total key count in subtitle
-                    val totalKeys = ui.providers.sumOf { p ->
-                        ui.providerKeyMap[p.id]?.size ?: 0
-                    }
-                    val providerSubtitle = when {
-                        ui.providers.isEmpty() -> "No providers connected"
-                        totalKeys > 1 -> "${ui.providers.size} providers · $totalKeys keys in pool"
-                        else -> "${ui.providers.size} provider${if (ui.providers.size > 1) "s" else ""}"
-                    }
+                    // 服务商入口的副标题:写服务商数,池里有多把 Key 时再带上 Key 数
+                    val providerSubtitle = KeyPoolCopy.providersSubtitle(
+                        ui.providers.size,
+                        ui.providers.sumOf { p -> ui.providerKeyMap[p.id]?.size ?: 0 },
+                    )
                     GroupCard {
                         ListRow(MikaIcons.Key, ModelsCopy.PROVIDERS, providerSubtitle, first = true, onClick = actions.openProviders) {
                             RowChevron()
@@ -478,6 +486,7 @@ fun ModelSetupContent(
                     if (voiceCatalog != null && hubOpen) {
                         RolesSection(ui, onPick, actions.setReasoningEffort, actions.setModelContext)
                         ImageModelSection(ui, actions.openImage)
+                        VideoModelSection(actions.openVideo)
                         VoiceHubSection(
                             voiceCatalog, ui.providers, readAloudOn,
                             onStt = actions.openSpeech!!, onTts = actions.openVoice!!,
@@ -487,6 +496,7 @@ fun ModelSetupContent(
                         RolesSection(ui, onPick, actions.setReasoningEffort, actions.setModelContext, actions.openVoice, voiceChoice)
                         SpeechSection(ui, actions.openSpeech)
                         ImageModelSection(ui, actions.openImage)
+                        VideoModelSection(actions.openVideo)
                         VoiceCatalogSection(actions.openVoiceCatalog)
                     }
                     GroupCard(Modifier.padding(top = 8.dp)) {
@@ -498,9 +508,9 @@ fun ModelSetupContent(
                                 first = true, onClick = openDecision) { RowChevron() }
                         }
                     }
-                    FallbackSection(ui, ModelRole.Main, actions.pickRoleFallback, actions.clearFallback)
-                    FallbackSection(ui, ModelRole.Vision, actions.pickRoleFallback, actions.clearFallback)
-                    FallbackSection(ui, ModelRole.Light, actions.pickRoleFallback, actions.clearFallback)
+                    FallbackSection(ui, ModelRole.Main, actions.pickRoleFallback, actions.clearFallback, actions.moveFallback)
+                    FallbackSection(ui, ModelRole.Vision, actions.pickRoleFallback, actions.clearFallback, actions.moveFallback)
+                    FallbackSection(ui, ModelRole.Light, actions.pickRoleFallback, actions.clearFallback, actions.moveFallback)
                 }
                 Spacer(Modifier.height(16.dp))
             }

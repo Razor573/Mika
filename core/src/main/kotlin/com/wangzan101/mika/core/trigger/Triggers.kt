@@ -1,5 +1,6 @@
 package com.wangzan101.mika.core.trigger
 
+import com.wangzan101.mika.core.run.PauseFlag
 import kotlinx.serialization.Serializable
 import java.time.Instant
 import java.time.LocalTime
@@ -47,6 +48,9 @@ data class TriggerDefinition(
     val calendarTimes: List<String> = emptyList(),
     /** 计划是谁建的:用户手动 / 模型 / 外部脚本,只影响展示与追溯。 */
     val source: TriggerSource = TriggerSource.Model,
+    /** 模型任务允许执行的当地窗口；空表示随时执行。固定提醒和手动立即执行不受此限制。 */
+    val executionWindowZone: String? = null,
+    val executionWindows: List<ExecutionWindow> = emptyList(),
 ) {
     init {
         require(id.isNotBlank() && threadId.isNotBlank() && goal.isNotBlank())
@@ -55,9 +59,17 @@ data class TriggerDefinition(
         require(cooldownMs == null || cooldownMs > 0)
         require(calendarTimes.isEmpty() || (calendarTime == calendarTimes.first() &&
             calendarTimes == normalizedCalendarTimes(calendarTimes)))
+        require(executionWindows.isEmpty() || (executionWindowZone != null &&
+            runCatching { ZoneId.of(executionWindowZone) }.isSuccess && executionWindows.all(::isValidExecutionWindow)))
+        require(executionWindows.isNotEmpty() || executionWindowZone == null)
     }
 
     fun calendarClocks(): List<String> = calendarTimes.ifEmpty { listOfNotNull(calendarTime) }
+
+    /** 到点后的实际可执行时间；提醒不消耗模型，不被低价窗口推迟。 */
+    fun executionAtOrAfter(atMs: Long): Long =
+        if (executionWindows.isEmpty() || reminderText != null) atMs
+        else nextExecutionWindowAt(executionWindows, executionWindowZone!!, atMs)
 }
 
 @Serializable
@@ -263,21 +275,31 @@ fun TriggerDefinition.rescheduledTo(nextAtMs: Long): TriggerDefinition {
 fun upcoming(def: TriggerDefinition, afterMs: Long, count: Int): List<Long> {
     if (count <= 0) return emptyList()
     val out = ArrayList<Long>(count)
+    val constrained = def.executionWindows.isNotEmpty() && def.reminderText == null
     when {
         def.calendarTime != null -> {
-            var at = if (def.nextAtMs >= afterMs) def.nextAtMs
-            else nextCalendarAt(def.calendarClocks(), def.calendarZone!!, def.calendarDays, afterMs)
+            var at = if (!constrained && def.nextAtMs < afterMs)
+                nextCalendarAt(def.calendarClocks(), def.calendarZone!!, def.calendarDays, afterMs)
+            else def.nextAtMs
             repeat(count) {
-                out += at
-                at = nextCalendarAt(def.calendarClocks(), def.calendarZone!!, def.calendarDays, at)
+                val earliest = if (out.isEmpty()) maxOf(at, afterMs) else at
+                val runAt = def.executionAtOrAfter(earliest)
+                out += runAt
+                at = nextCalendarAt(def.calendarClocks(), def.calendarZone!!, def.calendarDays, runAt)
             }
         }
         def.intervalMs != null && def.intervalMs > 0 -> {
-            var t = def.nextAtMs
-            if (t < afterMs) t += ((afterMs - t - 1) / def.intervalMs + 1) * def.intervalMs
-            repeat(count) { out += t; t += def.intervalMs }
+            val interval = def.intervalMs
+            var scheduled = def.nextAtMs
+            if (!constrained && scheduled < afterMs) scheduled += ((afterMs - scheduled - 1) / interval + 1) * interval
+            repeat(count) {
+                val earliest = if (out.isEmpty()) maxOf(scheduled, afterMs) else scheduled
+                val runAt = def.executionAtOrAfter(earliest)
+                out += runAt
+                scheduled += ((runAt - scheduled) / interval + 1) * interval
+            }
         }
-        else -> out += def.nextAtMs
+        else -> out += def.executionAtOrAfter(if (constrained) maxOf(def.nextAtMs, afterMs) else def.nextAtMs)
     }
     return out
 }
@@ -285,6 +307,8 @@ fun upcoming(def: TriggerDefinition, afterMs: Long, count: Int): List<Long> {
 /** 排期由宿主实现；核心负责先记账再派发，异常重启时不会重复执行已认领的时段。 */
 class TriggerEngine(private val store: TriggerStore, private val scheduleAlarm: (Long?) -> Unit,
     private val isIdle: () -> Boolean = { true }, private val idleRetryMs: Long = 60_000L,
+    /** 用户暂停了 Mika:到点的时段照样认领、记成「因暂停跳过」,不派发;恢复后不补跑。 */
+    private val paused: PauseFlag = PauseFlag.Never,
     private val dispatch: (TriggerDefinition, TriggerWindow) -> Unit) {
     fun rearm(nowMs: Long) {
         store.windows().filter { it.state == TriggerWindowState.Claimed }
@@ -297,7 +321,10 @@ class TriggerEngine(private val store: TriggerStore, private val scheduleAlarm: 
         // 时段已记过账的计划 claimDue 不会认领,不为它排闹钟:按到期时间排就是「马上响」,响了又认领不了,一直空转
         scheduleAlarm(store.all().filter { it.enabled && (it.id in active || !it.slotTaken(windows)) }.minOfOrNull {
             if (it.id in active) nowMs + idleRetryMs
-            else maxOf(if (it.idleOnly && !idle) nowMs + idleRetryMs else nowMs, it.nextAtMs)
+            else {
+                val earliest = maxOf(if (it.idleOnly && !idle) nowMs + idleRetryMs else nowMs, it.nextAtMs)
+                it.executionAtOrAfter(earliest)
+            }
         })
     }
 
@@ -313,15 +340,20 @@ class TriggerEngine(private val store: TriggerStore, private val scheduleAlarm: 
         return true
     }
 
-    /** 时区变化后,跟随设备旧时区的当地时间计划重算到新时区;显式钉了其他时区的计划不动。 */
+    /** 时区变化后,跟随设备旧时区的当地时间与自定义窗口重算到新时区;显式钉了其他时区(如 UTC 价格窗口)的不动。 */
     fun rezone(nowMs: Long, fromZone: String, toZone: ZoneId) {
         if (fromZone == toZone.id) return
-        store.all().filter { it.enabled && it.calendarTime != null && it.calendarZone == fromZone }
+        store.all().filter { (it.enabled && it.calendarTime != null && it.calendarZone == fromZone) ||
+            it.executionWindowZone == fromZone }
             .forEach { t ->
+                val moveCalendar = t.enabled && t.calendarTime != null && t.calendarZone == fromZone
+                val moveExecution = t.executionWindowZone == fromZone &&
+                    !(t.executionWindowZone == DEEPSEEK_OFF_PEAK_ZONE && t.executionWindows == DEEPSEEK_OFF_PEAK_WINDOWS)
                 store.upsert(
                     t.copy(
-                        calendarZone = toZone.id,
-                        nextAtMs = nextCalendarAt(t.calendarClocks(), toZone.id, t.calendarDays, nowMs),
+                        calendarZone = if (moveCalendar) toZone.id else t.calendarZone,
+                        nextAtMs = if (moveCalendar) nextCalendarAt(t.calendarClocks(), toZone.id, t.calendarDays, nowMs) else t.nextAtMs,
+                        executionWindowZone = if (moveExecution) toZone.id else t.executionWindowZone,
                     )
                 )
             }
@@ -329,8 +361,15 @@ class TriggerEngine(private val store: TriggerStore, private val scheduleAlarm: 
     }
 
     fun fire(nowMs: Long) {
+        if (paused.paused()) {
+            // 暂停时不等空闲:等着的时段若留到恢复以后,就成了恢复时自动补跑的暗队列
+            store.claimDue(nowMs) { it.executionAtOrAfter(nowMs) == nowMs }
+                .forEach { store.mark(it.key, TriggerWindowState.Skipped, PauseFlag.REASON) }
+            rearm(nowMs)
+            return
+        }
         val idle = isIdle()
-        store.claimDue(nowMs) { !it.idleOnly || idle }.forEach { window ->
+        store.claimDue(nowMs) { (!it.idleOnly || idle) && it.executionAtOrAfter(nowMs) == nowMs }.forEach { window ->
             val trigger = store.get(window.triggerId) ?: return@forEach
             try {
                 dispatch(trigger, window)

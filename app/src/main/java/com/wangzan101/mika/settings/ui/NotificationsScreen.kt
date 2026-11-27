@@ -28,6 +28,7 @@ import com.wangzan101.mika.ui.components.RowChevron
 import com.wangzan101.mika.ui.components.RowValue
 import com.wangzan101.mika.ui.components.TileTone
 import com.wangzan101.mika.ui.components.ValueTone
+import com.wangzan101.mika.ui.components.focusHighlightTarget
 import com.wangzan101.mika.ui.theme.MikaIcons
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -63,7 +64,9 @@ fun NotificationsScreen(status: SystemStatus, onFix: (Fix) -> Unit, onBack: () -
             ChannelRowItem(StatusCopy.PROGRESS_CHANNEL, StatusCopy.NOTIF_PROGRESS_WHEN, o.progress, Fix.OpenProgressChannel, onFix)
             if (status.sdkInt >= 36) {
                 ListRow(MikaIcons.Bell, stringResource(R.string.settings_live_task_updates),
-                    note = stringResource(R.string.settings_live_task_updates_detail), onClick = { onFix(Fix.OpenLiveTaskSettings) }) {
+                    note = stringResource(R.string.settings_live_task_updates_detail),
+                    onClick = { onFix(Fix.OpenLiveTaskSettings) },
+                    modifier = Modifier.focusHighlightTarget(SettingsFocusKey.LIVE_TASK_UPDATES)) {
                     RowChevron()
                 }
             }
@@ -74,6 +77,7 @@ fun NotificationsScreen(status: SystemStatus, onFix: (Fix) -> Unit, onBack: () -
                 MikaIcons.Mute, stringResource(R.string.settings_scheduled_quiet),
                 first = true,
                 onClick = { updateQuietHours(quietHours.copy(enabled = !quietHours.enabled)) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.SCHEDULED_QUIET),
             ) {
                 MikaSwitch(quietHours.enabled, { updateQuietHours(quietHours.copy(enabled = it)) },
                     Modifier.testTag("scheduled-quiet-switch"))

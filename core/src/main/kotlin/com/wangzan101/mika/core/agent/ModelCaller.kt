@@ -460,7 +460,10 @@ internal class ModelCaller(
         val r = router?.takeIf { routing } ?: return askRouted(history, specs, step, onText = onText)
         val upfrontMain = r.shouldRouteToMainUpfront(history, specs, tools::verb)
         val hasImages = history.any { m -> m.parts.any { it is Part.Image } }
-        val stepCtx = track.context(step, hasImages).copy(needsMainUpfront = upfrontMain)
+        val stepCtx = track.context(step, hasImages).copy(
+            needsMainUpfront = upfrontMain,
+            userSpoke = userSpokeSinceReply(history),
+        )
         val decision = r.pickWithReason(stepCtx)
         val picked = decision.model
         suspend fun fallbackToMain(
@@ -654,6 +657,11 @@ internal class ModelCaller(
                 }
             }
         }
+    }
+    /** 最后一条模型回复之后有用户自己的话(插话,见 [Author.User]);开局那句在第一条回复之前,不算。 */
+    private fun userSpokeSinceReply(history: List<Message>): Boolean {
+        val last = history.indexOfLast { it.role == Role.Assistant }
+        return last >= 0 && (last + 1 until history.size).any { history[it].author == Author.User }
     }
 
     /**

@@ -74,5 +74,5 @@ internal fun readCapped(input: java.io.InputStream, maxBytes: Int): String {
         total += n
     }
     while (input.read(chunk) >= 0) { /* drain the rest so the process isn't blocked on a full pipe */ }
-    return out.toString(Charsets.UTF_8)
+    return String(out.toByteArray(), Charsets.UTF_8)
 }

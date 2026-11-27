@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">الإصدار الجديد من Mika جاهز</string>
     <string name="about_auto_update_confirm_detail">ثبّت %1$s الآن، أو أوقف التحديث التلقائي وتحقق يدوياً في الإعدادات.</string>
     <string name="about_auto_update_now">حدّث الآن</string>
-    <string name="about_mirror_download">استخدام المرايا للتحديثات</string>
-    <string name="about_mirror_download_detail">يستخدم التحقق من التحديثات المرايا وGitHub، ويجرب التنزيل المرايا أولًا. لا يزال يتم التحقق من توقيع الحزمة قبل التثبيت.</string>
+    <string name="about_mirror_download">استخدام المرايا للتنزيلات</string>
+    <string name="about_mirror_download_detail">لتحديثات التطبيق وحزم الصوت دون اتصال: يستخدم التحقق من التحديثات المرايا وGitHub، ويجرب التنزيل المرايا أولًا. لا يزال يُتحقق من توقيع التطبيق، ومن مجموع التحقق لحزم الصوت.</string>
     <string name="about_mirror_sources">مرايا التحديث</string>
     <string name="about_mirror_sources_detail">تغيير الترتيب أو الإضافة أو الحذف</string>
     <string name="about_mirrors_intro">يتحقق من التحديثات عبر المرايا وGitHub بالتوازي. يجرب التنزيل المرايا بالترتيب، ثم GitHub. لا يزال يتم التحقق من اسم الحزمة وإصدارها وشهادة توقيعها قبل التثبيت.</string>

@@ -7,6 +7,7 @@ import com.wangzan101.mika.voice.model.adapters.AndroidSystemSttAdapter
 import com.wangzan101.mika.voice.model.adapters.BailianSttAdapter
 import com.wangzan101.mika.voice.model.adapters.DoubaoSttAdapter
 import com.wangzan101.mika.voice.model.adapters.FunAsrSttAdapter
+import com.wangzan101.mika.voice.model.adapters.SttHooks
 import com.wangzan101.mika.voice.model.adapters.ProviderSttAdapter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -169,5 +170,77 @@ class SttSelectionControllerTest {
         assertSame(registry, environment.registry)
         assertSame(catalog, environment.catalog)
         assertSame(catalog, environment.stt.catalog)
+    }
+
+    /** 记下适配器收到的语言,不真的开录音。 */
+    private fun spokenLanguage(model: VoiceModel, callerLanguage: String?): String {
+        var seen = "<not started>"
+        val session = object : com.wangzan101.mika.voice.SpeechSession {
+            override val events = kotlinx.coroutines.flow.emptyFlow<com.wangzan101.mika.voice.SpeechEvent>()
+            override val live = true
+            override fun release() {}
+            override fun cancel() {}
+        }
+        val registry = VoiceAdapterRegistry(
+            sttAdapters = listOf(
+                FunAsrSttAdapter { _, _, tag, _ -> seen = tag; session },
+                BailianSttAdapter { _, _, tag, _ -> seen = tag; session },
+                ProviderSttAdapter(SttProtocol.AudioTranscriptions) { _, _, tag, _ -> seen = tag; session },
+            ),
+        )
+        val catalog = VoiceCatalogStore(MemoryVoiceCatalogBackend(), migrated = true)
+        catalog.upsertService(VoiceService(model.serviceId, "S", VoiceAccount.ExistingProvider("p1")))
+        catalog.upsertModel(model)
+        val controller = voiceTestEnvironment(catalog, FakeVoiceProviderAccountSource(voiceTestProvider()), registry = registry).stt
+        controller.start(android.content.ContextWrapper(null), VoiceModelRef(model.serviceId, model.id, VoiceCapability.STT), callerLanguage, SttHooks())
+        return seen
+    }
+
+    @Test fun `self-hosted streaming recognition speaks the language set on the service, and none when it is left on automatic`() {
+        fun funAsr(language: String) = VoiceModel("s", "m", "M", stt = SttBinding(SttProtocol.FunAsrStreaming, endpoint = "ws://h:1", language = language))
+        // 没设:不指定语言,不跟调用方(界面语言)
+        assertEquals("", spokenLanguage(funAsr(""), "zh-CN"))
+        assertEquals("", spokenLanguage(funAsr(""), null))
+        // 设了:用设的,同样不看调用方
+        assertEquals("ja", spokenLanguage(funAsr("ja"), "zh-CN"))
+        // 传下去的空串到了协议那里就是「自动」,不发语言
+        assertEquals(com.wangzan101.mika.voice.AsrLanguage.Auto, com.wangzan101.mika.voice.model.adapters.asrLanguage(""))
+        assertEquals(com.wangzan101.mika.voice.AsrLanguage.Japanese, com.wangzan101.mika.voice.model.adapters.asrLanguage("ja"))
+        assertEquals(com.wangzan101.mika.voice.AsrLanguage.Cantonese, com.wangzan101.mika.voice.model.adapters.asrLanguage("yue"))
+    }
+
+    @Test fun `the other streaming recognition keeps a set language and otherwise follows the caller as before`() {
+        fun bailian(language: String) = VoiceModel("s", "m", "M", stt = SttBinding(SttProtocol.BailianStreaming, region = "Beijing", language = language))
+        assertEquals("zh-CN", spokenLanguage(bailian(""), "zh-CN"))
+        assertEquals("en", spokenLanguage(bailian("en"), "zh-CN"))
+    }
+
+    @Test fun `recognition that has no language of its own still uses the caller's`() {
+        val upload = VoiceModel("s", "m", "M", stt = SttBinding(SttProtocol.AudioTranscriptions))
+        assertEquals("en-US", spokenLanguage(upload, "en-US"))
+    }
+
+    @Test fun chainSkipsOuterTimeoutForOnDevice() = kotlinx.coroutines.runBlocking {
+        // 本机识别自己按录音长短限时,链上不再套整段上传那 30 秒(否则慢机器会被当成「连不上」)
+        val slow = object : com.wangzan101.mika.voice.model.adapters.SttAdapter {
+            override val protocol = SttProtocol.OnDevice
+            override fun spec(model: ResolvedVoiceModel) = com.wangzan101.mika.voice.SpeechEngineSpec.OnDevice(model.model.id)
+            override fun start(context: android.content.Context, model: ResolvedVoiceModel, language: String?, hooks: SttHooks) =
+                throw UnsupportedOperationException()
+            override fun utterance(context: android.content.Context, model: ResolvedVoiceModel, language: String?):
+                com.wangzan101.mika.voice.model.adapters.UtteranceTranscribe = { _ ->
+                kotlinx.coroutines.delay(400)
+                "本机"
+            }
+        }
+        val catalog = VoiceCatalogStore(MemoryVoiceCatalogBackend(), migrated = true)
+        catalog.installVoicePack(com.wangzan101.mika.voice.model.adapters.testPackEntry("pack"))
+        val env = voiceTestEnvironment(catalog, registry = VoiceAdapterRegistry(sttAdapters = listOf(slow)))
+        val ref = com.wangzan101.mika.voice.ondevice.OnDeviceCatalog.ref("pack")
+
+        val text = env.stt.transcribeChain(android.content.ContextWrapper(null), listOf(ref), "zh-CN", attemptTimeoutMs = 50)(
+            com.wangzan101.mika.voice.Wav.silence(80),
+        )
+        assertEquals("本机", text)
     }
 }

@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">A nova versão do Mika está pronta</string>
     <string name="about_auto_update_confirm_detail">Instale %1$s agora ou desative as atualizações automáticas e verifique manualmente em Configurações.</string>
     <string name="about_auto_update_now">Atualizar agora</string>
-    <string name="about_mirror_download">Usar espelhos para atualizar</string>
-    <string name="about_mirror_download_detail">Verifica atualizações usando os espelhos e o GitHub; os downloads tentam primeiro os espelhos. Os pacotes continuam a ser verificados por assinatura.</string>
+    <string name="about_mirror_download">Usar espelhos para downloads</string>
+    <string name="about_mirror_download_detail">Para atualizações do app e pacotes de voz offline: a verificação de atualizações usa espelhos e o GitHub, e os downloads tentam primeiro os espelhos. O app continua a ser verificado por assinatura e os pacotes de voz pela soma de verificação.</string>
     <string name="about_mirror_sources">Espelhos de atualização</string>
     <string name="about_mirror_sources_detail">Alterar ordem, adicionar ou remover</string>
     <string name="about_mirrors_intro">A verificação de atualizações tenta os espelhos e o GitHub em paralelo. Os downloads tentam os espelhos em ordem e depois o GitHub. Antes de instalar, o pacote, a versão e a assinatura continuam a ser verificados.</string>

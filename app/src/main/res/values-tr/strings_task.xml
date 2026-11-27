@@ -24,6 +24,7 @@
     <string name="gate_move_back_failed">Uygulama Mika\'nın ekranına geri taşınamadı. Yeniden denemek için Devam et\'e dokunun</string>
     <string name="gate_shell_down">Telefon kontrolü bağlantısı koptu. Yeniden bağlanınca Devam et\'e dokunun (veya Ayarlar\'da düzeltin)</string>
     <plurals name="queue_ahead">
+        <item quantity="one">Sırada: %1$d görev önde</item>
         <item quantity="other">Sırada: %1$d görev önde</item>
     </plurals>
     <string name="fail_no_main_model">Henüz kullanılabilir ana model yok. Ayarlar\'da araç çağıran bir model ekleyin.</string>
@@ -44,9 +45,11 @@
     <string name="task_may_make_sound">Bu uygulama ses çıkarabilir</string>
     <string name="task_notif_title">Mika: %1$s</string>
     <plurals name="task_active">
+        <item quantity="one">%1$d görev çalışıyor</item>
         <item quantity="other">%1$d görev çalışıyor</item>
     </plurals>
     <plurals name="task_behind">
+        <item quantity="one">%1$d görev daha size ihtiyaç duyuyor</item>
         <item quantity="other">%1$d görev daha size ihtiyaç duyuyor</item>
     </plurals>
     <string name="task_interrupted">Görev kesildi. Yeniden başlatabilirsiniz</string>
@@ -91,4 +94,7 @@
     <string name="chip_route_step">Adım %1$d/%2$d</string>
     <string name="chip_count">%1$d/%2$d</string>
     <string name="task_no_phone_helper_shizuku">Telefon kontrolü hazır değil. Shizuku\'yu başlatın ve Mika\'ya izin verin (veya Ayarlar\'daki Telefon kontrolünü kontrol edin). Web ve dosya görevleri etkilenmez.</string>
+    <string name="task_video_submitted">Video işi gönderildi</string>
+    <string name="task_video_queued">Video işi sırada</string>
+    <string name="task_video_running">Video oluşturuluyor…</string>
 </resources>

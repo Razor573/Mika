@@ -4,6 +4,7 @@ import com.wangzan101.mika.core.agent.QuoteMessage
 import com.wangzan101.mika.core.agent.AttachedPage
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
+import com.wangzan101.mika.i18n.uiLocale
 import com.wangzan101.mika.i18n.trPlural
 
 /** 对话页上按状态算出来的文字;不碰界面,单测直接测。 */
@@ -21,18 +22,30 @@ object ChatCopy {
     /** 空对话里的一句价值主张:说明 Mika 能干嘛。 */
     val EMPTY_VALUE get() = tr(R.string.chat_empty_value)
 
-    /** 内置示例的类型,只决定首页卡片上的图标和色调。 */
-    enum class ExampleKind { Web, Follow, GroupChat, Alarm, Schedule }
-    data class Example(val kind: ExampleKind, val title: String, val prompt: String)
+    /** 内置示例的类型,决定卡片上用哪个 App 的图标。 */
+    enum class ExampleKind { Web, Follow, GroupChat, Share, Alarm, Schedule }
+    data class Example(val kind: ExampleKind, val title: String, val prompt: String, val blurb: String? = null)
+
+    /** 界面是不是中文。中文界面的推广卡用国内 App(小红书、微信),其他语言用海外的。 */
+    private fun chineseUi(): Boolean = uiLocale().language == "zh"
 
     /**
-     * 内置推荐任务的原文。只在本机还没有保存过推荐任务时用来初始化一次;
-     * 标题和提示词都用这一句,之后用户在设置里改,不会因为换语言或升级被加回来。
+     * 空对话顶部的推广卡,写死在这里,每次按当前界面语言取,点了填进去的也是当前语言。
+     * 中文:GitHub star、小红书关注、微信群总结;其他语言:GitHub star、X 关注、把 Mika 分享给朋友。
+     * 用户自己加的任务不在这里,在输入框加号面板里。
+     */
+    val promos get() = listOf(
+        Example(ExampleKind.Web, tr(R.string.chat_example_github_star_title), tr(R.string.chat_example_github_star), tr(R.string.chat_example_github_star_blurb)),
+        Example(ExampleKind.Follow, tr(R.string.chat_example_follow_title), tr(R.string.chat_example_follow), tr(R.string.chat_example_follow_blurb)),
+        if (chineseUi()) Example(ExampleKind.GroupChat, tr(R.string.chat_example_group_summary_title), tr(R.string.chat_example_group_summary), tr(R.string.chat_example_group_summary_blurb))
+        else Example(ExampleKind.Share, tr(R.string.chat_example_share_title), tr(R.string.chat_example_share), tr(R.string.chat_example_share_blurb)),
+    )
+
+    /**
+     * 推荐任务(加号面板里那份)第一次初始化用的内容。只在本机还没有保存过时用一次,
+     * 之后就是用户自己的列表,不会因为换语言或升级被加回来。
      */
     val examples get() = listOf(
-        Example(ExampleKind.Web, tr(R.string.chat_example_github_star_title), tr(R.string.chat_example_github_star)),
-        Example(ExampleKind.Follow, tr(R.string.chat_example_follow_title), tr(R.string.chat_example_follow)),
-        Example(ExampleKind.GroupChat, tr(R.string.chat_example_group_summary_title), tr(R.string.chat_example_group_summary)),
         Example(ExampleKind.Alarm, tr(R.string.chat_example_alarms_title), tr(R.string.chat_example_alarms)),
         Example(ExampleKind.Schedule, tr(R.string.chat_example_schedule_title), tr(R.string.chat_example_schedule)),
     )
@@ -40,18 +53,24 @@ object ChatCopy {
     fun recommendationSeeds(): List<Pair<String, String>> = examples.map { it.title to it.prompt }
 
     /**
-     * 一条推荐任务属于哪种类型:提示词和内置示例一字不差就是内置的那条(标题改过也认得出);
-     * 自己加的任务没有类型,返回 null,界面上用通用图标。
+     * 曾经放进推荐任务、现在不放了的示例:PDF 总结,还有挪到顶部推广卡写死的那三条。
+     * 升级时把用户没动过的从推荐列表里清掉;改过的留着——那已经是用户自己的任务了。
+     * 当初是按那时的界面语言存的,所以每种语言的原文都比一遍。
      */
-    fun kindOf(prompt: String): ExampleKind? = examples.firstOrNull { it.prompt == prompt }?.kind
-
-    /**
-     * 曾经内置、现在已经去掉的示例。升级时把用户还没动过的那一条从推荐列表里清掉;
-     * 标题或提示词改过的留着——那已经是用户自己的任务了。
-     */
-    fun retiredRecommendationSeeds(): List<Pair<String, String>> = listOf(
-        tr(R.string.chat_example_pdf_title) to tr(R.string.chat_example_pdf),
-    )
+    fun retiredRecommendationSeeds(context: android.content.Context): List<Pair<String, String>> {
+        val ids = listOf(
+            R.string.chat_example_pdf_title to R.string.chat_example_pdf,
+            R.string.chat_example_github_star_title to R.string.chat_example_github_star,
+            R.string.chat_example_follow_title to R.string.chat_example_follow,
+            R.string.chat_example_group_summary_title to R.string.chat_example_group_summary,
+        )
+        return com.wangzan101.mika.i18n.AppLanguage.entries.mapNotNull { it.tag }.flatMap { tag ->
+            val config = android.content.res.Configuration(context.resources.configuration)
+            config.setLocale(java.util.Locale.forLanguageTag(tag))
+            val res = context.createConfigurationContext(config).resources
+            ids.mapNotNull { (t, p) -> runCatching { res.getString(t) to res.getString(p) }.getOrNull() }
+        }.distinct()
+    }
 
     /** 对话页顶栏的标题:固定是 App 名;副标题说此刻在做什么。 */
     const val APP_TITLE = "Mika"

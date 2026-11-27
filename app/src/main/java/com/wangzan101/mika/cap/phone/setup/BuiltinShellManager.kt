@@ -40,6 +40,7 @@ import com.wangzan101.mika.cap.phone.shell.HelperHub
 import com.wangzan101.mika.cap.phone.shell.adb.AndroidAdb
 import com.wangzan101.mika.cap.phone.shell.adb.NsdAdbServiceFinder
 import com.wangzan101.mika.settings.BankingMode
+import com.wangzan101.mika.settings.MikaPause
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -109,6 +110,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
             canWrite = { app.checkSelfPermission(PermissionCommands.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED },
             read = platform::wirelessDebugging,
             write = { DeveloperSettings.turnOnWirelessDebugging(app.contentResolver) },
+            writeOff = { DeveloperSettings.turnOffWirelessDebugging(app.contentResolver) },
         )
     }
 
@@ -116,7 +118,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
     val engine: BuiltinShellEngine by lazy {
         BuiltinShellEngine(
             platform, hub.shell, scope, Dispatchers.IO, autoOn = wirelessAutoOn,
-            persistedPaused = { BankingMode.isPaused(app) },
+            pausedFlag = { MikaPause.get(app).paused() || BankingMode.isPaused(app) },
         )
     }
 
@@ -274,7 +276,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
                     flush()
                 }
                 val handedOff = withTimeoutOrNull(HANDOFF_WAIT_MS) { hub.shell.first { s -> s != null && s !== before } }
-                if (handedOff != null && BankingMode.isPaused(app)) stopHelper()
+                if (handedOff != null && MikaPause.get(app).paused()) stopHelper()
                 return SuAnswer.Granted
             } finally {
                 runCatching { p.outputStream.close() }
@@ -322,7 +324,7 @@ class BuiltinShellManager(context: Context, private val hub: HelperHub, private 
                 stream.write(HelperHandoff.stdinLine(hub.issueLaunchNonce()))
                 launchStage("launch_nonce_written")
                 val handedOff = withTimeoutOrNull(HANDOFF_WAIT_MS) { hub.shell.first { s -> s != null && s !== before } }
-                if (handedOff != null && BankingMode.isPaused(app)) stopHelper()
+                if (handedOff != null && MikaPause.get(app).paused()) stopHelper()
                 launchStage(if (handedOff != null) "handoff_received" else "handoff_timeout")
             }
         }

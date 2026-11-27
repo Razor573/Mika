@@ -1,5 +1,11 @@
 package com.wangzan101.mika.voice.model
 
+import com.wangzan101.mika.voice.SpeechEngineSpec
+import com.wangzan101.mika.voice.model.adapters.FakeOnDeviceBackend
+import com.wangzan101.mika.voice.model.adapters.installTestPack
+import com.wangzan101.mika.voice.model.adapters.testOnDeviceAdapter
+import com.wangzan101.mika.voice.model.adapters.testPackEntry
+import com.wangzan101.mika.voice.ondevice.OnDeviceCatalog
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -193,6 +199,54 @@ class VoiceCatalogStoreTest {
         assertEquals(attemptsBefore, backend.writeAttempts)
     }
 
+    @Test
+    fun `fallback chains persist, drop the primary and models that are gone`() {
+        val backend = FakeBackend()
+        val store = VoiceCatalogStore(backend)
+        store.upsertService(testService)
+        store.upsertModel(testModel(stt = sttBinding, tts = ttsBinding))
+        store.upsertModel(VoiceModel("svc", "b", "B", stt = sttBinding, tts = ttsBinding))
+        store.upsertModel(VoiceModel("svc", "c", "C", stt = sttBinding))
+        store.upsertModel(VoiceModel("svc", "live", "Live", stt = SttBinding(SttProtocol.DoubaoStreaming)))
+        val b = VoiceModelRef("svc", "b", VoiceCapability.STT)
+        val c = VoiceModelRef("svc", "c", VoiceCapability.STT)
+        store.setSttSelection(SttSelection.Model(sttRef))
+
+        assertTrue(store.setFallback(VoiceCapability.STT, 0, b))
+        assertTrue(store.setFallback(VoiceCapability.STT, 1, c))
+        assertFalse("链头不能当自己的备援", store.setFallback(VoiceCapability.STT, 2, sttRef))
+        assertFalse("流式识别进不了链", store.setFallback(VoiceCapability.STT, 2, VoiceModelRef("svc", "live", VoiceCapability.STT)))
+        assertFalse("能力不对", store.setFallback(VoiceCapability.STT, 2, ttsRef))
+        assertTrue(store.moveFallback(VoiceCapability.STT, 1, 0))
+        assertFalse(store.moveFallback(VoiceCapability.STT, 1, 2))
+        assertTrue(store.setFallback(VoiceCapability.TTS, 0, VoiceModelRef("svc", "b", VoiceCapability.TTS)))
+        assertEquals(listOf(c, b), VoiceCatalogStore(backend).state.value.selections.sttFallbacks)
+
+        store.setSttSelection(SttSelection.Model(c))
+        assertEquals("新链头从链里拿掉", listOf(b), store.state.value.selections.sttFallbacks)
+
+        store.deleteModel(VoiceModelRef("svc", "b", VoiceCapability.STT))
+        val after = VoiceCatalogStore(backend).state.value.selections
+        assertEquals(emptyList<VoiceModelRef>(), after.sttFallbacks)
+        assertEquals(emptyList<VoiceModelRef>(), after.ttsFallbacks)
+    }
+
+    @Test
+    fun `catalog written before fallback chains existed still loads with empty chains`() {
+        val backend = FakeBackend()
+        val store = VoiceCatalogStore(backend)
+        store.upsertService(testService)
+        store.upsertModel(testModel(stt = sttBinding, tts = ttsBinding))
+        store.setTtsSelection(ttsRef)
+        val old = backend.value!!.replace(Regex(""","?"(stt|tts)Fallbacks":\[[^\]]*\]"""), "")
+        assertFalse(old.contains("Fallbacks"))
+
+        val restored = VoiceCatalogStore(FakeBackend(old))
+        assertNull(restored.state.value.error)
+        assertEquals(ttsRef, restored.state.value.selections.tts)
+        assertEquals(emptyList<VoiceModelRef>(), restored.state.value.selections.ttsFallbacks)
+    }
+
     private data class Fixture(val store: VoiceCatalogStore, val backend: FakeBackend)
 
     private fun populatedStore(): Fixture {
@@ -236,5 +290,98 @@ class VoiceCatalogStoreTest {
             tts = tts,
             realtime = realtime,
         )
+    }
+
+    @Test
+    fun installVoicePackAddsServiceAndModel() {
+        val backend = FakeBackend()
+        val store = VoiceCatalogStore(backend)
+        val entry = testPackEntry("sense")
+        store.installVoicePack(entry)
+
+        val restored = VoiceCatalogStore(backend).state.value
+        assertEquals(listOf(OnDeviceCatalog.SERVICE), restored.services)
+        val model = restored.models.single()
+        assertEquals(OnDeviceCatalog.model(entry), model)
+        assertEquals(SttBinding(SttProtocol.OnDevice, endpoint = "sense"), model.stt)
+        assertEquals(VoiceModelOrigin.Builtin, model.origin)
+        assertTrue(OnDeviceCatalog.isOnDevice(OnDeviceCatalog.ref("sense")))
+        assertFalse(OnDeviceCatalog.isOnDevice(sttRef))
+        // 再装一个包:同一个服务,不重复
+        store.installVoicePack(testPackEntry("whisper"))
+        assertEquals(1, store.state.value.services.size)
+        assertEquals(2, store.state.value.models.size)
+    }
+
+    @Test
+    fun removeSelectedPackFallsBackToAuto() {
+        val store = VoiceCatalogStore(FakeBackend())
+        store.installVoicePack(testPackEntry("sense"))
+        store.setSttSelection(SttSelection.Model(OnDeviceCatalog.ref("sense")))
+
+        store.removeVoicePack("sense")
+
+        assertEquals("删掉选中的语音包回到「自动」,不是「关闭」", SttSelection.Auto, store.state.value.selections.stt)
+        assertTrue(store.state.value.models.isEmpty())
+    }
+
+    @Test
+    fun removePackDropsItFromFallbacks() {
+        val store = VoiceCatalogStore(FakeBackend())
+        store.upsertService(testService)
+        store.upsertModel(testModel(stt = sttBinding))
+        store.installVoicePack(testPackEntry("sense"))
+        store.setSttSelection(SttSelection.Model(sttRef))
+        assertTrue(store.setFallback(VoiceCapability.STT, 0, OnDeviceCatalog.ref("sense")))
+        assertEquals(listOf(OnDeviceCatalog.ref("sense")), store.state.value.selections.sttFallbacks)
+
+        store.removeVoicePack("sense")
+
+        assertTrue(store.state.value.selections.sttFallbacks.isEmpty())
+        assertEquals("没选它的不动", SttSelection.Model(sttRef), store.state.value.selections.stt)
+    }
+
+    @Test
+    fun deleteModelStillSetsOff() {
+        val store = VoiceCatalogStore(FakeBackend())
+        store.upsertService(testService)
+        store.upsertModel(testModel(stt = sttBinding))
+        store.setSttSelection(SttSelection.Model(sttRef))
+
+        store.deleteModel(sttRef)
+
+        assertEquals(SttSelection.Off, store.state.value.selections.stt)
+    }
+
+    @Test
+    fun missingPackKeepsSelectionAndReportsPackMissing() {
+        val root = java.nio.file.Files.createTempDirectory("voice-models").toFile()
+        try {
+            val backend = FakeBackend()
+            val entry = testPackEntry("sense")
+            VoiceCatalogStore(backend).apply {
+                upsertService(testService)
+                upsertModel(testModel(stt = sttBinding))
+                installVoicePack(entry)
+                setSttSelection(SttSelection.Model(OnDeviceCatalog.ref("sense")))
+                assertTrue(setFallback(VoiceCapability.STT, 0, sttRef))
+            }
+            // 从备份恢复:目录快照在,voice-models/ 不在
+            val restored = VoiceCatalogStore(backend)
+            val adapter = testOnDeviceAdapter(root, FakeOnDeviceBackend(), entry)
+            val env = voiceTestEnvironment(
+                restored, FakeVoiceProviderAccountSource(), registry = VoiceAdapterRegistry(sttAdapters = listOf(adapter)),
+            )
+            assertEquals(SttSelection.Model(OnDeviceCatalog.ref("sense")), restored.state.value.selections.stt)
+            assertEquals(listOf(sttRef), restored.state.value.selections.sttFallbacks)
+            assertThrows(VoiceModelError.PackMissing::class.java) { env.stt.spec(OnDeviceCatalog.ref("sense")) }
+
+            // 文件回来了:不用重新选
+            installTestPack(root, entry)
+            assertEquals(SpeechEngineSpec.OnDevice("sense"), env.stt.spec(OnDeviceCatalog.ref("sense")))
+            assertEquals(SttSelection.Model(OnDeviceCatalog.ref("sense")), restored.state.value.selections.stt)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 }

@@ -1,11 +1,18 @@
 package com.wangzan101.mika.chat
 
 import com.wangzan101.mika.core.model.Usage
+import com.wangzan101.mika.settings.ModelChoice
 import com.wangzan101.mika.core.run.record.RunMetrics
 import com.wangzan101.mika.core.run.record.RunMetricsStore
 import com.wangzan101.mika.core.model.usage.ConversationUsage
+import com.wangzan101.mika.core.model.usage.RequestComposition
 import com.wangzan101.mika.core.agent.Turn
 import com.wangzan101.mika.core.chat.GeneratedAudio
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -855,5 +862,93 @@ class ConversationStoreTest {
         store.delete("p")
         assertEquals(emptyList<ConversationCall>(), ConversationStore(dir).calls("p"))
         assertFalse(dir.listFiles().orEmpty().any { it.name.endsWith(".calls") })
+    }
+
+    @Test fun generatedVideosSurviveReopen() {
+        val dir = tmp.newFolder("video")
+        val store = ConversationStore(dir)
+        val videos = listOf(
+            com.wangzan101.mika.core.chat.GeneratedVideo("/workspace/out/video/take.mp4", 5_000L, 1280, 720, "海边日落", 42L),
+            com.wangzan101.mika.core.chat.GeneratedVideo("/workspace/out/video/raw.mp4"),
+        )
+        store.append("a", Turn("生成一段", "好", "succeeded", videos = videos))
+        assertEquals(videos, ConversationStore(dir).turns("a").single().videos)
+    }
+
+    @Test fun deskChildUsageForwardsToActiveParentAndStopsAfterParentDelete() = runBlocking {
+        val dir = tmp.newFolder("desk-usage")
+        val store = ConversationStore(dir)
+        store.setDeskParent("c1", "p")
+        val firstUpdate = CompletableDeferred<ConversationUsage>()
+        val observer = launch(start = CoroutineStart.UNDISPATCHED) {
+            store.observeUsage("p").collect { usage ->
+                if (usage.input > 0 && !firstUpdate.isCompleted) firstUpdate.complete(usage)
+            }
+        }
+        val comp = RequestComposition("gpt-main", 2, 128_000, 100, 50, 20, 30, 10)
+        val childMeter = store.meter("c1")
+        // 即使前台对话第一轮还没写盘（靠 liveDeskParents 识别），子任务用量和上下文也立即同步给父对话
+        childMeter.request(comp)
+        childMeter.record(Usage(120, 18, 80, cacheReported = true), 1)
+        val expected1 = ConversationUsage(input = 120, output = 18, cached = 80, cacheReportedInput = 120, latest = comp)
+        assertEquals(expected1, store.usageSnapshot("c1"))
+        assertEquals(expected1, store.usageSnapshot("p"))
+        assertEquals(expected1, withTimeout(5_000) { firstUpdate.await() })
+        observer.cancel()
+
+        // 父对话存盘并跨实例重开后继续转发；分支不继承子任务用量
+        store.append("p", Turn("帮我查", "好", "desk"))
+        val reopened = ConversationStore(dir)
+        reopened.meter("c1").record(Usage(30, 5, 10, cacheReported = true), 1)
+        val expected2 = ConversationUsage(input = 150, output = 23, cached = 90, cacheReportedInput = 150, latest = comp)
+        assertEquals(expected2, reopened.usageSnapshot("p"))
+        assertEquals(expected2, reopened.observeUsage("p").first())
+        assertTrue(reopened.branch("p", "b", 0, origin = BranchOrigin("p", 0, true, 1)))
+        assertEquals(ConversationUsage(), reopened.usageSnapshot("b"))
+
+        // 删除父对话后，子对话继续记账不再写回父对话的 .usage
+        reopened.delete("p")
+        assertFalse(File(dir, "p.json.usage").exists())
+        reopened.meter("c1").record(Usage(40, 6), 1)
+        assertEquals(ConversationUsage(input = 190, output = 29, cached = 90, cacheReportedInput = 150, latest = comp), reopened.usageSnapshot("c1"))
+        assertEquals(ConversationUsage(), reopened.usageSnapshot("p"))
+        assertFalse(File(dir, "p.json.usage").exists())
+
+        ConversationStore(dir).meter("c1").record(Usage(10, 2), 1)
+        assertFalse(File(dir, "p.json.usage").exists())
+    }
+
+    // 前台派出的子对话自己没选主模型:开局跟着前台对话的选择(模型或模型组),前台改选后排队中的任务也跟着走
+    @Test fun deskChildRunsOnTheParentsMainChoice() {
+        val store = ConversationStore(tmp.newFolder())
+        store.setDeskParent("c1", "p")
+        assertNull(store.runMainChoice("c1"))
+        store.setSettings("p", ConversationSettings(ModelChoice.Group("group-1")))
+        assertEquals(ModelChoice.Group("group-1"), store.runMainChoice("c1"))
+        store.setSettings("p", ConversationSettings(ModelChoice.Model("cfg-x")))
+        assertEquals(ModelChoice.Model("cfg-x"), store.runMainChoice("c1"))
+        // 子对话没写旁文件,配置清理不会因为它把这份配置一直留着
+        assertEquals(ConversationSettings(), store.settings("c1"))
+    }
+
+    // 前台对话的选择还没写进旁文件(通话里派活不经对话页发送):先认那一份,「跟随设置」也压过旧的旁文件
+    @Test fun deskChildPrefersTheParentsUnsavedChoice() {
+        val store = ConversationStore(tmp.newFolder())
+        store.setDeskParent("c1", "p")
+        store.setSettings("p", ConversationSettings(ModelChoice.Model("cfg-old")))
+        store.setPendingMainChoice("p", ModelChoice.Model("cfg-x"))
+        assertEquals(ModelChoice.Model("cfg-x"), store.runMainChoice("c1"))
+        store.setPendingMainChoice("p", null)
+        assertNull(store.runMainChoice("c1"))
+    }
+
+    // 自己单独选过的对话照用自己的;不是前台派出的对话不看别人
+    @Test fun ownMainChoiceWinsAndPlainChatsIgnoreOthers() {
+        val store = ConversationStore(tmp.newFolder())
+        store.setDeskParent("c1", "p")
+        store.setSettings("p", ConversationSettings(ModelChoice.Model("cfg-x")))
+        store.setSettings("c1", ConversationSettings(ModelChoice.Model("cfg-own")))
+        assertEquals(ModelChoice.Model("cfg-own"), store.runMainChoice("c1"))
+        assertNull(store.runMainChoice("plain"))
     }
 }

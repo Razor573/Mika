@@ -19,7 +19,7 @@ sealed interface BuiltinShellStatus {
     data object Running : BuiltinShellStatus
 
     /**
-     * 银行模式:用户亲手暂停了 Mika,助手已停下,看门狗不会把它起回来。
+     * 用户手动暂停了 Mika:助手已停下,看门狗不会把它起回来。
      * 配对没有解除(钥匙、端口缓存都还在),恢复时直接用已配对的连接重连,不用重新配对。
      * [BuiltinShellControl.paired] 仍为 true,所以这不是 [NotPaired]。
      */
@@ -153,20 +153,14 @@ interface BuiltinShellControl {
     /** 删除配对钥匙、停掉助手、撤销助手给 Mika 的授权;之后状态是 [BuiltinShellStatus.NotPaired]。 */
     suspend fun unpair()
 
-    /** 银行模式是否暂停着:暂停时看门狗不重起助手,[status] 是 [BuiltinShellStatus.Paused]。 */
+    /** 用户是否暂停了 Mika(读持久化的暂停标记,不另存):暂停时看门狗不重起助手,[status] 是 [BuiltinShellStatus.Paused]。 */
     val paused: Boolean get() = false
 
     /**
-     * 暂停内置助手:停掉正在跑的助手,看门狗不再把它起回来。配对不解除,钥匙和端口缓存
-     * 都留着,[resume] 直接用已配对的连接重连,不用重新配对。重复调用无害。
+     * 暂停标记刚变过,按它重新投影:暂停就停掉助手、取消重试和配对发现;恢复就按已有配对重连。
+     * 配对不解除,钥匙和端口缓存都留着。重复调用无害。
      */
-    fun pause() {}
-
-    /**
-     * 恢复内置助手:取消暂停,按已有配对重新连接并启动助手。没有配对过时什么都不做,
-     * 由界面按 [BuiltinShellStatus.NotPaired] 引导配对。
-     */
-    fun resume() {}
+    fun pauseChanged() {}
 }
 
 /** 配对码:6 位数字。用户可能带空格、横线或全角数字,一并规范掉;不是 6 位数字就返回 null。 */

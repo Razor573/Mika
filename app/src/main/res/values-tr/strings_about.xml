@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">Yeni bir Mika sürümü hazır</string>
     <string name="about_auto_update_confirm_detail">%1$s\'i şimdi kurun veya otomatik güncellemeyi kapatıp Ayarlar\'da güncellemeleri manuel denetleyin.</string>
     <string name="about_auto_update_now">Şimdi güncelle</string>
-    <string name="about_mirror_download">Güncellemeler için yansıları kullan</string>
-    <string name="about_mirror_download_detail">Güncellemeleri yansılar ve GitHub kullanarak denetleyin; indirmeler önce yansıları dener. Paketler yine de imza denetiminden geçer.</string>
+    <string name="about_mirror_download">İndirmeler için yansıları kullan</string>
+    <string name="about_mirror_download_detail">Uygulama güncellemeleri ve çevrimdışı ses paketleri için: güncelleme denetimi yansıları ve GitHub\'ı kullanır, indirmeler önce yansıları dener. Uygulama yine imza denetiminden, ses paketleri sağlama toplamı denetiminden geçer.</string>
     <string name="about_mirror_sources">Güncelleme yansıları</string>
     <string name="about_mirror_sources_detail">Sırayı değiştirin, ekleyin veya kaldırın</string>
     <string name="about_mirrors_intro">Güncelleme denetimleri yansıları ve GitHub\'ı paralel dener. İndirmeler sırayla yansıları, sonra GitHub\'ı dener. Paketler yine de kurulumdan önce paket adı, sürüm ve imzalama sertifikasıyla denetlenir.</string>

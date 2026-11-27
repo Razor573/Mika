@@ -40,6 +40,18 @@ class CapsuleControlsTest {
         assertEquals(0, CapsuleEdge.offset(DockSide.Right, plain, 8))
     }
 
+    @Test fun tuckedWindowKeepsTheHalfCircleOnTheSafeEdge() {
+        // 窗口一直是一颗那么大(56),藏起来时整块往屏幕外挪出宽出来的 36,只留 20 的半圆贴在实边上
+        val area = DockArea.of(com.wangzan101.mika.cap.phone.a11y.OverlayArea(1000, 2000, insetLeft = 30, insetRight = 10), 12, 8, 8)
+        val extra = 56 - 20
+        // 左:窗口左边在 -6(屏幕外),看得见的半圆仍从实边 30 起
+        assertEquals(-6, CapsuleEdge.tuckedOffset(DockSide.Left, area, 8, extra))
+        assertEquals(30, CapsuleEdge.tuckedOffset(DockSide.Left, area, 8, extra) + extra)
+        // 右:窗口右边在 1026(屏幕外),看得见的半圆到实边 990 为止
+        assertEquals(-26, CapsuleEdge.tuckedOffset(DockSide.Right, area, 8, extra))
+        assertEquals(1000 - 10, 1000 - CapsuleEdge.tuckedOffset(DockSide.Right, area, 8, extra) - extra)
+    }
+
     @Test fun fullscreenNeedsHiddenStatusBarAndAFullWidthForegroundApp() {
         val full = CapsuleAppBounds(0, 0, 1080, 2400)
         assertTrue(CapsuleFullscreen.matches(1080, 2400, false, full))
@@ -82,5 +94,52 @@ class CapsuleControlsTest {
         assertFalse(CapsuleSetup.needsAccessibility(CapsuleMode.Always, true))
         assertTrue(CapsuleSetup.needsAccessibility(CapsuleMode.Always, false))
         assertTrue(CapsuleSetup.needsAccessibility(CapsuleMode.DuringTasks, false))
+    }
+
+    @Test fun edgeAutoHideDoesNotWakeOnAppearOrSameStateUnlessAttentionNeeded() {
+        val idle = CapsuleLook(CapsuleKind.Idle, pill = false, count = 0, needCount = 0)
+        val running = CapsuleLook(CapsuleKind.Running, pill = false, count = 1, needCount = 0)
+        val runningTwo = CapsuleLook(CapsuleKind.Running, pill = false, count = 2, needCount = 0)
+        val notice = CapsuleLook(CapsuleKind.Notice, pill = false, count = 2, needCount = 0)
+        val noticeOne = CapsuleLook(CapsuleKind.Notice, pill = false, count = 1, needCount = 0)
+        val confirm = CapsuleLook(CapsuleKind.NeedConfirm, pill = true, count = 1, needCount = 1)
+
+        // With auto-hide at edge enabled, reappearing from hidden stays tucked unless a non-idle state changed.
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = null, current = idle))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = idle, current = idle))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = running, current = idle))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = running, current = running))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = notice, current = notice))
+
+        // New non-idle states appearing while hidden still wake briefly / show immediately.
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = null, current = running))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = idle, current = running))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = running, current = runningTwo))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = idle, current = noticeOne))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = noticeOne, current = notice))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = idle, current = confirm))
+
+        // With auto-hide at edge disabled, reappearing from hidden always wakes as before.
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = false, visible = false, previous = null, current = idle))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = false, visible = false, previous = idle, current = idle))
+
+        // While already visible, only look changes wake.
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = true, previous = idle, current = idle))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = true, previous = idle, current = running))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = false, visible = true, previous = idle, current = idle))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = false, visible = true, previous = idle, current = running))
+    }
+
+    @Test fun anotherRunWithTheSameLookStillWakesTheTuckedBall() {
+        val runA = CapsuleLook.of(CapsuleView.Shown(CapsuleKind.Running, "a", count = 1, runKey = "run-a"))
+        val runAnextStep = CapsuleLook.of(CapsuleView.Shown(CapsuleKind.Running, "a, next step", count = 1, runKey = "run-a"))
+        val runB = CapsuleLook.of(CapsuleView.Shown(CapsuleKind.Running, "b", count = 1, runKey = "run-b"))
+
+        // Same run, only the line changed: stays tucked, whether it was hidden or visible.
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = runA, current = runAnextStep))
+        assertFalse(CapsuleEdge.shouldWake(hideAtEdge = true, visible = true, previous = runA, current = runAnextStep))
+        // Run A ended and run B started while the capsule was hidden: show it.
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = false, previous = runA, current = runB))
+        assertTrue(CapsuleEdge.shouldWake(hideAtEdge = true, visible = true, previous = runA, current = runB))
     }
 }

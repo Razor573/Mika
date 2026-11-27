@@ -100,6 +100,7 @@ data class AddForm(
     val saSummary: String = "",
     val saError: String? = null,
     internal val autoProjectId: String = "",
+    val nickname: String = "",
 ) {
     /** 显示「模型名」一栏:没列出模型,或用户要手填。 */
     val showModel: Boolean get() = noList || manual

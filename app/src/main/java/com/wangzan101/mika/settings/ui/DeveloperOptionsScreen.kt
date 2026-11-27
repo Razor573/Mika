@@ -2,6 +2,8 @@ package com.wangzan101.mika.settings.ui
 
 import com.wangzan101.mika.R
 import com.wangzan101.mika.i18n.tr
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -61,6 +63,7 @@ object GroundingCopy {
 /**
  * 设置 › 高级与其他 › 开发者选项:速度和实验两组开关;
  * 有看图模型时另有它的「看图定位已验证」([grounding] 为 null 时不显示);最后是「运行统计」的入口([onOpenRunStats] 为 null 时不显示)。
+ * [scrollState] 由切页的一方给进来,从「运行统计」「设备目录」回来才停在原来的位置。
  */
 @Composable
 fun DeveloperOptionsScreen(
@@ -73,8 +76,9 @@ fun DeveloperOptionsScreen(
     deviceFiles: Boolean = false,
     onDeviceFiles: (Boolean) -> Unit = {},
     onDeviceDirectories: (() -> Unit)? = null,
+    scrollState: ScrollState = rememberScrollState(),
 ) {
-    PageScaffold(tr(R.string.settings_developer), onBack) {
+    PageScaffold(tr(R.string.settings_developer), onBack, scrollState = scrollState) {
         GroupLabel(tr(R.string.dev_speed))
         SwitchGroup(DeveloperSwitches.speed(speed), onSpeed)
         GroupLabel(tr(R.string.dev_experiments))

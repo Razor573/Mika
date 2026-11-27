@@ -145,6 +145,7 @@ internal fun LazyListScope.exchange(
     if (ex.photos.isNotEmpty()) item("p$index") {
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) { GeneratedPhotos(ex.photos, conversationId, 292.dp) }
     }
+    if (ex.videos.isNotEmpty()) item("vi$index") { GeneratedVideoCards(ex.videos, vm) }
     if (ex.files.isNotEmpty()) item("f$index") {
         JumpHighlight(highlightKey == "f$index", reduceMotion) { FileCards(ex.files) }
     }

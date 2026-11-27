@@ -110,8 +110,25 @@ data class Provider(
     val location: String = "",
     /** 最近一次成功拉取实时模型列表的时间戳（毫秒）。 */
     val modelsRefreshedAtMs: Long? = null,
+    /**
+     * 用户给这个账号起的备注(如「工作」「个人」),只用来显示,界面上写成「名字(备注)」(见 ModelsCopy.providerName)。
+     * 不进 [key]、不进 id,也不参与找同一家服务商:改备注不会新建服务商,也碰不到 Key。没起为 null;存之前经 [cleanNickname]。
+     */
+    val nickname: String? = null,
 ) {
     val key: String get() = ProviderConnection.keyOf(kind, baseUrl, name)
+
+    companion object {
+        /** 备注最多几个字(按码点算)。 */
+        const val MAX_NICKNAME = 32
+
+        /** 备注统一这样整理:去掉控制字符和首尾空白,截到 [MAX_NICKNAME] 个字;空的算没起(null)。 */
+        fun cleanNickname(raw: String?): String? {
+            val text = raw?.filterNot { it.isISOControl() }?.trim()?.ifEmpty { null } ?: return null
+            val n = text.codePointCount(0, text.length)
+            return if (n <= MAX_NICKNAME) text else text.substring(0, text.offsetByCodePoints(0, MAX_NICKNAME)).trimEnd()
+        }
+    }
 
     fun supportsServiceTier(model: String, endpoint: ModelEndpoint? = models?.firstOrNull { it.id == model }?.endpoint): Boolean {
         if (kind != ProviderConfig.Kind.OpenAiResponses && kind != ProviderConfig.Kind.ChatGpt) return false
@@ -151,6 +168,12 @@ data class ModelContextSettings(val windowTokens: Int? = null, val triggerTokens
     fun validFor(modelWindow: Int): Boolean = (windowTokens == null || windowTokens > 0) &&
         (triggerTokens == null || (triggerTokens > 0 && triggerTokens == limits(modelWindow).trigger)) &&
         (readTimeoutSeconds == null || readTimeoutSeconds in MODEL_READ_TIMEOUT_SECONDS)
+}
+
+/** 对话里对主模型的覆盖：一个具体模型或一个模型组；null 表示跟随全局。 */
+sealed interface ModelChoice {
+    data class Model(val configId: String) : ModelChoice
+    data class Group(val groupId: String) : ModelChoice
 }
 
 /** 一个用途选了什么:一个具体模型、一个模型组、用主模型,或不用(只有看图可以不用)。 */
@@ -213,10 +236,11 @@ data class RoleChoices(
         is RoleChoice.Group, RoleChoice.Off, null -> null
     }
 
-    /** 两个用途是否解析到同一条配置;任一用途没配时不算相同。 */
+    /** 两个用途是否解析到同一条配置或同一个模型组;任一用途没配时不算相同。 */
     fun sameModel(first: ModelRole, second: ModelRole): Boolean {
-        val a = resolve(first) ?: return false
-        return a == resolve(second)
+        resolveConfig(first)?.let { return it == resolveConfig(second) }
+        val g = resolveGroup(first) ?: return false
+        return g == resolveGroup(second)
     }
 
     /** 这个用途实际用的组 id:「用主模型」取主模型的;具体模型、不用、或主模型还没选时为 null。 */

@@ -55,7 +55,7 @@ import com.wangzan101.mika.settings.ProviderStore
 import com.wangzan101.mika.settings.RunApproval
 import com.wangzan101.mika.settings.imageModel
 import com.wangzan101.mika.settings.ttsModel
-import com.wangzan101.mika.settings.untestedMainProvider
+import com.wangzan101.mika.settings.videoModel
 import com.wangzan101.mika.takeover.Takeover
 import com.wangzan101.mika.voice.model.settingsProtocol
 import java.util.UUID
@@ -239,6 +239,9 @@ class TaskRun(
     internal val env = TaskEnvironment.of(service)
     /** 这段对话对外的会话号:这次运行建的模型(主、轻量、看图,及核查、意图判断、停止交代等旁路)都用它。 */
     internal val session = ModelSession.of(conversationId)
+    /** execute 开局构造一次；主/轻量/视觉、备援与失败提示都只读这份。 */
+    @Volatile internal var modelSnapshot: TaskModelSnapshot? = null
+        private set
     /** App 给的手机服务(共用的 shell 连接、「去设置」提示)、记忆、经验路线、异常退出后的恢复。 */
     internal val phoneServices = PhoneServices.of(service)
     internal val memoryRuntime = MemoryRuntime.of(service)
@@ -270,7 +273,7 @@ class TaskRun(
     /** 收尾后的交代与学习。 */
     private val runTeardown = RunTeardown(
         service, conversationId, goal, runState,
-        kit = { kit }, env = env, session = session, memoryRuntime = memoryRuntime,
+        kit = { kit }, env = env, memoryRuntime = memoryRuntime, snapshot = { modelSnapshot },
         routeStore = routeStore,
         workflowAttemptId = { workflowAttemptId }, noticeTainted = { noticeTainted }, provenance = { provenance },
     )
@@ -292,6 +295,7 @@ class TaskRun(
     val audios: StateFlow<List<com.wangzan101.mika.core.chat.GeneratedAudio>> get() = runState.audios
     /** 本任务生成并留在工作区里的图;结束时随这一轮存进对话。 */
     val photos: StateFlow<List<com.wangzan101.mika.core.chat.GeneratedPhoto>> get() = runState.photos
+    val videos: StateFlow<List<com.wangzan101.mika.core.chat.GeneratedVideo>> get() = runState.videos
     val takeoverStage: StateFlow<Takeover.Stage> get() = runState.takeoverStage
     val frames: StateFlow<Bitmap?> get() = runState.frames
     /** 个人助手的缩略图只收本任务获准展示的手机画面。 */
@@ -502,6 +506,53 @@ class TaskRun(
         com.wangzan101.mika.media.ShareFileExporter(service).save(bytes, mime, trimmed.substringAfterLast('/'))
     }
 
+    /**
+     * 把工作区里的一段视频复制成别的 App 可读的 content URI(分享用),和图片走同一个 [com.wangzan101.mika.media.ShareFileExporter];
+     * 边读边写,不整段读进内存。越界、不是视频、太大时为 null。
+     */
+    internal suspend fun shareWorkspaceVideo(path: String): com.wangzan101.mika.media.ShareableFile? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val trimmed = path.trim()
+        val prefix = com.wangzan101.mika.core.workspace.SandboxPaths.WORKSPACE + "/"
+        if (!trimmed.startsWith(prefix)) return@withContext null
+        val rel = trimmed.removePrefix(prefix)
+        if (rel.isEmpty() || rel.split('/').any { it.isEmpty() || it == "." || it == ".." }) return@withContext null
+        val mime = android.webkit.MimeTypeMap.getSingleton()
+            .getMimeTypeFromExtension(trimmed.substringAfterLast('.', "").lowercase())
+            ?.takeIf { it.startsWith("video/") } ?: return@withContext null
+        val dirs = com.wangzan101.mika.cap.sandbox.SandboxDirs(service)
+        dirs.tree.shared {
+            dirs.gate.openRead(dirs.workspace(com.wangzan101.mika.chat.WorkspaceResolver.resolveFor(service, conversationId)), rel).use { g ->
+                if (g.size > com.wangzan101.mika.media.AndroidVideoPort.MAX_BYTES) null
+                else com.wangzan101.mika.media.ShareFileExporter(service).save(g.input(), mime, trimmed.substringAfterLast('/'))
+            }
+        }
+    }
+
+    /** 本任务的视频端口:手机上开始的任务才给(视频看/存只对用户本机文件有意义)。 */
+    internal val videoPort by lazy {
+        if (provenance.origin != RunOrigin.Ui) null
+        else com.wangzan101.mika.media.AndroidVideoPort(service, conversationId)
+    }
+
+    internal val videoSettings by lazy { com.wangzan101.mika.settings.VideoSettings.get(service) }
+
+    /**
+     * 本任务的视频生成端口:用户打开了视频生成、选的服务商现在仍能生成视频、且这是手机上开始的任务时才建。
+     * 哪家、什么协议由 [com.wangzan101.mika.settings.videoModel] 按服务商的声明决定;选择对不上时不建,工具也就不出现。
+     */
+    internal val videoGenerationPort by lazy {
+        val state = videoSettings.state.value
+        if (!state.enabled || provenance.origin != RunOrigin.Ui) null
+        else com.wangzan101.mika.settings.ProviderStore.get(service).videoModel(state.choice)?.let { model ->
+            com.wangzan101.mika.media.AndroidVideoGenerationPort(
+                service, conversationId, model,
+                com.wangzan101.mika.settings.ProviderStore.modelHttp,
+                onProgress = { stage -> statusNote(tr(videoStageText(stage))) },
+                onGenerated = ::addVideo,
+            )
+        }
+    }
+
     internal val audioPort by lazy {
         val state = audioSettings.state.value
         if (!state.enabled || provenance.origin != RunOrigin.Ui) null
@@ -529,7 +580,7 @@ class TaskRun(
             val protocol = voiceModels.tts.requireModel(ref).model.tts?.protocol
                 ?.let { it.settingsProtocol() } ?: return null
             val caps = audioSettings.capabilities(protocol)
-            val model = voiceModels.tts.createTts(service, ref, caps)
+            val model = voiceModels.tts.createSpeaker(service, ref, caps)
             buildAudioPort(model, caps, state.voice, state.speed)
         } catch (_: com.wangzan101.mika.voice.model.VoiceModelError) {
             null
@@ -558,6 +609,8 @@ class TaskRun(
     /** 音频能力把一段音频存进了音乐库:当作这一轮导出的文件,聊天里出现卡片。 */
     fun addSavedAudio(s: com.wangzan101.mika.core.model.SavedAudio) = runState.addSavedAudio(s)
 
+    fun addVideo(v: com.wangzan101.mika.core.chat.GeneratedVideo) = runState.addVideo(v)
+
     fun addSaved(s: com.wangzan101.mika.core.cap.image.SavedImage) = runState.addSaved(s)
 
     fun clearTakeoverStage() = runState.clearTakeoverStage()
@@ -568,7 +621,7 @@ class TaskRun(
     /** 因模型失败、主模型在它那家还没测试通过时,提示去那家「重新测试」(见 [RetestHint])。测试换了主模型时不看设置里的配置。 */
     private fun withRetestHint(end: TaskState): TaskState {
         if (end !is TaskState.Failed || env.modelFactory !== TaskEnvironment.defaultModelFactory) return end
-        return RetestHint.apply(end, ProviderStore.get(service).untestedMainProvider()) { tr(R.string.fail_model_untested, it) }
+        return RetestHint.apply(end, modelSnapshot?.retestProvider) { tr(R.string.fail_model_untested, it) }
     }
 
     /** execute 收尾;拆成独立函数以缩小 execute 的 suspend 状态机(超大 suspend 函数会被 ART 校验器拒绝)。 */
@@ -642,6 +695,11 @@ class TaskRun(
     }
 
     suspend fun execute(priorTurns: List<Turn>): TaskState {
+        // 每次启动（UI、定时、渠道都一样）重读所属对话（前台派出的子对话跟着前台对话）；此后整次运行只用这一份不可变路由。
+        val choice = withContext(Dispatchers.IO) {
+            runCatching { ConversationStore.shared(service).runMainChoice(conversationId) }.getOrNull()
+        }
+        val snapshot = env.modelSnapshot(service, session, choice).also { modelSnapshot = it }
         noticeTainted = NoticeTurn.tainted(priorTurns)
         phone = null
         val a = RunAssembly(
@@ -664,7 +722,7 @@ class TaskRun(
             // 前一个任务替这个拿着的那份,自己的拿上了就放开
             wakeHandoff?.release()
             wakeHandoff = null
-            val m = assembleModels() ?: return TaskState.Failed(tr(R.string.fail_no_main_model), FailKind.Environment)
+            val m = assembleModels(snapshot) ?: return TaskState.Failed(tr(R.string.fail_no_main_model), FailKind.Environment)
             val ph = assemblePhone(a)
             val taskGate = assembleGate(ph)
             val rec = assembleRecord(a)
@@ -676,7 +734,7 @@ class TaskRun(
             val pr = assemblePrompt(a, priorTurns)
             val t = assembleTools(a, m, ph, mem, rec, pr, web)
             val agent = assembleAgent(a, m, ph, taskGate, mem, rec, pr, web, t, priorTurns)
-            assembleTakeover(a, agent, t)
+            assembleTakeover(a, agent, ph, t)
             val end = withContext(a.tally) { agent.run(pr.runSpec, inbox) }
             resultReadyAtMs = SystemClock.elapsedRealtime()
             return end.also { manualControl.awaitAutomatic(); usedGroups = agent.usedGroups.toList() }.let(::localizeTaskFailure).let(::withRetestHint)
@@ -721,6 +779,18 @@ class TaskRun(
     @Volatile internal var noticeTainted = false
 
     suspend fun learnAfter(end: TaskState, outcome: RunOutcome?, conversations: ConversationStore) = runTeardown.learnAfter(end, outcome, conversations)
+
+    private fun videoStageText(stage: com.wangzan101.mika.core.model.VideoJobStage): Int = when (stage) {
+        com.wangzan101.mika.core.model.VideoJobStage.Submitted -> R.string.task_video_submitted
+        com.wangzan101.mika.core.model.VideoJobStage.Queued -> R.string.task_video_queued
+        com.wangzan101.mika.core.model.VideoJobStage.Running -> R.string.task_video_running
+    }
+
+    /** 后台一步的说明写到任务卡片上(当前这一步的 note);不在干活(已暂停/结束)时不动。 */
+    private fun statusNote(text: String) {
+        val s = state.value as? TaskState.Running ?: return
+        publish(s.copy(note = text))
+    }
 
     internal fun publish(state: TaskState) {
         // 被挪走后到 gate 拦下之前,循环可能还在推理:对外先显示暂停

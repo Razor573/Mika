@@ -8,6 +8,7 @@ import com.wangzan101.mika.core.device.shell.HelperRestart
 import com.wangzan101.mika.settings.ui.StatusCopy
 import android.hardware.display.DisplayManager
 import android.os.Build
+import android.os.DeadObjectException
 import android.os.IBinder
 import android.util.DisplayMetrics
 import android.os.RemoteException
@@ -23,7 +24,10 @@ import com.wangzan101.mika.task.ConfirmationNotifier
 import com.wangzan101.mika.MikaApp
 import com.wangzan101.mika.core.agent.GateReason
 import com.wangzan101.mika.core.agent.TaskState
+import com.wangzan101.mika.core.device.access.AppAccessDenied
 import com.wangzan101.mika.core.run.RunOrigin
+import com.wangzan101.mika.core.safety.gate.TargetAppRestoreFailed
+import com.wangzan101.mika.core.screen.uistate.ActionResult
 import com.wangzan101.mika.cap.phone.display.AgentDisplay
 import com.wangzan101.mika.cap.phone.display.LazyAgentDisplay
 import com.wangzan101.mika.settings.FeatureFlags
@@ -191,6 +195,7 @@ internal suspend fun TaskRun.connectPhone(a: RunAssembly, appAccess: com.wangzan
         appAccess = appAccess,
         shareAudioFile = { path -> phoneRuntime.shareWorkspaceAudio(path) },
         shareImageFile = { path -> shareWorkspaceImage(path) },
+        shareVideoFile = { path -> shareWorkspaceVideo(path) },
     )
     val side0 = PhoneSide(shell, a11y, screen, agentDisplay, muter)
     phone = side0
@@ -211,6 +216,28 @@ internal suspend fun TaskRun.connectPhone(a: RunAssembly, appAccess: com.wangzan
         return moveTask(taskId, id)
     }
 
+internal suspend fun TaskRun.moveBackTarget(ph: RunPhone, fromMainOnly: Boolean = false): Boolean {
+    val p = phone ?: return false
+    val displayId = p.display.current?.displayId ?: return false
+    val target = p.screen.target.value ?: return true
+    return try {
+        withContext(Dispatchers.IO) {
+            restoreTargetApp(p.screen._target, p.shell, displayId, fromMainOnly, ::moveBackToAgent) { app ->
+                try {
+                    if (app.userId >= 0) ph.accessedPhone.openAppCopy(app.packageName, app.userId, cold = false)
+                    else ph.accessedPhone.openApp(app.packageName, cold = false)
+                } catch (e: AppAccessDenied) {
+                    ActionResult.Failed(e.code)
+                }
+            }
+        }
+    } catch (_: DeadObjectException) {
+        false
+    } catch (_: RemoteException) {
+        throw TargetAppRestoreFailed(target.packageName, "Couldn't check the current task for ${target.packageName}.")
+    }
+}
+
 internal suspend fun TaskRun.assembleGate(ph: RunPhone): TaskGate {
     val shellUp = ph.shellUp
     val states = ph.states
@@ -229,8 +256,10 @@ internal suspend fun TaskRun.assembleGate(ph: RunPhone): TaskGate {
         refreshLocked = states::refresh,
         unattendedUnlock = unlockAuthorized?.let { authorized ->
             {
-                // 回锁走无障碍的全局动作、守卫走通知;两样都不在就立不住「锁回去」的义务,不去解锁
-                if (ScreenAccessibility.instance.value == null) {
+                // 回锁走无障碍的全局动作、守卫走通知;两样都不在就立不住「锁回去」的义务,不去解锁。
+                // 熄屏一夜后无障碍服务可能正断开重连或在自动修复:和接手机时同一个有界等待,等不到照旧不解锁
+                if (AccessibilityRepair.awaitService(ScreenAccessibility.instance,
+                        phoneServices.recovery.accessibilityRepair.phase, A11Y_WAIT_MS) == null) {
                     states.refresh()
                     "accessibility_unavailable"
                 } else if (!service.startUnlockGuard()) {
@@ -269,8 +298,7 @@ internal suspend fun TaskRun.assembleGate(ph: RunPhone): TaskGate {
             })
         },
     ) {
-        val t = phone?.screen?.target?.value
-        t != null && t.taskId >= 0 && moveBackToAgent(t.taskId)
+        moveBackTarget(ph)
     }
     gate = taskGate
     return taskGate

@@ -61,8 +61,9 @@ import com.wangzan101.mika.ui.Route
 /** 常用任务共用首页的本地列表；设置入口编辑，聊天入口选取并填入输入框。 */
 @Composable
 fun RecommendedTasksScreen(store: RecommendedTaskStore, onBack: () -> Unit, onPick: ((RecommendedTask) -> Unit)? = null, onOpenChecklists: (() -> Unit)? = null, onOpenWorkflows: (() -> Unit)? = null) {
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
     remember(store) {
-        store.ensureLoaded(seed = { ChatCopy.recommendationSeeds() }, retired = { ChatCopy.retiredRecommendationSeeds() })
+        store.apply { ensureLoaded(seed = { ChatCopy.recommendationSeeds() }, retired = { ChatCopy.retiredRecommendationSeeds(appContext) }) }
     }
     val tasks by store.tasks.collectAsState()
     val unreadable by store.unreadable.collectAsState()

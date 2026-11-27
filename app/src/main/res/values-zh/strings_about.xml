@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">新版 Mika 已就绪</string>
     <string name="about_auto_update_confirm_detail">可以现在安装 %1$s，也可以关闭自动更新，之后在设置里手动检查。</string>
     <string name="about_auto_update_now">立即更新</string>
-    <string name="about_mirror_download">使用镜像更新</string>
-    <string name="about_mirror_download_detail">检查更新使用镜像和 GitHub，下载优先使用镜像；安装前仍会校验签名。</string>
+    <string name="about_mirror_download">使用镜像下载</string>
+    <string name="about_mirror_download_detail">用于 App 更新和离线语音包：检查更新使用镜像和 GitHub，下载优先使用镜像；更新包安装前仍会校验签名，语音包会核对校验值。</string>
     <string name="about_mirror_sources">更新镜像</string>
     <string name="about_mirror_sources_detail">调整顺序、增删地址</string>
     <string name="about_mirrors_intro">检查更新会同时尝试镜像和 GitHub；下载按镜像顺序尝试，最后使用 GitHub。安装前仍会校验包名、版本和签名。</string>

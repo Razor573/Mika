@@ -109,7 +109,11 @@ internal fun userReason(e: ModelError): String = when (e) {
             "Could not reach the network proxy, or the proxy did not forward the request after retrying. Check that the proxy is running and that the host and port in Settings › Network proxy are right; clear it if you do not need a proxy."
         ProxyFailure.AuthFailed -> "The network proxy rejected the username or password (HTTP 407). Check the username and password in the proxy URL under Settings › Network proxy."
     }
-    is ModelError.Server -> "Model service error (HTTP ${e.status}). Please try again later."
+    is ModelError.Server -> {
+        val detail = safeServerDetail(e.detail)
+        if (detail != null) "Model service error (HTTP ${e.status}: $detail). Please try again later."
+        else "Model service error (HTTP ${e.status}). Please try again later."
+    }
     is ModelError.StreamCut ->
         "The connection was closed upstream before the model finished replying, even after retrying. This is usually caused by an unstable network or a short idle timeout on a relay or gateway (common during long model reasoning). Please try again later."
     is ModelError.BadResponse -> "${quoted(e.message.orEmpty())}. Check that the Base URL matches the API format."
@@ -139,6 +143,18 @@ private fun chainErrorTag(e: ModelError): String = when (e) {
     is ModelError.RateLimited -> " HTTP 429"
     is ModelError.Auth -> " " + RetryPolicy.label(e)
     else -> " ${RetryPolicy.label(e)}"
+}
+
+private fun safeServerDetail(raw: String?): String? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (trimmed.startsWith("<!", ignoreCase = true) ||
+        trimmed.startsWith("<html", ignoreCase = true) ||
+        trimmed.startsWith("<head", ignoreCase = true) ||
+        trimmed.startsWith("<body", ignoreCase = true)
+    ) return null
+    val normalized = trimmed.replace(Regex("""\s+"""), " ")
+    val masked = com.wangzan101.mika.core.run.record.Redactor.text(normalized).trim()
+    return masked.takeIf { it.isNotEmpty() }?.let(::quoted)
 }
 
 /** 引在句中的服务端原话:去掉末尾一个句号(原话自带的),由引它的句子补上自己的「。」;省略号(截短的「…」、「...」)不动。 */

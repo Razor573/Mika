@@ -86,6 +86,21 @@ class ModelErrorReasonTest {
     }
 
     /** 断流有自己的说法、不提 Base URL;真的解析不了(格式对不上)才提示检查 Base URL 和接口类型。 */
+    @Test fun serverErrorIncludesQuotedDetailWhenPresentAndOmitsWhenBlank() {
+        val withDetail = userReason(ModelError.Server(400, "Invalid schema: Pointer '/\$defs/Filter' does not exist."))
+        assertTrue(withDetail.contains("HTTP 400: Invalid schema: Pointer '/\$defs/Filter' does not exist"))
+        assertFalse(withDetail.contains("does not exist.)"))
+
+        assertEquals("Model service error (HTTP 500). Please try again later.", userReason(ModelError.Server(500, null)))
+        assertEquals("Model service error (HTTP 502). Please try again later.", userReason(ModelError.Server(502, "   ")))
+        assertEquals("Model service error (HTTP 502). Please try again later.", userReason(ModelError.Server(502, "<html><body>502 Bad Gateway</body></html>")))
+
+        val redacted = userReason(ModelError.Server(400, "Invalid key sk-1234567890abcdef123456 or Bearer secretToken123456"))
+        assertFalse(redacted.contains("sk-1234567890abcdef123456"))
+        assertFalse(redacted.contains("secretToken123456"))
+        assertTrue(redacted.contains("***"))
+    }
+
     @Test fun streamCutIsNotBlamedOnConfiguration() {
         val cut = StopRules.modelFailed(ModelError.StreamCut()).reason
         assertTrue(cut.contains("closed upstream"))

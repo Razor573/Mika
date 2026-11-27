@@ -774,11 +774,23 @@ class BuiltinShellEngineTest {
 
     // ---- 银行模式:暂停助手,不断配对 ----
 
+    private var bankingPaused = false
+    private fun BuiltinShellEngine.pause() { bankingPaused = true; pauseChanged() }
+    private fun BuiltinShellEngine.resume() { bankingPaused = false; pauseChanged() }
+
     @Test
     fun pauseStopsHelperAndWatchdogWithoutForgetting() = runTest {
+        bankingPaused = false
         platform.pairedFlag = true
         helper.value = "first"
-        val e = engine()
+        val e = BuiltinShellEngine(
+            platform = platform,
+            helper = helper,
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)),
+            io = StandardTestDispatcher(testScheduler),
+            graceMs = 0,
+            pausedFlag = { bankingPaused },
+        )
         e.start()
         runCurrent()
         assertEquals(BuiltinShellStatus.Running, e.status.value)
@@ -803,9 +815,17 @@ class BuiltinShellEngineTest {
 
     @Test
     fun resumeReconnectsWithSavedPairing() = runTest {
+        bankingPaused = false
         platform.pairedFlag = true
         helper.value = "first"
-        val e = engine()
+        val e = BuiltinShellEngine(
+            platform = platform,
+            helper = helper,
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)),
+            io = StandardTestDispatcher(testScheduler),
+            graceMs = 0,
+            pausedFlag = { bankingPaused },
+        )
         e.start()
         runCurrent()
         assertEquals(BuiltinShellStatus.Running, e.status.value)
@@ -822,8 +842,16 @@ class BuiltinShellEngineTest {
 
     @Test
     fun pauseBeforeStartKeepsHelperStopped() = runTest {
+        bankingPaused = false
         platform.pairedFlag = true
-        val e = engine()
+        val e = BuiltinShellEngine(
+            platform = platform,
+            helper = helper,
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)),
+            io = StandardTestDispatcher(testScheduler),
+            graceMs = 0,
+            pausedFlag = { bankingPaused },
+        )
         e.pause()
         e.start()
         advanceUntilIdle()
@@ -837,7 +865,15 @@ class BuiltinShellEngineTest {
 
     @Test
     fun resumeWithoutPairingDoesNotLaunch() = runTest {
-        val e = engine()
+        bankingPaused = false
+        val e = BuiltinShellEngine(
+            platform = platform,
+            helper = helper,
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)),
+            io = StandardTestDispatcher(testScheduler),
+            graceMs = 0,
+            pausedFlag = { bankingPaused },
+        )
         e.pause()
         e.resume()
         advanceUntilIdle()
@@ -1069,11 +1105,19 @@ class BuiltinShellEngineTest {
 
     @Test
     fun bankingModePauseAndResumeWorkWithShizukuWithoutWifiOrPairing() = runTest {
+        bankingPaused = false
         platform.wifi = false
         platform.wireless = false
         platform.pairedFlag = false
         platform.shizuku = ShizukuPlatformState(installed = true, running = true, permissionGranted = true)
-        val e = engine()
+        val e = BuiltinShellEngine(
+            platform = platform,
+            helper = helper,
+            scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)),
+            io = StandardTestDispatcher(testScheduler),
+            graceMs = 0,
+            pausedFlag = { bankingPaused },
+        )
         e.start()
         advanceUntilIdle()
         assertEquals(BuiltinShellStatus.Running, e.status.value)

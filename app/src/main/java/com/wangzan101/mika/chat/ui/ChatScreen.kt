@@ -125,6 +125,8 @@ fun ChatScreen(
     onOpenDrawer: () -> Unit,
     /** 被拦下的提示里的「去设置」。 */
     openSettings: () -> Unit,
+    /** 用量面板里的「查看 Token 用量」:跳到设置里的 Token 用量页。 */
+    openUsage: () -> Unit = {},
     /** 「＋」面板里的「浏览器」:打开内置浏览器。 */
     onOpenBrowser: () -> Unit = {},
     openRun: (String) -> Unit = {},
@@ -135,6 +137,8 @@ fun ChatScreen(
     voice: VoiceSource? = null,
     /** 「还不能语音输入」里的「去选」。 */
     openSpeechModel: () -> Unit = {},
+    /** 「还不能语音输入」里的「下载离线语音包」。 */
+    openVoicePacks: () -> Unit = {},
     /** 输入框里还没发出的字，交给「教 Mika」预填，不会自己开始。 */
     onOpenTeach: (String) -> Unit = {},
     /** 首页推荐任务。不传时用本机保存的那一份;测试传入单独的存储,避免改到用户的数据。 */
@@ -154,9 +158,10 @@ fun ChatScreen(
     val workflowRuntime = workflows ?: (LocalContext.current.applicationContext as? MikaApp)?.workflows
     val recommendationStore = recommendations
         ?: (LocalContext.current.applicationContext as? MikaApp)?.recommendedTasks
+    val appContext = LocalContext.current.applicationContext
     val recommendedTasksFlow = remember(recommendationStore) {
         recommendationStore?.also {
-            it.ensureLoaded(seed = { ChatCopy.recommendationSeeds() }, retired = { ChatCopy.retiredRecommendationSeeds() })
+            it.ensureLoaded(seed = { ChatCopy.recommendationSeeds() }, retired = { ChatCopy.retiredRecommendationSeeds(appContext) })
         }?.tasks
             ?: MutableStateFlow<List<RecommendedTask>>(emptyList())
     }
@@ -227,6 +232,7 @@ fun ChatScreen(
     var showWorkflows by rememberSaveable { mutableStateOf(false) }
     // 面板开着时选照片会把首页的草稿提升成对话(id 从 null 变成新值),所以不跟对话 id 绑;换对话时用户本来就会先关掉
     var showPlus by rememberSaveable { mutableStateOf(false) }
+    var showMainModel by rememberSaveable(ui.conversationId) { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     var saveTaskPrompt by remember(ui.conversationId) { mutableStateOf<String?>(null) }
@@ -240,6 +246,12 @@ fun ChatScreen(
             fillTaskTitle = task.title
             fillTaskPrompt = task.prompt
         } else fillDraft(task.prompt)
+    }
+    // 推广卡点了直接发;输入框里已经有草稿、附件或引用,或者此刻发不出去(还没配好模型、正在学习……)时,退回填进输入框
+    val sendTask: (RecommendedTask) -> Unit = { task ->
+        val now = vm.ui.value
+        val clean = now.input.isEmpty() && now.attachments.isEmpty() && now.quote == null
+        if (!clean || !vm.send(task.prompt, check)) pickTask(task)
     }
     var retryFailures by remember { mutableStateOf<Pair<String, String>?>(null) }
     var voiceHolding by remember { mutableStateOf(false) }
@@ -428,7 +440,7 @@ fun ChatScreen(
             ) {
                 if (emptyConversation) {
                     item("empty") {
-                        EmptyState(ui.conversationId, recommendedTasks, Modifier.fillParentMaxHeight(), onPick = pickTask)
+                        EmptyState(ui.conversationId, Modifier.fillParentMaxHeight(), reduceMotion = reduceMotion, onPick = pickTask, onSend = sendTask)
                     }
                 }
                 ui.exchanges.forEachIndexed { i, ex ->
@@ -537,7 +549,8 @@ fun ChatScreen(
             mode = ui.composer,
             hasHistory = ui.exchanges.isNotEmpty(),
             onSend = { vm.send(input, check) },
-            onStop = vm::cancel,
+            onStop = vm::stopAll,
+            working = ui.deskTasks.any { it.inProgress } || ui.exchanges.any { it.deskReply != null && it.status == ExchangeStatus.Working },
             queued = ui.queued,
             onQueueActions = { queueActions = it },
             onCancelQueued = { id ->
@@ -561,6 +574,8 @@ fun ChatScreen(
             onDismissRejected = vm::dismissRejected,
             quote = ui.quote,
             onRemoveQuote = vm::clearQuote,
+            mainModel = ui.mainModel,
+            onMainModel = { showMainModel = true },
             voice = voice,
             // 说的话接在已有的字后面;任务在跑时先作为补充消息排队
             onVoiceText = { vm.input(HoldToTalk.join(vm.ui.value.input, it)) },
@@ -571,6 +586,7 @@ fun ChatScreen(
                 vm.send(text, check)
             },
             onPickSpeech = openSpeechModel,
+            onOpenVoicePacks = openVoicePacks,
             steerTarget = null,
             onVoiceHolding = { voiceHolding = it },
             editRequest = editRequest,
@@ -609,6 +625,14 @@ fun ChatScreen(
             reduceMotion = reduceMotion,
         )
 
+        if (showMainModel) {
+            MainModelSheet(
+                ui = ui.mainModel,
+                onPick = vm::chooseMainModel,
+                onMore = openSettings,
+                onDismiss = { showMainModel = false },
+            )
+        }
         if (showPlus) {
             ChatPlusSheet(
                 selected = ui.attachments,
@@ -651,7 +675,9 @@ fun ChatScreen(
             )
         }
 
-        if (showUsage) ConversationUsageSheet(ui.conversationId) { showUsage = false }
+        // 面板里的「当前模型」跟着本对话在主模型入口里存的选择走,和这个对话下一次任务用的一致
+        if (showUsage) ConversationUsageSheet(ui.conversationId, onDismiss = { showUsage = false }, onOpenUsage = openUsage,
+            mainOverride = ui.mainModel.override)
     if (showRecords) {
         CallRecordsSheet(
             callLog, current = callLog.lastOrNull { it.endMs == null }?.id.orEmpty(),

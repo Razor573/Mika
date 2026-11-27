@@ -55,7 +55,7 @@ class AccessibilityRepair(
     private val now: () -> Long = System::currentTimeMillis,
     /** 明确退出后为 false:不写回无障碍;下次手动打开时 [watch] 的 active 流会重新判断。 */
     private val allowed: () -> Boolean = { true },
-    /** 银行模式暂停时为 true:即使助手状态不是 Paused,也不自动打开无障碍。 */
+    /** 用户暂停了 Mika 时为 true(读持久化的暂停标记):即使助手状态还没跟上,也不自动打开无障碍。 */
     private val paused: () -> Boolean = { false },
 ) {
     private val _last = MutableStateFlow<RepairOutcome?>(null)
@@ -105,8 +105,8 @@ class AccessibilityRepair(
     }
 
     private fun eligible(s: A11yObservation, h: BuiltinShellStatus, unlocked: Boolean) =
-        // 银行模式暂停时绝不自动把无障碍打开:用户亲手关掉它就是为了让银行 App 通过,
-        // 修好它等于把暂停取消了。恢复时用户自己在系统设置里打开。
+        // 暂停时绝不自动把无障碍打开:暂停本身就关掉了它,自动修好等于把暂停取消了。
+        // 恢复后照常修;修不成时恢复页再请用户去系统设置里打开。
         allowed() && !paused() && s.stuck && unlocked && h != BuiltinShellStatus.Paused &&
             (direct() || h == BuiltinShellStatus.Running) && consent().wants(RecoveryCapability.Accessibility)
 

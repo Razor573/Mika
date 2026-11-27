@@ -97,8 +97,8 @@ class BackupEngine(
         "wechat/account.enc" to "mika-wechat-account",
     )
 
-    /** Directories under [filesDir] that are deliberately not backed up (large, regenerable). */
-    private val excludedDirs = listOf("sandbox", "library-attachments")
+    /** Directories under [filesDir] that are deliberately not backed up (large, regenerable; voice packs are re-downloaded after restore). */
+    private val excludedDirs = listOf("sandbox", "library-attachments", "voice-models")
 
     companion object {
         /** Largest backup the import will read into memory. */

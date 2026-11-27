@@ -11,18 +11,22 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.IntOffset
 import com.wangzan101.mika.ui.theme.MikaTheme
 
 /** App 里的页面。对话是根页面,其余都从它(或从设置)进去,返回时回到进来的那一页。 */
-enum class Route { Chat, Personal, Settings, Memory, Plans, Browser, Files, Run, Source, PhoneSetup, Models, Usage, SpeechModel, VoiceModel, ImageModel, Welcome, ModelSetup, About, License, UpdateMirrors, Screens, Teach, Calls, Report, Playback, Persona, VoiceCatalog, RealtimeVoice, VoiceServices, CallMode, VoiceCall }
+enum class Route { Chat, Personal, Settings, Memory, Plans, Browser, Files, Run, Source, PhoneSetup, Models, Usage, SpeechModel, VoiceModel, ImageModel, Welcome, ModelSetup, About, License, UpdateMirrors, Screens, Teach, Calls, Report, Playback, Persona, VoiceCatalog, RealtimeVoice, VoiceServices, CallMode, VoiceCall, VideoModel, VoicePacks }
 
 /**
  * 页面栈:最底下永远是对话页。[push] 进一页,[back] 回上一页(已在对话页时返回 false,交给系统退出)。
@@ -127,18 +131,69 @@ private object NavAnim {
 }
 
 /**
+ * 换页时各页的界面状态(滚动位置、输入框、展开的子页……)。规则跟返回栈一致:
+ * 页面还压在栈里(比当前页浅)时留着,按返回回去原样恢复;退出栈(返回到更浅的页、同层换成别的页)就丢掉,
+ * 下次从入口重新进来是新的一页。[keep] 为真的页面一直留着(对话页、个人助理这类根页面来回切)。
+ *
+ * 由调用方 remember 在换页动效外面:页面框架(侧栏常驻/抽屉)换形态时 [NavSlide] 会重新组合,状态不能跟着丢。
+ */
+@Stable
+class PageStates internal constructor(
+    internal val holder: SaveableStateHolder,
+    private val depths: HashMap<String, Int>,
+    private val keep: (String) -> Boolean,
+) {
+    /** 进入 [key] 这一页(层级 [depth]):同层及更深的其他页已出栈,扔掉它们存着的状态。 */
+    internal fun enter(key: String, depth: Int) {
+        for (gone in stalePages(depths, key, depth, keep)) {
+            depths -= gone
+            holder.removeState(gone)
+        }
+        depths[key] = depth
+    }
+
+    internal companion object {
+        /** 进入 [key]/[depth] 时该丢掉的页面:层级不比它浅、不是它自己、也不是常驻页。 */
+        fun stalePages(known: Map<String, Int>, key: String, depth: Int, keep: (String) -> Boolean): List<String> =
+            known.filter { (k, d) -> k != key && d >= depth && !keep(k) }.keys.toList()
+
+        val DepthsSaver: Saver<HashMap<String, Int>, ArrayList<String>> = Saver(
+            save = { m -> ArrayList(m.map { (k, d) -> "$d:$k" }) },
+            restore = { list -> HashMap(list.associate { it.substringAfter(':') to it.substringBefore(':').toInt() }) },
+        )
+    }
+}
+
+@Composable
+fun rememberPageStates(keep: (String) -> Boolean = { false }): PageStates {
+    val holder = rememberSaveableStateHolder()
+    val depths = rememberSaveable(saver = PageStates.DepthsSaver) { HashMap() }
+    return remember(holder, depths) { PageStates(holder, depths, keep) }
+}
+
+/**
  * 页面切换的滑动推入过渡:[depth] 变深时新页从右滑入、旧页小幅左移(视差),变浅时反向。
  * 同级替换按推入处理;系统关了动画([MikaTheme.reduceMotion])时直接替换。
  * 内容里要用 [targetState] 的值(动画期间旧页还在),别读导航的实时状态。
+ *
+ * 给了 [states] 时每页的界面状态按 [pageKey] 存进去(规则见 [PageStates]),[pageKey] 相同视为同一页:
+ * 只是页面数据变了不重演换页动效,也不会两份同名页同时在组合树里。
  */
 @Composable
 fun <T> NavSlide(
     targetState: T,
     depth: (T) -> Int,
     modifier: Modifier = Modifier,
+    states: PageStates? = null,
+    pageKey: (T) -> String = { it.toString() },
     content: @Composable AnimatedContentScope.(T) -> Unit,
 ) {
     val reduce = MikaTheme.reduceMotion
+    if (states != null) {
+        val key = pageKey(targetState)
+        val level = depth(targetState)
+        SideEffect { states.enter(key, level) }
+    }
     AnimatedContent(
         targetState = targetState,
         modifier = modifier,
@@ -155,6 +210,9 @@ fun <T> NavSlide(
             }
         },
         label = "nav-slide",
-        content = content,
-    )
+        contentKey = { if (states != null) pageKey(it) else it },
+    ) { page ->
+        if (states != null) states.holder.SaveableStateProvider(pageKey(page)) { content(page) }
+        else content(page)
+    }
 }

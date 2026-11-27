@@ -2,7 +2,7 @@
 <resources>
     <string name="calls_auto_off_short">Kapalı</string>
     <string name="calls_auto_standby_short">Beklemede</string>
-    <string name="calls_rule_delay">Yanıtlama süresi</string>
+    <string name="calls_rule_delay">Şu süre sonra yanıtla</string>
     <string name="calls_seconds_value">%1$d sn</string>
     <string name="calls_none_added">Yok</string>
     <string name="calls_not_set">Ayarlanmadı</string>

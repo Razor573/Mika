@@ -13,6 +13,8 @@ import com.wangzan101.mika.core.model.GeminiImageModel
 import com.wangzan101.mika.core.model.ImageCapabilities
 import com.wangzan101.mika.core.model.ImageModel
 import com.wangzan101.mika.core.model.OpenAiImagesModel
+import com.wangzan101.mika.core.model.VideoEndpoint
+import com.wangzan101.mika.core.model.VideoModel
 import com.wangzan101.mika.core.model.ListFailure
 import com.wangzan101.mika.core.model.ListedModel
 import com.wangzan101.mika.core.model.Message
@@ -86,6 +88,7 @@ internal fun ProviderStore.meteredWith(
     call: ProactiveCall = ProactiveCall.Triage,
     beforeRetry: (UsageSource, Int) -> Unit = { _, _ -> },
     effortOverride: String? = null,
+    useRoleEffort: Boolean = true,
 ): ChatModel {
     val p = provider(cfg.providerId)
     val listed = listedOf(cfg)
@@ -99,7 +102,7 @@ internal fun ProviderStore.meteredWith(
         compactionTriggerTokens = settings.triggerTokens?.let { settings.limits(cfg.capabilities.contextTokens).trigger },
         compactionEveryRounds = TEMP_COMPACTION_EVERY_ROUNDS,
     ))
-    val roleEffort = effortOverride ?: _roles.value.reasoningEffort(role)
+    val roleEffort = if (useRoleEffort) effortOverride ?: _roles.value.reasoningEffort(role) else effortOverride
     // 主动能力:思考取服务商写明的最低档;回复短的那两种请求另设上限(见 ProactiveModelSetup)
     val (effort, cap) = if (purpose == UsagePurpose.Proactive) {
         ProactiveModelSetup.of(adapterFor(cfg, listed?.endpoint).first, ReasoningOptions.of(cfg, listed), roleEffort, call)
@@ -240,6 +243,21 @@ fun ProviderStore.imageModel(choice: ImageChoice, capabilities: ImageCapabilitie
         ImageProtocol.OpenAiImages -> OpenAiImagesModel(p.baseUrl, key, choice.model, capabilities, client, header)
         ImageProtocol.GeminiImage -> GeminiImageModel(p.baseUrl, key.orEmpty(), choice.model, capabilities, client, header)
     }
+}
+
+/**
+ * 视频生成用的模型:只有选择对得上一家能生成视频的服务商([VideoProviders.resolve] 为 Ready)才建;
+ * 地址、Key、请求头取这家服务商,协议和模型能力由它的 [com.wangzan101.mika.core.model.VideoBackend] 决定。
+ * 不套对话模型的计量。没有 Key 或 Key 含有不能放进请求头的字符时为 null。提交和轮询都是短请求,结果另行下载。
+ */
+fun ProviderStore.videoModel(choice: VideoChoice?): VideoModel? {
+    val ready = VideoProviders.resolve(choice, providers.value) as? VideoSelection.Ready ?: return null
+    val p = ready.target.provider
+    val key = (activeApiKey(p.id) ?: providerKey(p.id)?.let { KeyPoolManager.shared.parseKeys(it).firstOrNull() })
+        ?.trim()?.takeIf { it.isNotEmpty() && ApiKeyText.isHeaderLegal(it) } ?: return null
+    val client = modelHttp.newBuilder().readTimeout(60, TimeUnit.SECONDS).build()
+    val header = headers(p.sessionHeader, ModelSession.fresh())
+    return ready.target.backend.create(VideoEndpoint(p.baseUrl.trim(), key, ready.model, client, header))
 }
 
 /**

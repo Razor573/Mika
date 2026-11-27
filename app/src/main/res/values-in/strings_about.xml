@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">Versi baru Mika siap</string>
     <string name="about_auto_update_confirm_detail">Pasang %1$s sekarang atau matikan pembaruan otomatis dan periksa secara manual di Pengaturan.</string>
     <string name="about_auto_update_now">Perbarui sekarang</string>
-    <string name="about_mirror_download">Gunakan mirror untuk pembaruan</string>
-    <string name="about_mirror_download_detail">Pemeriksaan pembaruan menggunakan mirror dan GitHub; unduhan mencoba mirror terlebih dahulu. Paket tetap diperiksa tanda tangannya sebelum dipasang.</string>
+    <string name="about_mirror_download">Gunakan mirror untuk unduhan</string>
+    <string name="about_mirror_download_detail">Untuk pembaruan aplikasi dan paket suara offline: pemeriksaan pembaruan memakai mirror dan GitHub, unduhan mencoba mirror terlebih dahulu. Aplikasi tetap diperiksa tanda tangannya, paket suara diperiksa checksum-nya.</string>
     <string name="about_mirror_sources">Mirror pembaruan</string>
     <string name="about_mirror_sources_detail">Ubah urutan, tambah, atau hapus</string>
     <string name="about_mirrors_intro">Pemeriksaan pembaruan mencoba mirror dan GitHub secara paralel. Unduhan mencoba mirror secara berurutan, lalu GitHub. Sebelum dipasang, nama paket, versi, dan tanda tangan tetap diperiksa.</string>

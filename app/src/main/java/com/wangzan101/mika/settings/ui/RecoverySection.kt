@@ -33,6 +33,7 @@ import java.time.format.DateTimeFormatter
 import com.wangzan101.mika.ui.components.GroupCard
 import com.wangzan101.mika.ui.components.ListRow
 import com.wangzan101.mika.ui.components.RowChevron
+import com.wangzan101.mika.ui.components.focusHighlightTarget
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.theme.MikaIcons
 import com.wangzan101.mika.ui.components.MikaSwitch
@@ -183,7 +184,10 @@ fun RecoverySection(
             val copy = RecoveryCopy.switch(cap)
             val on = consent.wants(cap)
             val icon = iconOf(cap)
-            ListRow(icon, copy.title, if (busy == cap) RecoveryCopy.WORKING else null, first = i == 0) {
+            ListRow(
+                icon, copy.title, if (busy == cap) RecoveryCopy.WORKING else null, first = i == 0,
+                modifier = Modifier.focusHighlightTarget(focusKeyOf(cap)),
+            ) {
                 MikaSwitch(on, { want -> onToggle(cap, want) }, Modifier.testTag("recovery-${cap.name}"), enabled = busy == null)
             }
             notes[cap]?.let { Note(it, MikaTheme.colors.bad) }
@@ -202,11 +206,48 @@ fun RecoverySection(
     }
 }
 
+/** Recents visibility uses the same below-row error presentation as the recovery switches. */
+@Composable
+fun RecentsExclusionSection(excluded: Boolean, onSet: (Boolean) -> Boolean) {
+    var current by remember(excluded) { mutableStateOf(excluded) }
+    var failed by remember { mutableStateOf(false) }
+    GroupCard {
+        ListRow(
+            MikaIcons.EyeOff,
+            tr(R.string.rec_exclude_recents),
+            tr(R.string.rec_exclude_recents_sub),
+            first = true,
+            modifier = Modifier.focusHighlightTarget(SettingsFocusKey.RECENTS_EXCLUSION),
+        ) {
+            MikaSwitch(
+                current,
+                { want ->
+                    if (onSet(want)) {
+                        current = want
+                        failed = false
+                    } else {
+                        failed = true
+                    }
+                },
+                Modifier.testTag("recents-exclusion"),
+            )
+        }
+        if (failed) Note(tr(R.string.rec_exclude_recents_failed), MikaTheme.colors.bad)
+    }
+}
+
 private fun iconOf(c: RecoveryCapability): ImageVector = when (c) {
     RecoveryCapability.Accessibility -> MikaIcons.Hand
     RecoveryCapability.BatteryWhitelist -> MikaIcons.Sun
     RecoveryCapability.RestoreAfterReboot -> MikaIcons.Wrench
     RecoveryCapability.AutoWirelessDebugging -> MikaIcons.Refresh
+}
+
+private fun focusKeyOf(c: RecoveryCapability): String = when (c) {
+    RecoveryCapability.Accessibility -> SettingsFocusKey.RECOVERY_A11Y
+    RecoveryCapability.BatteryWhitelist -> SettingsFocusKey.RECOVERY_BATTERY
+    RecoveryCapability.RestoreAfterReboot -> SettingsFocusKey.RECOVERY_BOOT
+    RecoveryCapability.AutoWirelessDebugging -> SettingsFocusKey.RECOVERY_AUTO_WIRELESS
 }
 
 @Composable

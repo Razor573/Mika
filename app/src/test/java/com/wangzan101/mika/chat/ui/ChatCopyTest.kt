@@ -18,25 +18,19 @@ import com.wangzan101.mika.settings.ui.models.Page
 class ChatCopyTest {
     @get:Rule val texts = ChineseTexts()
 
-    @Test fun fiveDistinctExamplesStartWithGithubStar() {
-        val examples = ChatCopy.examples
-        assertEquals(5, examples.size)
-        assertEquals(5, examples.map { it.title }.filter { it.isNotBlank() }.toSet().size)
-        assertEquals(5, examples.map { it.prompt }.filter { it.isNotBlank() }.toSet().size)
-        assertEquals(examples.size, examples.map { it.kind }.toSet().size)
-        assertEquals(ChatCopy.ExampleKind.Web, examples.first().kind)
-        assertTrue(examples.first().prompt.contains("https://github.com/wangzan101/mika"))
-        // 短标题上卡片、完整提示词进输入框:两者分开存
-        assertEquals(ChatCopy.examples.map { it.title }, ChatCopy.recommendationSeeds().map { it.first })
-        assertEquals(ChatCopy.examples.map { it.prompt }, ChatCopy.recommendationSeeds().map { it.second })
+    /** 推荐任务只用闹钟、日程初始化;推广那几条写死在顶部卡片里,不进推荐任务。 */
+    @Test fun recommendationSeedsAreAlarmsAndSchedule() {
+        assertEquals(listOf(ChatCopy.ExampleKind.Alarm, ChatCopy.ExampleKind.Schedule), ChatCopy.examples.map { it.kind })
+        assertEquals(ChatCopy.examples.map { it.title to it.prompt }, ChatCopy.recommendationSeeds())
     }
 
-    /** 卡片图标按类型挑:提示词和内置示例一字不差才认得出;自己加的任务显示通用图标。 */
-    @Test fun kindsOnlyMatchTheBuiltInExamples() {
-        val examples = ChatCopy.examples
-        examples.forEach { assertEquals(it.kind, ChatCopy.kindOf(it.prompt)) }
-        assertNull(ChatCopy.kindOf("打开设置，把字体调大"))
-        assertNull(ChatCopy.kindOf(examples.first().prompt + "，再顺手点个 watch"))
+    /** 顶部推广卡:三张,第一张是 GitHub star,每张都有标题、说明和提示词。 */
+    @Test fun promosStartWithGithubStar() {
+        val promos = ChatCopy.promos
+        assertEquals(3, promos.size)
+        assertEquals(ChatCopy.ExampleKind.Web, promos.first().kind)
+        assertTrue(promos.first().prompt.contains("https://github.com/wangzan101/mika"))
+        promos.forEach { assertTrue(it.title.isNotBlank() && it.prompt.isNotBlank() && !it.blurb.isNullOrBlank()) }
     }
 
     @Test fun taskCostShowsTwoDecimalPlaces() {

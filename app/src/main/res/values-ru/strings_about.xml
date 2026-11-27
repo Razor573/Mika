@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">Новая версия Mika готова</string>
     <string name="about_auto_update_confirm_detail">Установите %1$s сейчас или отключите автообновление и проверяйте обновления в настройках.</string>
     <string name="about_auto_update_now">Обновить сейчас</string>
-    <string name="about_mirror_download">Использовать зеркала для обновлений</string>
-    <string name="about_mirror_download_detail">Для проверки обновлений используются зеркала и GitHub; при загрузке сначала пробуются зеркала. Перед установкой пакет по-прежнему проверяется по подписи.</string>
+    <string name="about_mirror_download">Использовать зеркала для загрузок</string>
+    <string name="about_mirror_download_detail">Для обновлений приложения и офлайн-голосовых пакетов: проверка обновлений использует зеркала и GitHub, загрузка сначала пробует зеркала. Приложение по-прежнему проверяется по подписи, голосовые пакеты — по контрольной сумме.</string>
     <string name="about_mirror_sources">Зеркала обновлений</string>
     <string name="about_mirror_sources_detail">Изменить порядок, добавить или удалить</string>
     <string name="about_mirrors_intro">При проверке обновлений зеркала и GitHub проверяются параллельно. При загрузке зеркала пробуются по порядку, затем используется GitHub. Перед установкой по-прежнему проверяются имя пакета, версия и подпись.</string>

@@ -5,14 +5,19 @@ import android.content.Context
 import android.net.Uri
 import android.widget.Toast
 import androidx.annotation.StringRes
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -21,10 +26,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -229,6 +237,47 @@ internal fun GeneratedAudioCards(audios: List<com.wangzan101.mika.core.chat.Gene
     }
 }
 
+/** 这一轮生成的视频:首帧封面、时长、点开用系统播放器。 */
+@Composable
+internal fun GeneratedVideoCards(videos: List<com.wangzan101.mika.core.chat.GeneratedVideo>, vm: ChatViewModel) {
+    val c = MikaTheme.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        videos.forEach { v ->
+            val poster by produceState<android.graphics.Bitmap?>(null, v.path) { value = vm.loadVideoPoster(v.path) }
+            Row(
+                Modifier.fillMaxWidth().cardSurface(c, MikaShapes.Card).clip(MikaShapes.Card)
+                    .clickable(role = Role.Button) { vm.playVideo(v.path) }
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(
+                    Modifier.size(64.dp, 40.dp).background(c.neutralSoft, FileTileShape).clip(FileTileShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val frame = poster
+                    if (frame != null) Image(frame.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    else Icon(MikaIcons.Camera, null, Modifier.size(20.dp), tint = c.ink)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        v.prompt?.lineSequence()?.firstOrNull()?.take(80)?.takeIf { it.isNotBlank() }
+                            ?: stringResource(R.string.chat_video),
+                        style = FileName, color = c.ink, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        listOfNotNull(
+                            v.durationMs?.let { secondsLabel(it) },
+                            v.width.takeIf { it > 0 }?.let { w -> "$w×${v.height}" },
+                            stringResource(R.string.chat_video_play),
+                        ).joinToString(" · "),
+                        style = FileMeta, color = c.ink3, maxLines = 1,
+                    )
+                }
+            }
+        }
+    }
+}
+
 private fun secondsLabel(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)
     return "%d:%02d".format(total / 60, total % 60)
@@ -238,7 +287,10 @@ private fun secondsLabel(ms: Long): String {
 @Composable
 private fun RecoveryActions(runId: String?, recover: (Boolean) -> Unit) {
     if (runId == null) return
-    Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(
+        Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(top = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         CardButton(stringResource(R.string.chat_restart_task), onClick = { recover(false) })
         CardButton(stringResource(R.string.chat_resume_checkpoint), primary = true, onClick = { recover(true) })
     }
@@ -268,7 +320,10 @@ internal fun NeedCard(
                 Column(Modifier.padding(top = 14.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { options() }
             }
             if (buttons != null) {
-                Row(Modifier.padding(top = 14.dp).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) { buttons() }
+                Row(
+                    Modifier.padding(top = 14.dp).fillMaxWidth().height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) { buttons() }
             }
             footer?.let { Box(Modifier.padding(top = 10.dp).fillMaxWidth(), contentAlignment = Alignment.Center) { it() } }
         }
@@ -278,8 +333,8 @@ internal fun NeedCard(
 @Composable
 internal fun RowScope.CardButton(text: String, primary: Boolean = false, onClick: () -> Unit) {
     MikaButton(
-        text, onClick, Modifier.weight(1f),
-        kind = if (primary) ButtonKind.Primary else ButtonKind.Tonal, size = ButtonSize.Medium,
+        text, onClick, Modifier.weight(1f).fillMaxHeight(),
+        kind = if (primary) ButtonKind.Primary else ButtonKind.Tonal, size = ButtonSize.Medium, maxLines = 2,
     )
 }
 

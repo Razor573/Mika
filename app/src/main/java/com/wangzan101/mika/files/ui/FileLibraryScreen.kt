@@ -157,6 +157,7 @@ internal fun FileLibraryScreen(
     LaunchedEffect(store) { store.changes.collect { revision++ } }
     LaunchedEffect(imports) { imports.recordsFlow().catch { revision++ }.collect { revision++ } }
     val drafts by vm.draftConversations.collectAsState()
+    val currentConversation = vm.ui.collectAsState().value.conversationId
     val loaded by produceState<LibraryLoaded?>(null, revision, drafts) {
         value = try { withContext(Dispatchers.IO) {
             val result = loadLibraryData(
@@ -534,7 +535,7 @@ internal fun FileLibraryScreen(
     }
     actionsFor?.let { item ->
         // 来源会话打不开(任务进行中且没开并行、又不是当前会话)时不给这一项
-        val canOpenInChat = item.source?.let { it.conversationId == vm.ui.value.conversationId || vm.canSwitch() } == true
+        val canOpenInChat = item.source?.let { it.conversationId == currentConversation || vm.canSwitch() } == true
         val openInChatAction = SheetAction(
             stringResource(R.string.file_library_open_in_chat), icon = MikaIcons.Message,
         ) { openInChat(item) }
@@ -556,11 +557,11 @@ internal fun FileLibraryScreen(
                     choosing = null
                     add(item, store.newConversation())
                 }.padding(vertical = 12.dp))
-                titles.filter { (id, _) -> vm.canSwitch() || id == vm.ui.value.conversationId }.forEach { (id, title) -> Text(displayTitle(id) ?: title, Modifier.fillMaxWidth().clickable {
+                titles.filter { (id, _) -> vm.canSwitch() || id == currentConversation }.forEach { (id, title) -> Text(displayTitle(id) ?: title, Modifier.fillMaxWidth().clickable {
                     choosing = null
                     add(item, id)
                 }.padding(vertical = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                if (vm.ui.value.conversationId == null) Text(stringResource(R.string.file_library_current), Modifier.fillMaxWidth().clickable {
+                if (currentConversation == null) Text(stringResource(R.string.file_library_current), Modifier.fillMaxWidth().clickable {
                     choosing = null
                     add(item, vm.libraryTargetConversation())
                 }.padding(vertical = 12.dp))
@@ -574,7 +575,7 @@ internal fun FileLibraryScreen(
                     choosingBatch = false
                     addSelected(store.newConversation())
                 }.padding(vertical = 12.dp))
-                titles.filter { (id, _) -> vm.canSwitch() || id == vm.ui.value.conversationId }.forEach { (id, title) -> Text(displayTitle(id) ?: title, Modifier.fillMaxWidth().clickable {
+                titles.filter { (id, _) -> vm.canSwitch() || id == currentConversation }.forEach { (id, title) -> Text(displayTitle(id) ?: title, Modifier.fillMaxWidth().clickable {
                     choosingBatch = false
                     addSelected(id)
                 }.padding(vertical = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis) }
@@ -582,7 +583,7 @@ internal fun FileLibraryScreen(
                     choosingBatch = false
                     addSelected(initialConversation)
                 }.padding(vertical = 12.dp))
-                if (vm.ui.value.conversationId == null) Text(stringResource(R.string.file_library_current), Modifier.fillMaxWidth().clickable {
+                if (currentConversation == null) Text(stringResource(R.string.file_library_current), Modifier.fillMaxWidth().clickable {
                     choosingBatch = false
                     addSelected(vm.libraryTargetConversation())
                 }.padding(vertical = 12.dp))

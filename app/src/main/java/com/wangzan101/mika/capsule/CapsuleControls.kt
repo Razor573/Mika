@@ -1,5 +1,17 @@
 package com.wangzan101.mika.capsule
 
+/**
+ * What a capsule looks like at a glance, plus which run it is showing. Only a change here wakes a tucked ball:
+ * a new step's text does not, but another run with the same kind and counts does ([runKey]).
+ */
+internal data class CapsuleLook(
+    val kind: CapsuleKind, val pill: Boolean, val count: Int, val needCount: Int, val runKey: String? = null,
+) {
+    companion object {
+        fun of(view: CapsuleView.Shown): CapsuleLook = CapsuleLook(view.kind, view.pill, view.count, view.needCount, view.runKey)
+    }
+}
+
 /** A docked ball may tuck away; requests, speech and open cards stay fully visible. */
 object CapsuleEdge {
     fun hidden(enabled: Boolean, kind: CapsuleKind, pill: Boolean, needs: Int,
@@ -7,9 +19,27 @@ object CapsuleEdge {
         enabled && !pill && !kind.needsYou && kind != CapsuleKind.HandedOver && needs == 0 &&
             !expanded && !dragging && !talking && !note && idleFor >= CapsuleFade.IDLE_MS
 
+    internal fun shouldWake(
+        hideAtEdge: Boolean,
+        visible: Boolean,
+        previous: CapsuleLook?,
+        current: CapsuleLook,
+    ): Boolean = when {
+        visible -> current != previous
+        !hideAtEdge -> true
+        else -> current.kind != CapsuleKind.Idle && current != previous
+    }
+
     /** The visible half touches the safe physical edge, with no invisible horizontal touch area. */
     fun offset(side: DockSide, area: DockArea, room: Int): Int =
         (if (side == DockSide.Left) area.edgeLeft + room else area.width - area.edgeRight + room).coerceAtLeast(0)
+
+    /**
+     * 藏起来时窗口摆在哪儿:窗口一直是一颗那么大([extra] 是比半圆宽出来的那截),整块往屏幕外挪出这一截,
+     * 只留半圆贴在实边上。屏幕外那部分点不到,不会挡住下面的 App;窗口尺寸从头到尾不变,
+     * 拖出来时只挪位置,系统不会跑窗口缩放过渡,胶囊从第一帧就跟手。
+     */
+    fun tuckedOffset(side: DockSide, area: DockArea, room: Int, extra: Int): Int = offset(side, area, room) - extra
 }
 
 /** Turning the capsule on needs the already-declared accessibility service; Android still asks the user. */

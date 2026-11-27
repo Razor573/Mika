@@ -1,4 +1,4 @@
-<!-- translated-from: README.md @ c7b8ba81083f -->
+<!-- translated-from: README.md @ 4dc4add5f2b9 -->
 <div align="center">
 
 <img src="../media/logo.png" alt="Mika" width="88" />
@@ -26,7 +26,7 @@
 
 <br/>
 
-[English](../../README.md) · 简体中文 · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Türkçe](README.tr.md)
+[English](../../README.md) · 简体中文 · [繁體中文](README.zh-Hant.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Türkçe](README.tr.md) · [Tiếng Việt](README.vi.md)
 
 <br/>
 
@@ -77,8 +77,6 @@
 
 ## 三步开始
 
-> **分支说明：** 如果你已经安装了原版（上游）Mika APK，由于签名密钥不同，请先卸载它再安装本分支构建的 APK。
-
 1. **下载安装**：从 [Releases](https://github.com/wangzan101/Mika/releases/latest) 下载 APK。
 2. **连上模型**：设置 › 模型，选一家服务商填 API Key，或者直接用账号登录（[模型与登录](../models.md)）。
 3. **要操作手机 App 时**：按设置里「设置手机操作」的向导，在手机上配对一次无线调试（[设置指南](../setup-guide.md)）。只聊天、上网、处理文件可以跳过这一步。
@@ -114,7 +112,7 @@
 |---|---|
 | **App** | 阿里巴巴、支付宝、Amazon、Android 设置、百度、百家号、哔哩哔哩、BOSS直聘、ChatGPT、Chrome、得到、大众点评、Discord、抖音、飞书、GitHub、Gmail、Google Calendar、Google Maps、Instagram、京东、即刻、快手、领英、美团、美团外卖、Netflix、拼多多、QQ、QQ邮箱、QQ音乐、Reddit、Slack、Spotify、淘宝、Telegram、TikTok、今日头条、Uber、Uber Eats、微信、微博、WhatsApp、X、闲鱼、小黑盒、小红书、YouTube、知乎 |
 | **网站** | 铁路12306、1688、Amazon、百度搜索、哔哩哔哩、Google Calendar、携程旅行、大众点评、豆瓣、抖音、GitHub、Instagram、京东、Gmail、Google Maps、美团、淘宝网、Telegram、百度贴吧、百度热搜、微博、搜狗微信、WhatsApp、小红书、小宇宙、QQ音乐、YouTube、知乎、BOSS直聘 |
-| **通用做法**（技能） | Change Mika's settings、Turn content into text、Work with PDFs、Research a topic、Messages & email、Write skills |
+| **通用做法**（技能） | 改 Mika 自己的设置、把内容整理成文字、处理 PDF 文档、查清一件事、消息与邮件、写技能 |
 <!-- generated:knowledge:end -->
 
 </details>
@@ -124,7 +122,7 @@
 
 <!-- generated:providers:start -->
 <!-- 这一段由 ./gradlew updateReadme 生成，不要手改 -->
-内置 DeepSeek、Qwen、Kimi、Zhipu、Zhipu Coding Plan、SiliconFlow、Volcengine Ark、MiniMax、StepFun、Tencent Hunyuan、Baidu Qianfan、OpenRouter、OpenDesign Go、OpenCode Go、Anthropic、Gemini、Vertex AI、OpenAI、xAI、Mistral、Groq、Cloudflare Workers AI、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、Vertex、OpenAI Responses 接口都能接。
+内置 DeepSeek、通义千问、Kimi、智谱、智谱 Coding Plan、硅基流动、火山方舟、MiniMax、阶跃星辰、腾讯混元、百度千帆、OpenRouter、OpenDesign Go、OpenCode Go、Anthropic、Gemini、OpenAI、xAI、Mistral、Groq、Cloudflare Workers AI、Ollama、LM Studio 等服务商预设；其他服务商选「自定义」，OpenAI 兼容、Anthropic、Gemini、OpenAI Responses 接口都能接。
 <!-- generated:providers:end -->
 
 也可以不填 Key：ChatGPT（Plus / Pro）、xAI / Grok、OpenRouter 账号登录。添加模型的步骤和各家登录的注意事项见[模型与登录](../models.md)。
@@ -178,8 +176,8 @@
 
 <a href="https://star-history.com/#wangzan101/Mika&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=wangzan101/Mika&type=Date&theme=dark&v=20261110-2017" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=wangzan101/Mika&type=Date&v=20261110-2017" width="600" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=wangzan101/Mika&type=Date&theme=dark&v=20261125-2135" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=wangzan101/Mika&type=Date&v=20261125-2135" width="600" />
   </picture>
 </a>
 

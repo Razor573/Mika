@@ -8,6 +8,7 @@ import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.content.pm.ProviderInfo
 import android.os.Binder
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -149,6 +150,11 @@ object HelperProcess {
                         putInt(HelperHandoff.KEY_RESTORES, r.recent)
                         putLong(HelperHandoff.KEY_GAVE_UP_AT, r.gaveUpAtMs)
                     }
+                }
+                // 带 AttributionSource 的 provider 调用从 Android 12 起才有;更早的系统交接不了
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    Log.w(TAG, "handoff needs Android 12+")
+                    return Outcome.Failed
                 }
                 val call = provider.javaClass.methods.first {
                     it.name == "call" && it.parameterTypes.size == 5 && it.parameterTypes[0] == AttributionSource::class.java

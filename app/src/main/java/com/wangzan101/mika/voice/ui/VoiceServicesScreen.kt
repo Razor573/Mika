@@ -1,5 +1,6 @@
 package com.wangzan101.mika.voice.ui
 
+import com.wangzan101.mika.voice.ondevice.OnDeviceCatalog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import com.wangzan101.mika.ui.components.MikaDialog
+import com.wangzan101.mika.voice.AsrLanguage
 import com.wangzan101.mika.voice.model.VoiceListRefresh
 import com.wangzan101.mika.voice.model.VoiceModelLists
 import com.wangzan101.mika.voice.model.VoiceModelOrigin
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import com.wangzan101.mika.R
 import com.wangzan101.mika.settings.Provider
 import com.wangzan101.mika.settings.ProviderStore
+import com.wangzan101.mika.settings.VoiceSettings
 import com.wangzan101.mika.ui.components.ButtonKind
 import com.wangzan101.mika.ui.components.ButtonSize
 import com.wangzan101.mika.ui.components.FooterNote
@@ -74,8 +77,23 @@ import com.wangzan101.mika.settings.ui.models.Page
 import com.wangzan101.mika.settings.ui.models.pick
 import com.wangzan101.mika.settings.ui.models.refresh
 import com.wangzan101.mika.settings.ui.models.use
+import com.wangzan101.mika.ui.NavSlide
+import com.wangzan101.mika.ui.rememberPageStates
 
 private enum class PresetKind { Compatible, SelfHosted }
+
+private sealed interface VoiceServicePage {
+    val depth: Int
+    val key: String
+    data object Home : VoiceServicePage { override val depth = 0; override val key = "list" }
+    data class Detail(val serviceId: String) : VoiceServicePage { override val depth = 1; override val key = "detail:$serviceId" }
+    data class Vendor(val vendorId: String, val fromDetail: Boolean) : VoiceServicePage {
+        override val depth = if (fromDetail) 2 else 1
+        override val key = "vendor:$vendorId"
+    }
+    data class Preset(val kind: PresetKind) : VoiceServicePage { override val depth = 1; override val key = "preset:${kind.name}" }
+    data class Result(val refs: List<VoiceModelRef>) : VoiceServicePage { override val depth = 2; override val key = "result" }
+}
 
 /**
  * 「语音服务」: every account voice draws on. Built-in vendors ask for their own fields once and bring all their
@@ -110,25 +128,35 @@ fun VoiceServicesScreen(store: ProviderStore, onBack: () -> Unit, onOpenCustom: 
         listedThisRun.remove(plan.service.id)
     }
     BackHandler(enabled = vendorForm != null || detail != null || preset != null || results != null) { back() }
-    when {
-        results != null -> PresetResult(snapshot, results, viewModel, voiceModels, onDone = {
-            // 存完回到这家服务商的详情,看它带来的全部模型
-            detail = results.firstOrNull()?.serviceId ?: detail
-            saved = null; preset = null; vendorForm = null
-        })
-        preset != null -> PresetForm(requireNotNull(preset), back, ::apply)
-        vendorForm != null -> VoiceVendors.byId(requireNotNull(vendorForm))?.let { VendorForm(it, back, ::apply) } ?: back()
-        detail != null -> {
-            val service = snapshot.services.firstOrNull { it.id == detail }
-            if (service == null) back()
-            else VendorDetail(snapshot, service, voiceModels, back,
-                onChangeKey = VoiceVendors.forService(service.id)?.takeIf { it.builds(service.id) }?.let { vendor -> { vendorForm = vendor.id } } ?: onOpenCustom,
-                onTest = { saved = listOf(encodeRef(it)) })
+    val pageStates = rememberPageStates()
+    val currentPage: VoiceServicePage = when {
+        results != null -> VoiceServicePage.Result(results)
+        preset != null -> VoiceServicePage.Preset(requireNotNull(preset))
+        vendorForm != null -> VoiceServicePage.Vendor(requireNotNull(vendorForm), fromDetail = detail != null)
+        detail != null -> VoiceServicePage.Detail(requireNotNull(detail))
+        else -> VoiceServicePage.Home
+    }
+    NavSlide(currentPage, depth = { it.depth }, states = pageStates, pageKey = { it.key }) { page ->
+        when (page) {
+            is VoiceServicePage.Result -> PresetResult(snapshot, page.refs, viewModel, voiceModels, onDone = {
+                // 存完回到这家服务商的详情,看它带来的全部模型
+                detail = page.refs.firstOrNull()?.serviceId ?: detail
+                saved = null; preset = null; vendorForm = null
+            })
+            is VoiceServicePage.Preset -> PresetForm(page.kind, back, ::apply)
+            is VoiceServicePage.Vendor -> VoiceVendors.byId(page.vendorId)?.let { VendorForm(it, back, ::apply) } ?: back()
+            is VoiceServicePage.Detail -> {
+                val service = snapshot.services.firstOrNull { it.id == page.serviceId }
+                if (service == null) back()
+                else VendorDetail(snapshot, service, voiceModels, back,
+                    onChangeKey = VoiceVendors.forService(service.id)?.takeIf { it.builds(service.id) }?.let { vendor -> { vendorForm = vendor.id } } ?: onOpenCustom,
+                    onTest = { saved = listOf(encodeRef(it)) })
+            }
+            VoiceServicePage.Home -> ServiceList(
+                snapshot, providers, back,
+                onVendor = { vendorForm = it.id }, onService = { detail = it }, onPreset = { preset = it }, onOpenCustom = onOpenCustom,
+            )
         }
-        else -> ServiceList(
-            snapshot, providers, back,
-            onVendor = { vendorForm = it.id }, onService = { detail = it }, onPreset = { preset = it }, onOpenCustom = onOpenCustom,
-        )
     }
 }
 
@@ -171,7 +199,7 @@ private fun ServiceList(
     val c = MikaTheme.colors
     val own = snapshot.services.filter {
         it.account !is VoiceAccount.ExistingProvider && it.id != SttSelectionController.SYSTEM_STT_SERVICE.id &&
-            it.id != TtsSelectionController.SYSTEM_TTS_REF.serviceId
+            it.id != TtsSelectionController.SYSTEM_TTS_REF.serviceId && it.id != OnDeviceCatalog.SERVICE_ID
     }
     val unconnected = VoiceVendors.all.filter { vendor -> own.none { vendor.owns(it.id) } }
     Page(stringResource(R.string.voice_hub_services), onBack) {
@@ -341,6 +369,7 @@ private fun VendorModelRow(
     voiceModels: VoiceModelEnvironment, onTest: (VoiceModelRef) -> Unit,
 ) {
     val ref = VoiceModelRef(model.serviceId, model.id, cap)
+    val voiceSettings = VoiceSettings.get(LocalContext.current)
     val inUse = when (cap) {
         VoiceCapability.STT -> snapshot.selections.stt == SttSelection.Model(ref)
         VoiceCapability.TTS -> snapshot.selections.tts == ref
@@ -359,7 +388,7 @@ private fun VendorModelRow(
             onClick = {
                 when (cap) {
                     VoiceCapability.STT -> voiceModels.stt.select(ref)
-                    VoiceCapability.TTS -> voiceModels.tts.select(ref)
+                    VoiceCapability.TTS -> selectReadAloud(voiceModels, voiceSettings, ref)
                     VoiceCapability.REALTIME -> voiceModels.realtime.select(ref)
                 }
                 // 列表拉来的、手填的模型协议是借来的,选上就去测一次
@@ -455,6 +484,9 @@ private fun VendorForm(vendor: VoiceVendor, onBack: () -> Unit, onSave: (VoicePr
                     onSave(vendor.plan(values.toMap()))
                 } catch (e: VoiceModelError) {
                     error = e.detail
+                } catch (e: Exception) {
+                    // 存储那一层的检查不过(凭据、目录写不进去之类)抛的不是 VoiceModelError:一样写在页上,不让它冒出去
+                    error = VoiceModelError.from(e).detail
                 }
             },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("vendor-save"),
@@ -472,6 +504,9 @@ private fun PresetForm(kind: PresetKind, onBack: () -> Unit, onSave: (VoicePrese
     var sttModel by rememberSaveable { mutableStateOf("") }
     var ttsModel by rememberSaveable { mutableStateOf("") }
     var rtModel by rememberSaveable { mutableStateOf("") }
+    var ttsVoice by rememberSaveable { mutableStateOf("") }
+    var rtVoice by rememberSaveable { mutableStateOf("") }
+    var language by rememberSaveable { mutableStateOf(AsrLanguage.Auto.code) }
     var error by remember { mutableStateOf<String?>(null) }
     val title = stringResource(
         when (kind) {
@@ -497,17 +532,30 @@ private fun PresetForm(kind: PresetKind, onBack: () -> Unit, onSave: (VoicePrese
                     InputRow(stringResource(R.string.voice_field_api_key), apiKey, { apiKey = it }, "sk-…", secret = true)
                     InputRow(stringResource(R.string.voice_field_name), name, { name = it }, optional)
                 }
-                GroupLabel(stringResource(R.string.voice_compat_models))
+                // 识别、朗读、实时语音各一组,各放各的配置;哪一组的模型留空,那一项就不接
+                val modelLabel = stringResource(R.string.voice_model_id)
+                val voiceLabel = stringResource(R.string.voice_voice)
+                GroupLabel(stringResource(R.string.voice_cap_stt))
                 GroupCard {
-                    InputRow(stringResource(R.string.voice_cap_stt), sttModel, { sttModel = it }, "gpt-4o-transcribe", first = true)
-                    InputRow(stringResource(R.string.voice_cap_tts), ttsModel, { ttsModel = it }, "gpt-4o-mini-tts")
-                    InputRow(stringResource(R.string.voice_cap_realtime), rtModel, { rtModel = it }, "gpt-realtime")
+                    InputRow(modelLabel, sttModel, { sttModel = it }, "gpt-4o-transcribe", first = true, modifier = Modifier.testTag("preset-stt-model"))
+                }
+                GroupLabel(stringResource(R.string.voice_cap_tts))
+                GroupCard {
+                    InputRow(modelLabel, ttsModel, { ttsModel = it }, "gpt-4o-mini-tts", first = true, modifier = Modifier.testTag("preset-tts-model"))
+                    InputRow(voiceLabel, ttsVoice, { ttsVoice = it }, "alloy", modifier = Modifier.testTag("preset-tts-voice"))
+                }
+                GroupLabel(stringResource(R.string.voice_cap_realtime))
+                GroupCard {
+                    InputRow(modelLabel, rtModel, { rtModel = it }, "gpt-realtime", first = true, modifier = Modifier.testTag("preset-rt-model"))
+                    InputRow(voiceLabel, rtVoice, { rtVoice = it }, optional, modifier = Modifier.testTag("preset-rt-voice"))
                 }
                 FooterNote(stringResource(R.string.voice_compat_models_note))
             }
             PresetKind.SelfHosted -> {
                 GroupCard {
                     InputRow(stringResource(R.string.voice_field_url), url, { url = it }, "192.168.1.5:10095", first = true, keyboard = KeyboardType.Uri)
+                    // 识别语言:默认「自动」,不指定、由服务自己判断;服务能认哪些语言看它跑的模型
+                    AsrLanguageRow(AsrLanguage.of(language), { language = it.code })
                 }
             }
         }
@@ -516,13 +564,16 @@ private fun PresetForm(kind: PresetKind, onBack: () -> Unit, onSave: (VoicePrese
             stringResource(R.string.voice_save_and_test),
             onClick = {
                 val preset = when (kind) {
-                    PresetKind.Compatible -> VoicePreset.OpenAiCompatible(name, url, apiKey, sttModel, ttsModel, rtModel)
-                    PresetKind.SelfHosted -> VoicePreset.SelfHostedStt(url)
+                    PresetKind.Compatible -> VoicePreset.OpenAiCompatible(name, url, apiKey, sttModel, ttsModel, rtModel, ttsVoice, rtVoice)
+                    PresetKind.SelfHosted -> VoicePreset.SelfHostedStt(url, AsrLanguage.of(language))
                 }
                 try {
                     onSave(VoicePresets.plan(preset))
                 } catch (e: VoiceModelError) {
                     error = e.detail
+                } catch (e: Exception) {
+                    // 存储那一层的检查不过(凭据、目录写不进去之类)抛的不是 VoiceModelError:一样写在页上,不让它冒出去
+                    error = VoiceModelError.from(e).detail
                 }
             },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp).testTag("preset-save"),
@@ -539,6 +590,7 @@ private fun PresetResult(
 ) {
     val c = MikaTheme.colors
     val probes by viewModel.probes.collectAsState()
+    val voiceSettings = VoiceSettings.get(LocalContext.current)
     val sample = stringResource(R.string.voice_try_sample)
     Page(stringResource(R.string.voice_result_title), onDone) {
         Text(stringResource(R.string.voice_result_lead), Modifier.padding(top = 4.dp, bottom = 12.dp), style = MikaType.Body, color = c.ink2)
@@ -595,7 +647,7 @@ private fun PresetResult(
                         onClick = {
                             when (ref.capability) {
                                 VoiceCapability.STT -> voiceModels.stt.select(ref)
-                                VoiceCapability.TTS -> voiceModels.tts.select(ref)
+                                VoiceCapability.TTS -> selectReadAloud(voiceModels, voiceSettings, ref)
                                 VoiceCapability.REALTIME -> voiceModels.realtime.select(ref)
                             }
                         },

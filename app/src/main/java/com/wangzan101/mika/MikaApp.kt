@@ -1,9 +1,11 @@
 package com.wangzan101.mika
 
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.net.Uri
 import android.util.Log
 import com.wangzan101.mika.R
+import com.wangzan101.mika.voice.ondevice.OnDeviceEngines
 import com.wangzan101.mika.cap.phone.PhoneServices
 import com.wangzan101.mika.cap.sandbox.AndroidSandbox
 import com.wangzan101.mika.cap.sandbox.AttachmentLimits
@@ -113,12 +115,17 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
     internal fun workflowInterrupted(attemptId: String) {
         scope.launch(Dispatchers.IO) { workflows.complete(attemptId, false, "", "interrupted") }
     }
+    /** 这一步到了任务服务门口用户已暂停了 Mika:记失败,流程停在待确认,恢复后由用户决定。 */
+    internal fun workflowPaused(attemptId: String) {
+        scope.launch(Dispatchers.IO) { workflows.complete(attemptId, false, "", com.wangzan101.mika.core.run.PauseFlag.REASON) }
+    }
     val workflows by lazy {
         com.wangzan101.mika.workflow.WorkflowRuntime(
             com.wangzan101.mika.workflow.WorkflowStore(
                 java.io.File(filesDir, com.wangzan101.mika.workflow.WorkflowStore.FILE),
                 com.wangzan101.mika.settings.KeystoreKeyCipher("mika-workflows"),
             ),
+            com.wangzan101.mika.settings.MikaPause.get(this),
         ) { dispatch -> TaskService.startWorkflow(this, dispatch.attemptId) }
     }
 
@@ -221,7 +228,7 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
     override val providers: ProviderStore by lazy {
         ProviderStore.create(this, usage, "Mika/${BuildConfig.VERSION_NAME}", usage::providerTokensToday,
             proactiveUsage = usage::proactiveTokensToday, proactiveLimit = { FeatureFlags.get(this).proactiveDailyTokenBudget() },
-            proactiveCalls = usage::proactiveCallsToday).also { store ->
+            proactiveCalls = usage::proactiveCallsToday, externalConfigReferences = conversations::referencedModelConfigIds).also { store ->
             voiceSettings.reconcileTtsChoice(store)
             store.onModelsRefreshed = {
                 refreshPricing(force = true)
@@ -516,6 +523,37 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         },
     ) = synthesize(text)
 
+    /**
+     * 在系统播放器里打开工作区的一段视频:经关口复制到缓存中转区再交出去,工作区本身不开放。
+     * 中转区只留最近一次的副本(换一段播放时删掉上一段),其余的启动时清掉。
+     */
+    private suspend fun playWorkspaceVideo(conversationId: String, path: String) {
+        val dirs = com.wangzan101.mika.cap.sandbox.SandboxDirs(this)
+        val root = java.io.File(cacheDir, VIDEO_PLAY_DIR)
+        val staging = com.wangzan101.mika.cap.web.UploadStaging(
+            root,
+            dirs.gate,
+            maxFileBytes = com.wangzan101.mika.media.AndroidVideoPort.MAX_BYTES,
+            maxTotalBytes = com.wangzan101.mika.media.AndroidVideoPort.MAX_BYTES,
+        )
+        val staged = dirs.tree.shared {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                root.listFiles()?.forEach { it.deleteRecursively() }
+                staging.stage(dirs.workspace(workspaceResolver.resolve(conversationId)), listOf(path))
+            }
+        }
+        val file = (staged as? com.wangzan101.mika.cap.web.UploadStaging.Result.Ok)?.staged?.files?.firstOrNull() ?: return
+        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.videoplay", file)
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW)
+            .setDataAndType(uri, "video/*")
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { startActivity(intent) }
+    }
+
+    /** 取工作区一段视频的首帧当聊天卡片封面(直接在闸门句柄上解码,不复制视频);读不出来返回 null。 */
+    private suspend fun videoPoster(conversationId: String, path: String): android.graphics.Bitmap? =
+        com.wangzan101.mika.media.AndroidVideoPort(this, conversationId).poster(path, maxSide = 320)
+
     /** 人工示范。onCreate 里建好；在那之前的无障碍事件不采集。 */
     lateinit var teach: TeachRuntime
         private set
@@ -562,6 +600,7 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
                 override fun togglePipSoundIn(conversationId: String) { taskState.run(conversationId)?.togglePipSound() }
             },
             conversations,
+            mainModels = com.wangzan101.mika.chat.ui.ProviderMainModelCatalog(providers),
             // 通话里在等主人回话时,这个对话里的下一句就是回话
             ownerAnswer = { id, text -> ownerQuestions.answerIn(id, text) },
             followUps = followUpQueue.changes,
@@ -588,8 +627,11 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
                 .stateIn(scope, SharingStarted.Eagerly, SandboxState.get(app).status.value !is SandboxStatus.Unsupported),
             sharedFiles = taskState.sharedFiles,
             generatedAudios = taskState.audios,
+            generatedVideos = taskState.videos,
             playAudio = { id, path -> playWorkspaceAudio(id, path) },
             generatedPhotos = taskState.photos,
+            playVideo = { id, path -> playWorkspaceVideo(id, path) },
+            videoPosterLoader = { id, path -> videoPoster(id, path) },
             activities = taskState.activities,
             steers = taskState.steers,
             summarizing = taskState.summarizing,
@@ -618,6 +660,10 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
                     ).toString()
                 }.orEmpty()
             },
+            paused = com.wangzan101.mika.settings.MikaPause.get(app)::paused,
+            onPausedBlocked = {
+                android.widget.Toast.makeText(app, tr(R.string.pause_blocked_task), android.widget.Toast.LENGTH_LONG).show()
+            },
             teaching = { teach.blocksTasks() },
             onTeachingBlocked = {
                 android.widget.Toast.makeText(app, tr(R.string.teach_blocked_task), android.widget.Toast.LENGTH_LONG).show()
@@ -641,8 +687,9 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
             desk = com.wangzan101.mika.chat.ui.DeskChatDeps(
                 desk = { id -> desks.desk(id) },
                 executor = { id, words -> desks.executor(id, words) },
-                brain = { id ->
-                    com.wangzan101.mika.frontdesk.deskModel(app)?.let { model ->
+                brain = { id, mainOverride ->
+                    com.wangzan101.mika.frontdesk.deskModel(app,
+                        com.wangzan101.mika.core.model.ModelSession.of(id), mainOverride)?.let { model ->
                         com.wangzan101.mika.core.frontdesk.LlmBrain(
                             model,
                             com.wangzan101.mika.core.frontdesk.DeskPrompt.user(
@@ -658,17 +705,27 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
                 // 前台接的新对话不经任务那边起标题,这里按第一句话起一次;轻量模型在前,主模型兜底,用量记在这条对话上
                 title = { id, first ->
                     kotlinx.coroutines.withContext(conversations.meter(id)) {
-                        com.wangzan101.mika.chat.ConversationTitler.ensure(conversations, id, first) {
+                        com.wangzan101.mika.chat.ConversationTitler.ensure(conversations, id, first, {
                             val session = com.wangzan101.mika.core.model.ModelSession.of(id)
-                            listOfNotNull(
-                                providers.modelFor(com.wangzan101.mika.core.model.ModelRole.Light, session),
-                                providers.modelFor(com.wangzan101.mika.core.model.ModelRole.Main, session),
-                            )
-                        }
+                            val models = tasks.modelSnapshot(session = session, context = this@MikaApp,
+                                mainOverride = conversations.settings(id).main)
+                            listOfNotNull(models.light, models.main)
+                        }, language = AppLanguage.resolved(this@MikaApp).tag)
                     }
                 },
             ),
         )
+    }
+
+    /**
+     * 系统内存紧张时释放本机识别模型(几百 MB),下次用到再加载。界面刚退到后台(UI_HIDDEN)不算紧张:
+     * 悬浮胶囊里的语音输入还在用。
+     */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && level != ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            OnDeviceEngines.shared.release()
+        }
     }
 
     override fun onCreate() {
@@ -682,6 +739,18 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
             runCatching { updateMirrors.ensureLoaded() }
             runCatching { com.wangzan101.mika.task.AndroidDeviceFiles.cleanupStaging(SandboxDirs(this@MikaApp)) }
                 .onFailure { Log.w("MikaImport", "Could not clean device import staging", it) }
+            // 离线语音包:上次没下完的 staging、旧版本、清单里已没有的包
+            runCatching {
+                // 和语音目录用同一份存放和清单(见 VoiceModelEnvironment)
+                val voice = com.wangzan101.mika.voice.model.VoiceModelEnvironment.get(this@MikaApp)
+                val packs = voice.voicePacks
+                if (packs != null) {
+                    val catalog = voice.voicePackCatalog!!()
+                    packs.cleanup(catalog)
+                    // 上次在提交和写进语音目录之间被杀:文件装着、目录里没有模型,补上
+                    com.wangzan101.mika.voice.ondevice.VoicePackInstaller.restoreInstalled(catalog, packs, voice.catalog)
+                }
+            }.onFailure { Log.w("MikaVoice", "Could not clean voice packs", it) }
         }
         // 界面以外的文字(通知、服务、悬浮胶囊)按 App 语言取
         AppLanguage.ensureDefaultLanguage(this)
@@ -700,19 +769,23 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         // 内置浏览器:设了代理才给 WebView 设上(读设置要解密,放到后台;没设代理不为此加载 WebView)
         scope.launch(Dispatchers.IO) { runCatching { com.wangzan101.mika.cap.web.WebProxy.apply(this@MikaApp) } }
         capsule.start()
-        // 银行模式暂停着:进程重启后先设上暂停再起看门狗,避免启动竞态把助手拉起来。
-        if (com.wangzan101.mika.settings.BankingMode.isPaused(this)) phone.shellControl.pause()
+        // Mika paused on disk: notify shellControl before starting watchdog so startup race cannot start helper.
+        if (com.wangzan101.mika.settings.MikaPause.get(this).paused() || com.wangzan101.mika.settings.BankingMode.isPaused(this)) {
+            phone.shellControl.pauseChanged()
+        }
         // 内置助手的真实现,并开始看着助手(Mika 进程起来后,还活着的助手会自己交接 Binder)
         phone.shellManager.start()
-        // 银行模式暂停着:进程重启后把暂停重设上,看门狗不再把助手起回来,
-        // 无障碍自动修复也不会把它打开。用户在设置 › 银行模式里恢复之前一直停着。
-        if (com.wangzan101.mika.settings.BankingMode.isPaused(this)) phone.shellControl.pause()
+        if (com.wangzan101.mika.settings.MikaPause.get(this).paused() || com.wangzan101.mika.settings.BankingMode.isPaused(this)) {
+            phone.shellControl.pauseChanged()
+        }
         // 连接一可用就补上默认打开的几项能力
         phone.recovery.start()
         // 告诉内置助手:Mika 被杀后要不要把它拉起来(胶囊一直显示或有任务在跑时才要;退出期间都不要)
         com.wangzan101.mika.cap.phone.setup.RestoreWishSync(
             phone.hub, flags.capsuleModeChanges(), taskState.busy, phone.recoverySettings.consent,
-            phone.recovery.accessibility, flags.quitChanges(),
+            phone.recovery.accessibility,
+            // 完全退出或暂停了 Mika:都不让助手把 Mika 拉起来
+            kotlinx.coroutines.flow.combine(flags.quitChanges(), com.wangzan101.mika.settings.MikaPause.get(this).state) { q, p -> q || p },
         ).start()
         // 上次异常退出时留下的改动(App 被静音)在这里恢复
         scope.launch { taskRecovery.recover() }
@@ -734,10 +807,16 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         scope.launch { runCatching { com.wangzan101.mika.media.AudioShareExporter(this@MikaApp).cleanPending() } }
         // 上次存相册写到一半被杀留下的空壳条目
         scope.launch { runCatching { com.wangzan101.mika.cap.image.ImageExporter(this@MikaApp).cleanPending() } }
-        // 上次分享图片复制到一半被杀留下的空壳条目
+        // 上次分享图片、视频复制到一半被杀留下的空壳条目
         scope.launch { runCatching { com.wangzan101.mika.media.ShareFileExporter(this@MikaApp).cleanPending() } }
+        // 上次存影片库写到一半被杀留下的空壳条目
+        scope.launch { runCatching { com.wangzan101.mika.media.VideoExporter(this@MikaApp).cleanPending() } }
         // 上次进程留下的网页上传副本
         scope.launch { runCatching { WebFiles.clearStale(this@MikaApp, SandboxDirs(this@MikaApp).gate) } }
+        // 上次进程留下的视频播放副本
+        scope.launch(Dispatchers.IO) { runCatching { java.io.File(cacheDir, VIDEO_PLAY_DIR).deleteRecursively() } }
+        // 上次进程下载到一半的生成视频
+        scope.launch(Dispatchers.IO) { runCatching { java.io.File(cacheDir, com.wangzan101.mika.media.AndroidVideoGenerationPort.CACHE_DIR).deleteRecursively() } }
         // 更新已经装上后,关于页下好的安装包
         scope.launch(Dispatchers.IO) { runCatching { apkUpdater.dropInstalled() } }
         // 运行环境没准备好(首次启动、Mika 升级后)就在后台准备,不联网、对用户不可见
@@ -800,3 +879,6 @@ class MikaApp : Application(), WebOwner, SandboxOwner, TaskEnvironment.Owner, Ph
         }
     }
 }
+
+/** 聊天视频卡片点开时的播放副本目录(cacheDir 下);和 res/xml/video_playback_files.xml 对应。 */
+private const val VIDEO_PLAY_DIR = "videoplay"

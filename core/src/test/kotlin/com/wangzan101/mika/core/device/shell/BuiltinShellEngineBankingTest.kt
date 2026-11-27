@@ -54,7 +54,12 @@ class BuiltinShellEngineBankingTest {
         override fun shizukuState(): ShizukuPlatformState = shizuku
     }
 
-    private fun TestScope.makeEngine(paired: Boolean = false, initialHelper: Any? = null, persistedPaused: () -> Boolean = { false }): Pair<BuiltinShellEngine, StubPlatform> {
+    private var pausedState = false
+
+    private fun BuiltinShellEngine.pause() { pausedState = true; pauseChanged() }
+    private fun BuiltinShellEngine.resume() { pausedState = false; pauseChanged() }
+
+    private fun TestScope.makeEngine(paired: Boolean = false, initialHelper: Any? = null, persistedPaused: () -> Boolean = { pausedState }): Pair<BuiltinShellEngine, StubPlatform> {
         val helper = MutableStateFlow(initialHelper)
         val platform = StubPlatform(helper, pairedFlag = paired)
         val dispatcher = StandardTestDispatcher(testScheduler)
@@ -64,7 +69,7 @@ class BuiltinShellEngineBankingTest {
             scope = CoroutineScope(SupervisorJob() + dispatcher),
             io = dispatcher,
             graceMs = 0,
-            persistedPaused = persistedPaused,
+            pausedFlag = persistedPaused,
         )
         return engine to platform
     }

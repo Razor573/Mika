@@ -7,10 +7,12 @@ import com.wangzan101.mika.cap.sandbox.ImportResult
 import com.wangzan101.mika.cap.sandbox.AttachmentFailure
 import com.wangzan101.mika.core.agent.QuoteMessage
 import com.wangzan101.mika.settings.Prerequisites
+import com.wangzan101.mika.settings.Problem
 import com.wangzan101.mika.task.SteerNote
 import com.wangzan101.mika.task.SteerState
 import com.wangzan101.mika.task.unconsumed
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -39,6 +41,7 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
     private val branchWorkspace = vm.branchWorkspace
     private val sharedDrafts = vm.sharedDrafts
     private val teaching = vm.teaching
+    private val paused = vm.paused
     private val onTeachingBlocked = vm.onTeachingBlocked
     private val projectStore = vm.projectStore
     private val workspaceResolver = vm.workspaceResolver
@@ -57,10 +60,14 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
     /**
      * 发送输入框里的话;有引用时引用写在话的前面(见 [QuoteMessage]),发出去后清掉。返回 false 表示没发出去(条件不满足)。
      * 去向按先后:通话在等主人回话时交给通话;任务在等回答时是回答;带附件时派成前台跟着的一件新任务(不经前台模型);
-     * 其余都交给这条会话的前台(前台在回话时照样能发,不变成「任务在跑」)。正在跟用户学习时一律不发。
+     * 其余都交给这条会话的前台(前台在回话时照样能发,不变成「任务在跑」)。正在跟用户学习、或用户暂停了 Mika 时一律不发。
      * 前台派出的子任务的对话不走前台(见 [ChatDesk.handles]):任务在跑时这句插给它,空着时开新的一件,带附件时随新任务开。
      */
     fun send(text: String, check: Prerequisites.Check): Boolean {
+        if (paused()) {
+            vm.onPausedBlocked()
+            return false
+        }
         if (teaching()) {
             onTeachingBlocked()
             return false
@@ -69,11 +76,21 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
         val ui = _ui.value
         if (ui.importing) return false
         val routed = route(text.trim(), ui, check)
-        if (routed == Routed.Sent) clearSent(ui, text)
+        if (routed == Routed.Sent) {
+            _ui.value.conversationId?.let(vm::flushPendingMainModel)
+            clearSent(ui, text)
+        }
         return routed != Routed.NotSent
     }
 
     private enum class Routed { NotSent, Sent, Importing }
+
+    private fun withConversationMainModel(check: Prerequisites.Check): Prerequisites.Check {
+        if (Problem.NoModel !in check.problems) return check
+        val choice = vm.effectiveMainModelChoice(_ui.value.conversationId)
+        if (vm.mainModels?.usable(choice) == null) return check
+        return Prerequisites.Check(check.problems.filterNot { it == Problem.NoModel })
+    }
 
     private fun route(words: String, ui: ChatUi, check: Prerequisites.Check): Routed {
         val goal = QuoteMessage.compose(ui.quote, words)
@@ -85,6 +102,8 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
             act({ actions.answer(goal) }) { actions.answerIn(it, goal) }
             return Routed.Sent
         }
+        // 只有「没主模型」可以由本对话的有效选择补足；其余前置条件原样保留。
+        val check = withConversationMainModel(check)
         // 带附件:先复制进这条会话的工作区,再派成前台跟着的一件新任务(文件随它复制进子会话),有没有任务在跑都一样;
         // 不走前台时照旧随新任务直接开,任务在跑时不发
         if (ui.attachments.isNotEmpty()) {
@@ -98,9 +117,15 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
             return Routed.NotSent
         }
         val id = ui.conversationId ?: store.newConversation()
+        if (ui.conversationId == null) vm.bindPendingMainModel(id)
         if (desk != null) {
             claim(id)
-            return if (desk.line(id).send(goal)) Routed.Sent else Routed.NotSent
+            val accepted = desk.line(id).send(goal)
+            if (!accepted && ui.conversationId == null) {
+                vm.unbindPendingMainModel(id)
+                vm.refreshMainModel()
+            }
+            return if (accepted) Routed.Sent else Routed.NotSent
         }
         // 不走前台:任务在跑时这句插给它(不另开),空着时照旧开新任务
         if (ui.composer == ComposerMode.Busy) return if (steer(id, goal)) Routed.Sent else Routed.NotSent
@@ -173,7 +198,8 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
         val importedUris = items.map { it.uri }.distinct()
         importedUris.forEach { uri -> libraryImports[uri] = (libraryImports[uri] ?: 0) + 1 }
         _ui.update { it.copy(importing = true, rejectedAttachments = emptyList(), overLimit = 0) }
-        scope.launch {
+        val desk = vm.deskFor(id)
+        val preparing = scope.launch(start = if (desk != null) CoroutineStart.UNDISPATCHED else CoroutineStart.DEFAULT) {
             val r = try {
                 val workspaceItems = items.filter { it.workspacePath != null }
                 val checks = if (workspaceItems.all { it.workspaceConversationId == id }) {
@@ -211,6 +237,7 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
                     val count = (libraryImports[uri] ?: 1) - 1
                     if (count == 0) libraryImports.remove(uri) else libraryImports[uri] = count
                 }
+                session.updateDraft(id) { it.copy(importing = false) }
                 session.releaseUnusedLibraryCopies()
             }
             session.updateDraft(id) { it.copy(importing = false, rejected = r.failures) }
@@ -221,7 +248,6 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
             val currentAttachments = now.attachments
             val draftReplaced = sharedDraftSerial != serialBefore
             val keepNewerAttachments = draftReplaced || currentAttachments != submitted.attachments
-            val desk = vm.deskFor(id)
             // 交给前台时不看有没有任务在跑;不走前台时照旧:复制期间开始了别的任务就不发了,草稿和附件留着
             val accepted = desk != null || now.composer == ComposerMode.Idle
             if (accepted && desk != null) {
@@ -232,6 +258,7 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
                 begin(goal, id, clearDraftAttachments = !keepNewerAttachments)
             }
             if (accepted) {
+                vm.flushPendingMainModel(id)
                 if (!draftReplaced) vm.drafting.discardSharedDraft()
                 _ui.update {
                     it.copy(
@@ -243,6 +270,7 @@ internal class ChatSendOps(private val vm: ChatViewModel, private val session: C
                 session.releaseUnusedLibraryCopies()
             }
         }
+        desk?.line(id)?.trackAttachmentImport(preparing)
         return true
     }
 

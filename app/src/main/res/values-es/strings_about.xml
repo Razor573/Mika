@@ -76,8 +76,8 @@
     <string name="about_auto_update_confirm_title">La nueva versión de Mika está lista</string>
     <string name="about_auto_update_confirm_detail">Instala %1$s ahora o desactiva las actualizaciones automáticas y búscalas manualmente en Ajustes.</string>
     <string name="about_auto_update_now">Actualizar ahora</string>
-    <string name="about_mirror_download">Usar réplicas para actualizar</string>
-    <string name="about_mirror_download_detail">Busca actualizaciones usando las réplicas y GitHub; las descargas prueban primero las réplicas. Los paquetes se siguen verificando por firma.</string>
+    <string name="about_mirror_download">Usar réplicas para descargar</string>
+    <string name="about_mirror_download_detail">Para actualizaciones de la app y paquetes de voz sin conexión: la búsqueda de actualizaciones usa réplicas y GitHub, y las descargas prueban primero las réplicas. La app se sigue verificando por firma y los paquetes de voz por suma de verificación.</string>
     <string name="about_mirror_sources">Réplicas de actualización</string>
     <string name="about_mirror_sources_detail">Cambiar orden, añadir o quitar</string>
     <string name="about_mirrors_intro">La búsqueda de actualizaciones prueba las réplicas y GitHub en paralelo. Las descargas prueban las réplicas en orden y después GitHub. Antes de instalar se siguen verificando el paquete, la versión y la firma.</string>

@@ -2,6 +2,8 @@ package com.wangzan101.mika.settings.ui
 
 import com.wangzan101.mika.i18n.trPlural
 import com.wangzan101.mika.R
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -31,6 +33,7 @@ import com.wangzan101.mika.ui.components.PageScaffold
 import com.wangzan101.mika.ui.components.RadioRow
 import com.wangzan101.mika.ui.components.RowChevron
 import com.wangzan101.mika.ui.components.RowValue
+import com.wangzan101.mika.ui.components.focusHighlightTarget
 import com.wangzan101.mika.ui.theme.MikaIcons
 import com.wangzan101.mika.ui.theme.MikaTheme
 import com.wangzan101.mika.ui.theme.MikaType
@@ -42,6 +45,7 @@ import com.wangzan101.mika.device.ui.DeviceAccessSection
  * 设置 › 任务运行:自主模式默认关;屏幕常亮、被操作的 App 静音默认开,可以关;[parallel] 不为空(实验开关打开了)时多一行同时进行的任务数。
  * 下面一组是操作节奏:快 / 标准(默认) / 像人,选了下一个任务起生效。
  * [deviceAccess] 非空时挂「锁屏时运行本机任务」一组:与「连接电脑」的远程开关互不影响,凭据编辑区共用。
+ * [scrollState] 由切页的一方给进来,从「操作节奏」回来才停在原来的位置。
  */
 @Composable
 fun DuringWorkScreen(
@@ -65,6 +69,7 @@ fun DuringWorkScreen(
     tokenBudget: Long? = null, onTokenBudget: (Long?) -> Unit = {},
     showTaskCost: Boolean = false, onShowTaskCost: (Boolean) -> Unit = {},
     deviceAccess: DeviceAccessSettings? = null,
+    scrollState: ScrollState = rememberScrollState(),
 ) {
     val context = LocalContext.current
     var editingLimit by remember { mutableStateOf(false) }
@@ -72,30 +77,53 @@ fun DuringWorkScreen(
     var customLimit by remember { mutableStateOf("") }
     var editingTokenBudget by remember { mutableStateOf(false) }
     var customTokenBudget by remember { mutableStateOf("") }
-    PageScaffold(stringResource(R.string.settings_during_work), onBack) {
+    PageScaffold(stringResource(R.string.settings_during_work), onBack, scrollState = scrollState) {
         GroupLabel(AutonomyCopy.GROUP)
         GroupCard {
-            ListRow(null, AutonomyCopy.TITLE, note = AutonomyCopy.SUBTITLE, first = true, onClick = { onAutonomous(!autonomous) }) {
+            ListRow(
+                null, AutonomyCopy.TITLE, note = AutonomyCopy.SUBTITLE, first = true,
+                onClick = { onAutonomous(!autonomous) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.AUTONOMOUS),
+            ) {
                 MikaSwitch(autonomous, onAutonomous, Modifier.testTag("work-autonomous"))
             }
         }
         GroupCard {
-            ListRow(MikaIcons.Sun, stringResource(R.string.settings_keep_on), first = true, onClick = { onKeepScreenOn(!keepScreenOn) }) {
+            ListRow(
+                MikaIcons.Sun, stringResource(R.string.settings_keep_on), first = true,
+                onClick = { onKeepScreenOn(!keepScreenOn) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.KEEP_SCREEN_ON),
+            ) {
                 MikaSwitch(keepScreenOn, onKeepScreenOn, Modifier.testTag("work-keep-screen-on"))
             }
             val pocketAvailable = remember { com.wangzan101.mika.pocket.PocketGuardManager.sensorsAvailable(context) }
-            ListRow(MikaIcons.Shield, stringResource(R.string.pocket_guard_title), note = stringResource(if (pocketAvailable) R.string.pocket_guard_summary else R.string.pocket_guard_unavailable), onClick = { if (pocketAvailable || pocketGuard) onPocketGuard(!pocketGuard) }) {
+            ListRow(
+                MikaIcons.Shield, stringResource(R.string.pocket_guard_title),
+                note = stringResource(if (pocketAvailable) R.string.pocket_guard_summary else R.string.pocket_guard_unavailable),
+                onClick = { if (pocketAvailable || pocketGuard) onPocketGuard(!pocketGuard) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.POCKET_GUARD),
+            ) {
                 MikaSwitch(pocketGuard, onPocketGuard, Modifier.testTag("work-pocket-guard"), enabled = pocketAvailable || pocketGuard)
             }
-            ListRow(MikaIcons.Lock, stringResource(R.string.pocket_completion_lock_title), note = stringResource(if (pocketAvailable) R.string.pocket_completion_lock_summary else R.string.pocket_guard_unavailable), onClick = { if (pocketAvailable || pocketCompletionLock) onPocketCompletionLock(!pocketCompletionLock) }) {
+            ListRow(
+                MikaIcons.Lock, stringResource(R.string.pocket_completion_lock_title),
+                note = stringResource(if (pocketAvailable) R.string.pocket_completion_lock_summary else R.string.pocket_guard_unavailable),
+                onClick = { if (pocketAvailable || pocketCompletionLock) onPocketCompletionLock(!pocketCompletionLock) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.POCKET_COMPLETION_LOCK),
+            ) {
                 MikaSwitch(pocketCompletionLock, onPocketCompletionLock, Modifier.testTag("work-pocket-completion-lock"), enabled = pocketAvailable || pocketCompletionLock)
             }
-            ListRow(MikaIcons.Mute, stringResource(R.string.settings_mute), onClick = { onMuteTarget(!muteTarget) }) {
+            ListRow(
+                MikaIcons.Mute, stringResource(R.string.settings_mute),
+                onClick = { onMuteTarget(!muteTarget) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.MUTE_TARGET),
+            ) {
                 MikaSwitch(muteTarget, onMuteTarget, Modifier.testTag("work-mute-target"))
             }
             ListRow(
                 MikaIcons.Clock, stringResource(R.string.settings_step_limit),
                 onClick = { customLimit = stepLimit?.takeIf { it !in STEP_LIMIT_PRESETS }?.toString().orEmpty(); editingLimit = true },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.STEP_LIMIT),
             ) {
                 RowValue(stepLimit?.let { trPlural(R.plurals.chat_steps_n, it) } ?: stringResource(R.string.settings_step_limit_off))
                 RowChevron()
@@ -103,22 +131,27 @@ fun DuringWorkScreen(
             ListRow(
                 MikaIcons.Clock, stringResource(R.string.settings_trigger_run_limit),
                 onClick = { editingTriggerLimit = true },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.TRIGGER_RUN_LIMIT),
             ) {
                 RowValue(triggerRunMinutes?.let { trPlural(R.plurals.settings_trigger_run_minutes_n, it) } ?: stringResource(R.string.settings_step_limit_off))
                 RowChevron()
             }
             TierSettingRow(R.string.settings_sandbox_budget, R.string.settings_sandbox_budget_sub, FeatureFlags.SANDBOX_BUDGET_MINUTES,
-                R.plurals.settings_sandbox_budget_minutes_n, sandboxBudgetMinutes, onSandboxBudgetMinutes)
+                R.plurals.settings_sandbox_budget_minutes_n, sandboxBudgetMinutes, onSandboxBudgetMinutes,
+                Modifier.focusHighlightTarget(SettingsFocusKey.SANDBOX_BUDGET))
             TierSettingRow(R.string.settings_attachment_file_limit, R.string.settings_attachment_file_limit_sub, FeatureFlags.ATTACHMENT_FILE_LIMIT_MB,
-                R.plurals.settings_attachment_file_limit_mb_n, attachmentMaxMb, onAttachmentMaxMb)
+                R.plurals.settings_attachment_file_limit_mb_n, attachmentMaxMb, onAttachmentMaxMb,
+                Modifier.focusHighlightTarget(SettingsFocusKey.ATTACHMENT_LIMIT))
             TierSettingRow(R.string.settings_workspace_size_limit, R.string.settings_workspace_size_limit_sub, FeatureFlags.WORKSPACE_LIMIT_GB,
-                R.plurals.settings_workspace_size_limit_gb_n, workspaceMaxGb, onWorkspaceMaxGb)
+                R.plurals.settings_workspace_size_limit_gb_n, workspaceMaxGb, onWorkspaceMaxGb,
+                Modifier.focusHighlightTarget(SettingsFocusKey.WORKSPACE_LIMIT))
             ListRow(
                 MikaIcons.Clock, stringResource(R.string.settings_task_token_budget),
                 onClick = {
                     customTokenBudget = tokenBudget?.takeIf { it !in TokenBudgetLimits.PRESETS }?.toString().orEmpty()
                     editingTokenBudget = true
                 },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.TOKEN_BUDGET),
             ) {
                 RowValue(tokenBudget?.let(::tokenBudgetNumber) ?: stringResource(R.string.settings_token_budget_unlimited))
                 RowChevron()
@@ -126,10 +159,11 @@ fun DuringWorkScreen(
             ListRow(
                 null, stringResource(R.string.settings_show_task_cost),
                 onClick = { onShowTaskCost(!showTaskCost) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.SHOW_TASK_COST),
             ) {
                 MikaSwitch(showTaskCost, onShowTaskCost, Modifier.testTag("work-show-task-cost"))
             }
-            parallel?.let { ParallelRow(it, onParallelMax) }
+            parallel?.let { ParallelRow(it, onParallelMax, Modifier.focusHighlightTarget(SettingsFocusKey.PARALLEL_TASKS)) }
         }
         // 锁屏时运行本机任务:独立开关 + 共用的锁屏凭据编辑区(组名/脚注说清与远程开关互不影响)
         deviceAccess?.let { DeviceAccessSection(it, localTasks = true) }
@@ -161,6 +195,7 @@ fun DuringWorkScreen(
                 note = stringResource(R.string.settings_self_config_sub),
                 first = true,
                 onClick = { onSelfConfig(!selfConfig) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.SELF_CONFIG),
             ) {
                 MikaSwitch(selfConfig, onSelfConfig, Modifier.testTag("work-self-config"))
             }
@@ -172,6 +207,7 @@ fun DuringWorkScreen(
                 note = stringResource(R.string.settings_self_operate_sub),
                 first = true,
                 onClick = { onSelfOperate(!selfOperate) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.SELF_OPERATE),
             ) {
                 MikaSwitch(selfOperate, onSelfOperate, Modifier.testTag("work-self-operate"))
             }
@@ -182,6 +218,7 @@ fun DuringWorkScreen(
                 MikaIcons.Back, stringResource(R.string.settings_pip_operate),
                 first = true,
                 onClick = { onPipOperate(!pipOperate) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.PIP_OPERATE),
             ) {
                 MikaSwitch(pipOperate, onPipOperate, Modifier.testTag("work-pip-operate"))
             }
@@ -193,14 +230,17 @@ fun DuringWorkScreen(
                 note = stringResource(R.string.settings_external_schedule_sub),
                 first = true,
                 onClick = { onExternalSchedule(!externalSchedule) },
+                modifier = Modifier.focusHighlightTarget(SettingsFocusKey.EXTERNAL_SCHEDULE),
             ) {
                 MikaSwitch(externalSchedule, onExternalSchedule, Modifier.testTag("work-external-schedule"))
             }
         }
         GroupLabel(stringResource(R.string.settings_pace))
         GroupCard {
-            OperatingPace.entries.forEachIndexed { i, p ->
-                RadioRow(paceLabel(p), selected = p == operatingPace, onClick = { onOperatingPace(p) }, note = paceDetail(p), first = i == 0)
+            Column(Modifier.fillMaxWidth().focusHighlightTarget(SettingsFocusKey.OPERATING_PACE)) {
+                OperatingPace.entries.forEachIndexed { i, p ->
+                    RadioRow(paceLabel(p), selected = p == operatingPace, onClick = { onOperatingPace(p) }, note = paceDetail(p), first = i == 0)
+                }
             }
             // 按应用覆盖:单个 App 单独设快慢,没设的跟着上面选的全局档
             ListRow(
@@ -294,12 +334,13 @@ private fun paceDetail(p: OperatingPace): String = stringResource(
 
 /** 同时进行几个任务:设备不支持时灰掉、写明原因,上限固定为 1。 */
 @Composable
-private fun ParallelRow(p: ParallelSetting, onMax: (Int) -> Unit) {
+private fun ParallelRow(p: ParallelSetting, onMax: (Int) -> Unit, modifier: Modifier = Modifier) {
     val supported = p.limit.reason == null
     ListRow(
         MikaIcons.Phone, stringResource(R.string.settings_parallel),
         note = p.limit.reason ?: stringResource(R.string.settings_parallel_sub),
         titleColor = if (supported) MikaTheme.colors.ink else MikaTheme.colors.ink3,
+        modifier = modifier,
     ) {
         if (!supported) {
             RowValue(trPlural(R.plurals.settings_count_tasks, 1))

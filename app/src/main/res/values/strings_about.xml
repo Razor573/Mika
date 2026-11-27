@@ -84,8 +84,8 @@
     <string name="about_auto_update_confirm_title">A new Mika version is ready</string>
     <string name="about_auto_update_confirm_detail">Install %1$s now, or turn off auto-update and check for updates manually in Settings.</string>
     <string name="about_auto_update_now">Update now</string>
-    <string name="about_mirror_download">Use mirrors for updates</string>
-    <string name="about_mirror_download_detail">Check for updates using mirrors and GitHub; downloads try mirrors first. Packages are still signature-checked.</string>
+    <string name="about_mirror_download">Use mirrors for downloads</string>
+    <string name="about_mirror_download_detail">Used for app updates and offline voice packs: update checks use mirrors and GitHub, downloads try mirrors first. App packages are still signature-checked; voice packs are checked against their checksums.</string>
     <string name="about_mirror_sources">Update mirrors</string>
     <string name="about_mirror_sources_detail">Change order, add or remove</string>
     <string name="about_mirrors_intro">Update checks try mirrors and GitHub in parallel. Downloads try mirrors in order, then GitHub. Packages are still checked by package name, version and signing certificate before install.</string>
